@@ -2,12 +2,36 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import TypeAlias
 
 JsonScalar: TypeAlias = str | int | float | bool | None
 JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 MetadataDict: TypeAlias = dict[str, JsonValue]
+
+
+@dataclass(slots=True)
+class MetadataFieldDescription:
+    """Lightweight description of an important metadata field."""
+
+    name: str
+    description: str
+    example: JsonValue | None = None
+    required: bool = False
+
+    def to_dict(self) -> dict[str, JsonValue]:
+        """Convert the field description to a plain dictionary."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, JsonValue]) -> "MetadataFieldDescription":
+        """Build a field description from a plain dictionary."""
+        return cls(
+            name=str(data["name"]),
+            description=str(data["description"]),
+            example=data.get("example"),
+            required=bool(data.get("required", False)),
+        )
 
 
 @dataclass(slots=True)

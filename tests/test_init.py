@@ -1,6 +1,7 @@
 from pathlib import Path
+import json
 
-from ogcat import Catalog, CatalogSpec
+from ogcat import Catalog, CatalogSpec, MetadataFieldDescription
 
 
 def test_create_and_open_catalog(tmp_path: Path) -> None:
@@ -23,9 +24,37 @@ def test_catalog_spec_round_trips_via_catalog_json(tmp_path: Path) -> None:
         catalog_name="fluxes",
         default_operation="move",
         field_resolution_order=["user_metadata", "top_level", "derived_metadata"],
+        metadata_fields=[
+            MetadataFieldDescription(
+                name="species",
+                description="Gas species name used for grouping and search.",
+                example="CO2",
+                required=True,
+            ),
+            MetadataFieldDescription(
+                name="product",
+                description="Upstream product identifier.",
+                example="CTE-HR",
+            ),
+        ],
     )
 
     Catalog.create(root, spec)
+    serialized = json.loads((root / "catalog.json").read_text(encoding="utf-8"))
     reloaded = CatalogSpec.read(root / "catalog.json")
 
+    assert serialized["metadata_fields"] == [
+        {
+            "name": "species",
+            "description": "Gas species name used for grouping and search.",
+            "example": "CO2",
+            "required": True,
+        },
+        {
+            "name": "product",
+            "description": "Upstream product identifier.",
+            "example": "CTE-HR",
+            "required": False,
+        },
+    ]
     assert reloaded == spec

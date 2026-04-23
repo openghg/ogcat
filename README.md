@@ -12,7 +12,8 @@ readable, and easy to hand off to Codex for completion.
 - `CatalogSpec` and `Catalog` API
 - TinyDB-backed repository behind a repository protocol
 - managed `copy` / `move` add flow
-- simple directory / filename templates
+- simple directory / filename templates with small computed naming fields
+- lightweight descriptive `metadata_fields` in `catalog.json`
 - equality, contains, and regex search
 - flattened field lookup with dotted-path override
 - CLI based on Typer
