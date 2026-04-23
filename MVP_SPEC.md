@@ -152,6 +152,11 @@ MVP search supports:
 - regex filters via `regex`
 - optional `ignore_case`
 
+Equality is exact value matching. Numeric values are supported for exact equality when
+the stored value and query value are both numeric.
+
+Substring and regex matching are string-oriented.
+
 ### Field resolution
 
 Unqualified fields are resolved in this order:
@@ -162,6 +167,9 @@ Unqualified fields are resolved in this order:
 Explicit dotted paths always take precedence, for example:
 - `user_metadata.species`
 - `derived_metadata.netcdf.dims.time`
+
+Numeric comparison operators and richer query expressions are not part of the MVP.
+That includes operators such as `>`, `<`, `>=`, `<=`, and range queries.
 
 ## Repository abstraction
 
