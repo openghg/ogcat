@@ -14,6 +14,7 @@ readable, and easy to hand off to Codex for completion.
 - managed `copy` / `move` add flow
 - simple directory / filename templates with small computed naming fields
 - lightweight descriptive `metadata_fields` in `catalog.json`
+- optional netCDF metadata extraction when `xarray` is installed
 - equality, contains, and regex search
 - flattened field lookup with dotted-path override
 - CLI based on Typer
@@ -73,7 +74,6 @@ does not yet support numeric comparison operators or ranges such as `>`, `<`, `>
 
 ## Not yet implemented
 
-- netCDF metadata extraction
 - sidecar metadata files
 - in-place file indexing
 - in-place directory indexing

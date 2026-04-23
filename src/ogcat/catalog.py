@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import shutil
 
+from ogcat.extractors import extract_derived_metadata
 from ogcat.models import CatalogRecord, MetadataDict
 from ogcat.naming import build_naming_context, render_storage_location
 from ogcat.repository import CatalogRepository
@@ -97,6 +98,8 @@ class Catalog:
             shutil.move(str(source), str(target))
             storage_mode = "move"
 
+        derived_metadata = extract_derived_metadata(target)
+
         record = CatalogRecord(
             id=record_id,
             catalog=self.spec.catalog_name,
@@ -108,7 +111,7 @@ class Catalog:
             original_filename=source.name,
             suffixes=source.suffixes,
             user_metadata=metadata,
-            derived_metadata={},
+            derived_metadata=derived_metadata,
             naming_metadata={
                 "directory_template": self.spec.directory_template,
                 "filename_template": self.spec.filename_template,

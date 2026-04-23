@@ -12,6 +12,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+netcdf = [
+  "xarray>=2024.0",
+]
 dev = [
   "pytest>=8.0",
   "pyright>=1.1",
