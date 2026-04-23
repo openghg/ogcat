@@ -58,3 +58,39 @@ def test_catalog_spec_round_trips_via_catalog_json(tmp_path: Path) -> None:
         },
     ]
     assert reloaded == spec
+
+
+def test_catalog_describe_and_list_metadata_fields_return_serialisable_values(tmp_path: Path) -> None:
+    root = tmp_path / "fluxes"
+    spec = CatalogSpec(
+        catalog_name="fluxes",
+        metadata_fields=[
+            MetadataFieldDescription(
+                name="species",
+                description="Gas species name used for grouping and search.",
+                example="CO2",
+                required=True,
+            )
+        ],
+    )
+
+    catalog = Catalog.create(root, spec)
+    description = catalog.describe()
+    metadata_fields = catalog.list_metadata_fields()
+
+    assert description["catalog_name"] == "fluxes"
+    assert description["record_count"] == 0
+    assert description["has_metadata_fields"] is True
+    assert description["field_resolution_order"] == [
+        "top_level",
+        "user_metadata",
+        "derived_metadata",
+    ]
+    assert metadata_fields == [
+        {
+            "name": "species",
+            "description": "Gas species name used for grouping and search.",
+            "example": "CO2",
+            "required": True,
+        }
+    ]

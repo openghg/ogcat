@@ -141,6 +141,28 @@ class Catalog:
             )
         ]
 
+    def describe(self) -> dict[str, object]:
+        """Return a simple serialisable summary of the catalog."""
+        db_path = self.root / self.spec.db_path
+        files_root = self.root / self.spec.files_root
+        return {
+            "catalog_name": self.spec.catalog_name,
+            "root_path": str(self.root),
+            "backend": self.spec.db_backend,
+            "database_path": str(db_path),
+            "files_root": str(files_root),
+            "default_operation": self.spec.default_operation,
+            "directory_template": self.spec.directory_template,
+            "filename_template": self.spec.filename_template,
+            "field_resolution_order": list(self.spec.field_resolution_order),
+            "record_count": len(self.repository.all()),
+            "has_metadata_fields": bool(self.spec.metadata_fields),
+        }
+
+    def list_metadata_fields(self) -> list[dict[str, object]]:
+        """Return serialisable metadata field descriptions."""
+        return [field_description.to_dict() for field_description in self.spec.metadata_fields]
+
     def get(self, record_id: str) -> CatalogRecord | None:
         """Get a record by id."""
         return self.repository.get(record_id)
