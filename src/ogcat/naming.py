@@ -44,8 +44,8 @@ def ensure_unique_path(path: Path) -> Path:
         return path
 
     parent = path.parent
-    suffix = "".join(path.suffixes)
-    stem = path.name[: -len(suffix)] if suffix else path.name
+    suffix = path.suffix
+    stem = path.stem if suffix else path.name
 
     counter = 2
     while True:

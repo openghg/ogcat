@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import re
-from typing import Any
+from typing import Any, Sequence
 
 from ogcat.models import CatalogRecord
 
@@ -35,20 +35,34 @@ def get_dotted(mapping: Mapping[str, Any], dotted_path: str) -> Any:
     return current
 
 
-def flatten_lookup(record: CatalogRecord, field: str) -> Any:
+def flatten_lookup(
+    record: CatalogRecord,
+    field: str,
+    resolution_order: Sequence[str] | None = None,
+) -> Any:
     """Resolve a field using dotted paths or precedence-based flattened lookup."""
     record_dict = record.to_dict()
 
     if "." in field:
         return get_dotted(record_dict, field)
 
-    if field in _RESERVED_FIELDS:
-        return record_dict.get(field)
-    if field in record.user_metadata:
-        return record.user_metadata.get(field)
-    if field in record.derived_metadata:
-        return record.derived_metadata.get(field)
-    return record_dict.get(field)
+    order = resolution_order or ["top_level", "user_metadata", "derived_metadata"]
+    namespaces: dict[str, Mapping[str, Any]] = {
+        "top_level": record_dict,
+        "user_metadata": record.user_metadata,
+        "derived_metadata": record.derived_metadata,
+    }
+
+    for namespace_name in order:
+        namespace = namespaces.get(namespace_name)
+        if namespace is None:
+            continue
+        if namespace_name == "top_level" and field not in _RESERVED_FIELDS:
+            continue
+        if field in namespace:
+            return namespace[field]
+
+    return None
 
 
 def _stringify(value: Any) -> str:
@@ -68,6 +82,7 @@ def matches_record(
     contains: dict[str, str] | None,
     regex: dict[str, str] | None,
     ignore_case: bool,
+    resolution_order: Sequence[str] | None = None,
 ) -> bool:
     """Return whether a record matches the provided filters."""
     where = where or {}
@@ -75,19 +90,19 @@ def matches_record(
     regex = regex or {}
 
     for field, expected in where.items():
-        actual = flatten_lookup(record, field)
+        actual = flatten_lookup(record, field, resolution_order=resolution_order)
         if not _eq(actual, expected, ignore_case):
             return False
 
     for field, expected_substring in contains.items():
-        actual = _stringify(flatten_lookup(record, field))
+        actual = _stringify(flatten_lookup(record, field, resolution_order=resolution_order))
         haystack = actual.casefold() if ignore_case else actual
         needle = expected_substring.casefold() if ignore_case else expected_substring
         if needle not in haystack:
             return False
 
     for field, pattern in regex.items():
-        actual = _stringify(flatten_lookup(record, field))
+        actual = _stringify(flatten_lookup(record, field, resolution_order=resolution_order))
         flags = re.IGNORECASE if ignore_case else 0
         if re.search(pattern, actual, flags=flags) is None:
             return False

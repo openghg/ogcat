@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
-import shutil
+from datetime import datetime, timezone
 from pathlib import Path
+import shutil
 
 from ogcat.models import CatalogRecord, MetadataDict
 from ogcat.naming import build_naming_context, render_storage_location
+from ogcat.repository import CatalogRepository
 from ogcat.search import matches_record
 from ogcat.spec import CatalogSpec
 from ogcat.tinydb_repository import TinyDbCatalogRepository
@@ -20,7 +21,7 @@ class Catalog:
 
     root: Path
     spec: CatalogSpec
-    repository: TinyDbCatalogRepository
+    repository: CatalogRepository
 
     @classmethod
     def create(cls, root: str | Path, spec: CatalogSpec) -> "Catalog":
@@ -29,7 +30,7 @@ class Catalog:
         root_path.mkdir(parents=True, exist_ok=True)
         spec.write(root_path / "catalog.json")
         (root_path / spec.files_root).mkdir(parents=True, exist_ok=True)
-        repository = TinyDbCatalogRepository(root_path / spec.db_path)
+        repository = _open_repository(root_path, spec)
         return cls(root=root_path, spec=spec, repository=repository)
 
     @classmethod
@@ -37,7 +38,7 @@ class Catalog:
         """Open an existing catalog from disk."""
         root_path = Path(root).expanduser().resolve()
         spec = CatalogSpec.read(root_path / "catalog.json")
-        repository = TinyDbCatalogRepository(root_path / spec.db_path)
+        repository = _open_repository(root_path, spec)
         return cls(root=root_path, spec=spec, repository=repository)
 
     def _next_record_id(self) -> str:
@@ -70,7 +71,8 @@ class Catalog:
             raise ValueError(f"Unsupported operation: {chosen_operation}")
 
         record_id = self._next_record_id()
-        timestamp = datetime.now(tz=UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        timestamp = datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat()
+        timestamp = timestamp.replace("+00:00", "Z")
         date_added = timestamp[:10]
 
         context = build_naming_context(
@@ -90,10 +92,10 @@ class Catalog:
 
         if chosen_operation == "copy":
             shutil.copy2(source, target)
-            storage_mode = "managed_copy"
+            storage_mode = "copy"
         else:
             shutil.move(str(source), str(target))
-            storage_mode = "managed_move"
+            storage_mode = "move"
 
         record = CatalogRecord(
             id=record_id,
@@ -135,6 +137,7 @@ class Catalog:
                 contains=contains,
                 regex=regex,
                 ignore_case=ignore_case,
+                resolution_order=self.spec.field_resolution_order,
             )
         ]
 
@@ -148,3 +151,10 @@ class Catalog:
         if record is None:
             return None
         return Path(record.stored_abspath)
+
+
+def _open_repository(root: Path, spec: CatalogSpec) -> CatalogRepository:
+    """Create the configured repository for a catalog spec."""
+    if spec.db_backend != "tinydb":
+        raise ValueError(f"Unsupported db_backend: {spec.db_backend}")
+    return TinyDbCatalogRepository(root / spec.db_path)

@@ -14,7 +14,10 @@ from rich.table import Table
 from ogcat.catalog import Catalog
 from ogcat.spec import CatalogSpec
 
-app = typer.Typer(help="Lightweight local file catalog.")
+app = typer.Typer(
+    help="Lightweight local file catalog.",
+    context_settings={"help_option_names": ["-h", "--help"]},
+)
 console = Console()
 
 
