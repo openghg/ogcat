@@ -168,25 +168,27 @@ class Catalog:
         """
         records = [
             self._build_artifact_record(
-                record_type=str(item["record_type"]),
-                locator=_coerce_artifact_locator(item["locator"]),
-                metadata=item.get("metadata"),  # type: ignore[arg-type]
+                record_type=str(validated["record_type"]),
+                locator=_coerce_artifact_locator(validated["locator"]),
+                metadata=validated.get("metadata"),  # type: ignore[arg-type]
                 storage_mode=(
-                    None if item.get("storage_mode") is None else str(item["storage_mode"])
+                    None if validated.get("storage_mode") is None else str(validated["storage_mode"])
                 ),
-                original_path=item.get("original_path"),  # type: ignore[arg-type]
+                original_path=validated.get("original_path"),  # type: ignore[arg-type]
                 original_filename=(
                     None
-                    if item.get("original_filename") is None
-                    else str(item["original_filename"])
+                    if validated.get("original_filename") is None
+                    else str(validated["original_filename"])
                 ),
-                suffixes=item.get("suffixes"),  # type: ignore[arg-type]
-                derived_metadata=item.get("derived_metadata"),  # type: ignore[arg-type]
-                naming_metadata=item.get("naming_metadata"),  # type: ignore[arg-type]
-                record_id=None if item.get("record_id") is None else str(item["record_id"]),
-                time_added=None if item.get("time_added") is None else str(item["time_added"]),
+                suffixes=validated.get("suffixes"),  # type: ignore[arg-type]
+                derived_metadata=validated.get("derived_metadata"),  # type: ignore[arg-type]
+                naming_metadata=validated.get("naming_metadata"),  # type: ignore[arg-type]
+                record_id=None if validated.get("record_id") is None else str(validated["record_id"]),
+                time_added=None if validated.get("time_added") is None else str(validated["time_added"]),
             )
-            for item in artifacts
+            for validated in (
+                _validate_artifact_batch_item(item, index) for index, item in enumerate(artifacts)
+            )
         ]
         self.repository.insert_many(records)
         return records
@@ -311,3 +313,16 @@ def _coerce_artifact_locator(value: object) -> ArtifactLocator:
     if isinstance(value, dict):
         return ArtifactLocator.from_dict(value)
     raise TypeError("artifact locator must be an ArtifactLocator or locator dictionary")
+
+
+def _validate_artifact_batch_item(item: object, index: int) -> dict[str, object]:
+    """Validate one batch artifact item and return it as a dictionary."""
+    if not isinstance(item, dict):
+        raise TypeError(f"artifact batch item {index} must be a dictionary")
+
+    missing_keys = [key for key in ["record_type", "locator"] if key not in item]
+    if missing_keys:
+        missing = ", ".join(missing_keys)
+        raise ValueError(f"artifact batch item {index} is missing required key(s): {missing}")
+
+    return item

@@ -178,7 +178,9 @@ def search(
 
     if paths_only:
         for record in results:
-            typer.echo(record.stored_abspath)
+            resolved = record.path()
+            if resolved is not None:
+                typer.echo(str(resolved))
         return
 
     if not results:
@@ -198,7 +200,7 @@ def search(
             str(record.user_metadata.get("title", "")),
             str(record.user_metadata.get("product", "")),
             str(record.user_metadata.get("species", "")),
-            record.stored_abspath,
+            "" if record.path() is None else str(record.path()),
         )
 
     console.print(f"{len(results)} result(s)")

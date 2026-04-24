@@ -33,6 +33,14 @@ Why it makes sense:
 - avoids losing per-file fidelity
 - improves usability for monthly-series datasets such as footprints
 
+Related CLI follow-up:
+
+- current CLI search output is still record-oriented
+- future work could add grouped or collapsed search views, especially for
+  monthly file series
+- output modes such as `--paths` may need explicit semantics for mixed
+  path-backed and non-path-backed result sets
+
 ## Collection Records
 
 Another direction is to represent one logical collection instead of one record

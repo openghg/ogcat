@@ -7,7 +7,7 @@ from typer.testing import CliRunner
 
 from ogcat import Catalog, CatalogSpec, MetadataFieldDescription
 from ogcat.cli import app
-
+from ogcat.models import ArtifactLocator
 
 runner = CliRunner()
 
@@ -191,3 +191,40 @@ def test_missing_catalog_configuration_returns_helpful_error() -> None:
 
     assert result.exit_code != 0
     assert "Provide --catalog or set OGCAT_CATALOG." in result.stderr
+
+
+def test_search_paths_skips_non_path_backed_records(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
+    source = tmp_path / "source.nc"
+    source.write_text("dummy", encoding="utf-8")
+    catalog.add_file(source, metadata={"species": "CO2"})
+    catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/example.zarr"),
+        metadata={"species": "CO2"},
+    )
+
+    result = runner.invoke(
+        app,
+        ["search", "--catalog", str(catalog.root), "--where", "species=CO2", "--paths"],
+    )
+
+    assert result.exit_code == 0
+    lines = [line for line in result.stdout.splitlines() if line.strip()]
+    assert len(lines) == 1
+    assert lines[0].endswith("source.nc")
+
+
+def test_search_human_output_uses_empty_path_for_non_path_backed_records(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
+    catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/example.zarr"),
+        metadata={"species": "CO2", "title": "Remote artifact"},
+    )
+
+    result = runner.invoke(app, ["search", "--catalog", str(catalog.root), "--where", "species=CO2"])
+
+    assert result.exit_code == 0
+    assert "Remote artifact" in result.stdout
+    assert "None" not in result.stdout

@@ -258,3 +258,16 @@ def test_add_artifact_preserves_non_path_original_path_strings(tmp_path: Path) -
     )
 
     assert record.original_path == "s3://bucket/source/example.zarr"
+
+
+def test_add_artifacts_raises_helpful_error_for_missing_required_keys(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="artifacts"))
+
+    try:
+        catalog.add_artifacts([{"locator": {"kind": "path", "value": "/tmp/data/file.nc"}}])
+    except ValueError as exc:
+        assert "artifact batch item 0" in str(exc)
+        assert "record_type" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("Expected ValueError for missing record_type")
