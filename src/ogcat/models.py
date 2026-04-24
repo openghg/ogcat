@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import TypeAlias
+from typing import TypeAlias, cast
 
 JsonScalar: TypeAlias = str | int | float | bool | None
 JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
@@ -83,9 +83,9 @@ class ArtifactLocator:
 class CatalogRecord:
     """A single catalogued artifact record."""
 
-    id: str
     catalog: str
     time_added: str
+    id: str | None = None
     record_type: str = "managed_file"
     locator: ArtifactLocator = field(default_factory=lambda: ArtifactLocator(kind="opaque", value=""))
     stored_abspath: str | None = None
@@ -117,22 +117,25 @@ class CatalogRecord:
 
     def to_dict(self) -> dict[str, JsonValue]:
         """Convert the record to a plain dictionary."""
-        return {
-            "id": self.id,
-            "catalog": self.catalog,
-            "record_type": self.record_type,
-            "locator": self.locator.to_dict(),
-            "stored_abspath": self.stored_abspath,
-            "stored_relpath": self.stored_relpath,
-            "storage_mode": self.storage_mode,
-            "time_added": self.time_added,
-            "original_path": self.original_path,
-            "original_filename": self.original_filename,
-            "suffixes": self.suffixes,
-            "user_metadata": self.user_metadata,
-            "derived_metadata": self.derived_metadata,
-            "naming_metadata": self.naming_metadata,
-        }
+        return cast(
+            dict[str, JsonValue],
+            {
+                "id": self.id,
+                "catalog": self.catalog,
+                "record_type": self.record_type,
+                "locator": self.locator.to_dict(),
+                "stored_abspath": self.stored_abspath,
+                "stored_relpath": self.stored_relpath,
+                "storage_mode": self.storage_mode,
+                "time_added": self.time_added,
+                "original_path": self.original_path,
+                "original_filename": self.original_filename,
+                "suffixes": self.suffixes,
+                "user_metadata": self.user_metadata,
+                "derived_metadata": self.derived_metadata,
+                "naming_metadata": self.naming_metadata,
+            },
+        )
 
     @classmethod
     def from_dict(cls, data: dict[str, JsonValue]) -> CatalogRecord:
@@ -144,8 +147,9 @@ class CatalogRecord:
             stored_relpath=data.get("stored_relpath"),
         )
         record_type = data.get("record_type")
+        raw_id = data.get("id")
         return cls(
-            id=str(data["id"]),
+            id=None if raw_id is None else str(raw_id),
             catalog=str(data["catalog"]),
             time_added=str(data["time_added"]),
             record_type="managed_file" if record_type is None else str(record_type),
@@ -157,10 +161,10 @@ class CatalogRecord:
             original_filename=(
                 None if data.get("original_filename") is None else str(data["original_filename"])
             ),
-            suffixes=[str(x) for x in data.get("suffixes", [])],
-            user_metadata=dict(data.get("user_metadata", {})),
-            derived_metadata=dict(data.get("derived_metadata", {})),
-            naming_metadata=dict(data.get("naming_metadata", {})),
+            suffixes=_coerce_string_list(data.get("suffixes", [])),
+            user_metadata=_coerce_metadata_dict(data.get("user_metadata", {})),
+            derived_metadata=_coerce_metadata_dict(data.get("derived_metadata", {})),
+            naming_metadata=_coerce_metadata_dict(data.get("naming_metadata", {})),
         )
 
 
@@ -181,3 +185,17 @@ def _coerce_locator(
         str(stored_abspath),
         relative_path=None if stored_relpath is None else str(stored_relpath),
     )
+
+
+def _coerce_string_list(value: JsonValue) -> list[str]:
+    """Coerce a JSON list value to a list of strings."""
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value]
+
+
+def _coerce_metadata_dict(value: JsonValue) -> MetadataDict:
+    """Coerce a JSON object value to metadata."""
+    if not isinstance(value, dict):
+        return {}
+    return dict(value)

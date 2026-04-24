@@ -168,11 +168,7 @@ def parse_footprint_path(path: Path, *, default_model: str = "NAME") -> Footprin
     month = int(match.group("month"))
     model = (match.group("model") or default_model).upper()
     met_model = match.group("met_model")
-    domain = (
-        match.group("domain")
-        or match.group("domain_last")
-        or match.group("domain_only")
-    )
+    domain = match.group("domain") or match.group("domain_last") or match.group("domain_only")
     species = match.group("species") or match.group("species_first")
 
     if species is None and path.parent.name != path.parent.name.upper():
@@ -256,9 +252,7 @@ def build_catalog(
     if (catalog_root / "catalog.json").exists():
         catalog = Catalog.open(catalog_root)
         if not append and catalog.describe()["record_count"] != 0:
-            raise ValueError(
-                "Catalog already exists and is not empty. Use --append to add more records."
-            )
+            raise ValueError("Catalog already exists and is not empty. Use --append to add more records.")
     else:
         spec = CatalogSpec(
             catalog_name=catalog_name,

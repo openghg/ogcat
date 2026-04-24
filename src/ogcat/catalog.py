@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import shutil
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from ogcat.extractors import extract_derived_metadata
-from ogcat.models import ArtifactLocator, CatalogRecord, MetadataDict
+from ogcat.models import ArtifactLocator, CatalogRecord, JsonValue, MetadataDict
 from ogcat.naming import build_naming_context, render_storage_location
 from ogcat.repository import CatalogRepository
-from ogcat.search import matches_record
 from ogcat.spec import CatalogSpec
 from ogcat.tinydb_repository import TinyDbCatalogRepository
 
@@ -50,62 +50,79 @@ class Catalog:
     ) -> CatalogRecord:
         """Add a file to the catalog using managed copy or move."""
         source = Path(path).expanduser().resolve()
-        if not source.is_file():
-            raise FileNotFoundError(f"Source file does not exist: {source}")
-
         metadata = metadata or {}
         chosen_operation = operation or self.spec.default_operation
         if chosen_operation not in {"copy", "move"}:
             raise ValueError(f"Unsupported operation: {chosen_operation}")
 
-        record_id = self.repository.allocate_record_ids(1)[0]
         timestamp = _utc_timestamp()
         date_added = timestamp[:10]
-
-        context = build_naming_context(
-            record_id=record_id,
-            original_path=source,
-            metadata=metadata,
-            date_added=date_added,
-        )
-        files_root = self.root / self.spec.files_root
-        target, rel_path, resolved_filename = render_storage_location(
-            files_root=files_root,
-            directory_template=self.spec.directory_template,
-            filename_template=self.spec.filename_template,
-            context=context,
-        )
-        target.parent.mkdir(parents=True, exist_ok=True)
-
-        if chosen_operation == "copy":
-            shutil.copy2(source, target)
-            storage_mode = "copy"
-        else:
-            shutil.move(str(source), str(target))
-            storage_mode = "move"
-
-        # NOTE: derived metadata is not used for location and filename creation
-        derived_metadata = extract_derived_metadata(target)
-        locator = ArtifactLocator.path(target, relative_path=rel_path)
-        record = self._build_artifact_record(
-            record_id=record_id,
+        draft_record = self._build_artifact_record(
             record_type="managed_file",
-            locator=locator,
+            locator=ArtifactLocator(kind="opaque", value=""),
             metadata=metadata,
-            storage_mode=storage_mode,
+            storage_mode=chosen_operation,
             original_path=source,
             original_filename=source.name,
             suffixes=source.suffixes,
-            derived_metadata=derived_metadata,
-            naming_metadata={
-                "directory_template": self.spec.directory_template,
-                "filename_template": self.spec.filename_template,
-                "resolved_filename": resolved_filename,
-            },
             time_added=timestamp,
         )
-        self.repository.insert(record)
-        return record
+        persisted_record = self.repository.insert(draft_record)
+        record_id = _require_record_id(persisted_record)
+
+        target: Path | None = None
+        try:
+            context = build_naming_context(
+                record_id=record_id,
+                original_path=source,
+                metadata=metadata,
+                date_added=date_added,
+            )
+            files_root = self.root / self.spec.files_root
+            target, rel_path, resolved_filename = render_storage_location(
+                files_root=files_root,
+                directory_template=self.spec.directory_template,
+                filename_template=self.spec.filename_template,
+                context=context,
+            )
+            target.parent.mkdir(parents=True, exist_ok=True)
+
+            if chosen_operation == "copy":
+                shutil.copy2(source, target)
+                storage_mode = "copy"
+            else:
+                shutil.move(str(source), str(target))
+                storage_mode = "move"
+
+            # NOTE: derived metadata is not used for location and filename creation
+            derived_metadata = extract_derived_metadata(target)
+            locator = ArtifactLocator.path(target, relative_path=rel_path)
+            record = self._build_artifact_record(
+                record_id=record_id,
+                record_type="managed_file",
+                locator=locator,
+                metadata=metadata,
+                storage_mode=storage_mode,
+                original_path=source,
+                original_filename=source.name,
+                suffixes=source.suffixes,
+                derived_metadata=derived_metadata,
+                naming_metadata={
+                    "directory_template": self.spec.directory_template,
+                    "filename_template": self.spec.filename_template,
+                    "resolved_filename": resolved_filename,
+                },
+                time_added=timestamp,
+            )
+            self.repository.update(record)
+            return record
+        except Exception:
+            if chosen_operation == "copy" and target is not None:
+                with suppress(Exception):
+                    target.unlink()
+            with suppress(Exception):
+                self.repository.delete(record_id)
+            raise
 
     def add_artifact(
         self,
@@ -128,7 +145,6 @@ class Catalog:
         delegates here.
         """
         record = self._build_artifact_record(
-            record_id=self.repository.allocate_record_ids(1)[0],
             record_type=record_type,
             locator=locator,
             metadata=metadata,
@@ -140,8 +156,7 @@ class Catalog:
             naming_metadata=naming_metadata,
             time_added=time_added,
         )
-        self.repository.insert(record)
-        return record
+        return self.repository.insert(record)
 
     def add_artifacts(
         self,
@@ -153,17 +168,10 @@ class Catalog:
         `add_artifact()`. This keeps the public artifact API small while allowing
         batch-oriented callers to avoid one-at-a-time repository writes.
         """
-        validated_items = [
-            _validate_artifact_batch_item(item, index) for index, item in enumerate(artifacts)
-        ]
-        allocated_record_ids = self.repository.allocate_record_ids(len(validated_items))
+        validated_items = [_validate_artifact_batch_item(item, index) for index, item in enumerate(artifacts)]
 
         records: list[CatalogRecord] = []
-        for record_id, (index, validated) in zip(
-            allocated_record_ids,
-            enumerate(validated_items),
-            strict=True,
-        ):
+        for index, validated in enumerate(validated_items):
             try:
                 locator = _coerce_artifact_locator(validated["locator"])
             except TypeError as exc:
@@ -173,14 +181,11 @@ class Catalog:
 
             records.append(
                 self._build_artifact_record(
-                    record_id=record_id,
                     record_type=str(validated["record_type"]),
                     locator=locator,
                     metadata=validated.get("metadata"),  # type: ignore[arg-type]
                     storage_mode=(
-                        None
-                        if validated.get("storage_mode") is None
-                        else str(validated["storage_mode"])
+                        None if validated.get("storage_mode") is None else str(validated["storage_mode"])
                     ),
                     original_path=validated.get("original_path"),  # type: ignore[arg-type]
                     original_filename=(
@@ -196,8 +201,7 @@ class Catalog:
                     ),
                 )
             )
-        self.repository.insert_many(records)
-        return records
+        return self.repository.insert_many(records)
 
     def search(
         self,
@@ -208,19 +212,13 @@ class Catalog:
         ignore_case: bool = False,
     ) -> list[CatalogRecord]:
         """Search catalog records using equality, substring, and regex filters."""
-        records = self.repository.all()
-        return [
-            record
-            for record in records
-            if matches_record(
-                record,
-                where=where,
-                contains=contains,
-                regex=regex,
-                ignore_case=ignore_case,
-                resolution_order=self.spec.field_resolution_order,
-            )
-        ]
+        return self.repository.search(
+            where=where,
+            contains=contains,
+            regex=regex,
+            ignore_case=ignore_case,
+            resolution_order=self.spec.field_resolution_order,
+        )
 
     def describe(self) -> dict[str, object]:
         """Return a simple serialisable summary of the catalog."""
@@ -240,7 +238,7 @@ class Catalog:
             "has_metadata_fields": bool(self.spec.metadata_fields),
         }
 
-    def list_metadata_fields(self) -> list[dict[str, object]]:
+    def list_metadata_fields(self) -> list[dict[str, JsonValue]]:
         """Return serialisable metadata field descriptions."""
         return [field_description.to_dict() for field_description in self.spec.metadata_fields]
 
@@ -258,7 +256,7 @@ class Catalog:
     def _build_artifact_record(
         self,
         *,
-        record_id: str,
+        record_id: str | None = None,
         record_type: str,
         locator: ArtifactLocator,
         metadata: MetadataDict | None = None,
@@ -329,7 +327,16 @@ def _validate_artifact_batch_item(item: object, index: int) -> dict[str, object]
     if missing_keys:
         missing = ", ".join(missing_keys)
         raise ValueError(f"artifact batch item {index} is missing required key(s): {missing}")
-    if "record_id" in item:
-        raise ValueError(f"artifact batch item {index} must not supply record_id")
+    forbidden_id_keys = [key for key in ["record_id", "id"] if key in item]
+    if forbidden_id_keys:
+        forbidden = ", ".join(forbidden_id_keys)
+        raise ValueError(f"artifact batch item {index} must not supply {forbidden}")
 
     return item
+
+
+def _require_record_id(record: CatalogRecord) -> str:
+    """Return a persisted record id."""
+    if record.id is None:
+        raise RuntimeError("Repository returned a persisted record without an id.")
+    return record.id

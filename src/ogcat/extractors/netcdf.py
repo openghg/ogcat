@@ -7,8 +7,8 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any
 
-from ogcat.models import JsonValue
 from ogcat.extractors import SuffixExtractor
+from ogcat.models import JsonValue
 
 _SELECTED_ATTRS = (
     "title",
