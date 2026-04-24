@@ -49,11 +49,22 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn, TimeElapsedColumn  # noqa: E402
+
 from ogcat import ArtifactLocator, Catalog, CatalogSpec, MetadataFieldDescription  # noqa: E402
 
 KNOWN_LPDM_MODELS = {"NAME", "FLEXPART"}
 SITE_INLET_RE = re.compile(r"^(?P<site>[A-Za-z0-9]+)[-_](?P<inlet>\d{1,4}m)agl$")
 YYYYMM_RE = re.compile(r"^(?P<year>\d{4})(?P<month>\d{2})$")
+FOOTPRINT_FILE_RE = re.compile(
+    r"^(?P<site>[A-Za-z0-9]+)[-_](?P<inlet>\d{1,4}m)agl"
+    r"_(?:(?P<model>NAME|FLEXPART)_)?"
+    r"(?:(?P<met_model>[A-Z0-9]+)_)?"
+    r"(?:(?P<domain>[A-Z0-9]+)_(?P<species>[a-z0-9-]+)"
+    r"|(?P<species_first>[a-z0-9-]+)_(?P<domain_last>[A-Z0-9]+)"
+    r"|(?P<domain_only>[A-Z0-9]+))"
+    r"_(?P<year>\d{4})(?P<month>\d{2})\.nc$"
+)
 
 
 @dataclass(slots=True)
@@ -152,60 +163,22 @@ def parse_footprint_path(path: Path, *, default_model: str = "NAME") -> Footprin
         Parsed footprint metadata, or `None` when the file name does not match one
         of the supported footprint patterns.
     """
-    stem_tokens = path.stem.split("_")
-    if len(stem_tokens) < 3:
+    match = FOOTPRINT_FILE_RE.fullmatch(path.name)
+    if match is None:
         return None
 
-    site_inlet_match = SITE_INLET_RE.match(stem_tokens[0])
-    if site_inlet_match is None:
-        return None
-
-    yyyymm_match = YYYYMM_RE.match(stem_tokens[-1])
-    if yyyymm_match is None:
-        return None
-
-    site = site_inlet_match.group("site").upper()
-    inlet = site_inlet_match.group("inlet")
-    year = int(yyyymm_match.group("year"))
-    month = int(yyyymm_match.group("month"))
-
-    model: str
-    met_model: str | None = None
-    domain: str | None = None
-    species: str | None = None
-    middle_tokens = stem_tokens[1:-1]
-
-    if middle_tokens and middle_tokens[0].upper() in KNOWN_LPDM_MODELS:
-        model = middle_tokens[0].upper()
-        remainder = middle_tokens[1:]
-        if len(remainder) == 1:
-            domain = remainder[0].upper()
-        elif len(remainder) == 2:
-            domain = remainder[0].upper()
-            species = remainder[1].lower()
-        elif len(remainder) == 3:
-            met_model = remainder[0].upper()
-            domain = remainder[1].upper()
-            species = remainder[2].lower()
-        else:
-            return None
-    else:
-        model = default_model.upper()
-        if len(middle_tokens) == 1:
-            domain = middle_tokens[0].upper()
-        elif len(middle_tokens) == 2:
-            first_token = middle_tokens[0]
-            if first_token.upper() == first_token:
-                met_model = first_token.upper()
-            else:
-                species = first_token.lower()
-            domain = middle_tokens[1].upper()
-        elif len(middle_tokens) == 3:
-            met_model = middle_tokens[0].upper()
-            species = middle_tokens[1].lower()
-            domain = middle_tokens[2].upper()
-        else:
-            return None
+    site = match.group("site").upper()
+    inlet = match.group("inlet")
+    year = int(match.group("year"))
+    month = int(match.group("month"))
+    model = (match.group("model") or default_model).upper()
+    met_model = match.group("met_model")
+    domain = (
+        match.group("domain")
+        or match.group("domain_last")
+        or match.group("domain_only")
+    )
+    species = match.group("species") or match.group("species_first")
 
     if species is None and path.parent.name != path.parent.name.upper():
         species = path.parent.name.lower()
@@ -306,24 +279,58 @@ def build_catalog(
         for path in discover_paths_from_listing(listing_path):
             discovered_paths[str(path)] = path
 
+    all_paths = list(discovered_paths.values())
+    existing_record_number = _max_record_number(catalog)
     skipped: list[Path] = []
     added_count = 0
-    for path in discovered_paths.values():
-        metadata = parse_footprint_path(path)
-        if metadata is None:
-            skipped.append(path)
-            continue
+    print(f"Discovered {len(all_paths)} candidate NetCDF files.")
 
-        catalog.add_artifact(
-            record_type="external_reference",
-            locator=ArtifactLocator.path(path),
-            metadata=metadata.to_user_metadata(),
-            original_filename=path.name,
-            suffixes=path.suffixes,
-        )
-        added_count += 1
+    progress = Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+        transient=False,
+    )
+    with progress:
+        task_id = progress.add_task("Cataloging footprint files", total=len(all_paths))
+        for index, path in enumerate(all_paths, start=1):
+            if index == 1 or index % 250 == 0 or index == len(all_paths):
+                print(
+                    f"Processing file {index:,} of {len(all_paths):,}: {path.name}",
+                    flush=True,
+                )
+            metadata = parse_footprint_path(path)
+            if metadata is None:
+                skipped.append(path)
+                progress.advance(task_id)
+                continue
+
+            catalog.add_artifact(
+                record_id=f"rec_{existing_record_number + index:06d}",
+                record_type="external_reference",
+                locator=ArtifactLocator.path(path),
+                metadata=metadata.to_user_metadata(),
+                original_filename=path.name,
+                suffixes=path.suffixes,
+            )
+            added_count += 1
+            progress.advance(task_id)
 
     return catalog, added_count, skipped
+
+
+def _max_record_number(catalog: Catalog) -> int:
+    """Return the largest existing sequential record number in the catalog."""
+    max_number = 0
+    for record in catalog.repository.all():
+        if not record.id.startswith("rec_"):
+            continue
+        try:
+            max_number = max(max_number, int(record.id.split("_", 1)[1]))
+        except ValueError:
+            continue
+    return max_number
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
