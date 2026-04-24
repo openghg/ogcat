@@ -22,6 +22,12 @@ console = Console()
 error_console = Console(stderr=True)
 
 
+def _fail(message: str, *, code: int = 1) -> NoReturn:
+    """Print a consistent error message and exit."""
+    error_console.print(f"Error: {message}")
+    raise typer.Exit(code=code)
+
+
 def _resolve_catalog_path(catalog: Path | None) -> Path:
     """Resolve the active catalog path from CLI option or environment."""
     if catalog is not None:
@@ -29,13 +35,7 @@ def _resolve_catalog_path(catalog: Path | None) -> Path:
     env_value = os.environ.get("OGCAT_CATALOG")
     if env_value:
         return Path(env_value)
-    raise typer.BadParameter("Provide --catalog or set OGCAT_CATALOG.")
-
-
-def _fail(message: str, *, code: int = 1) -> NoReturn:
-    """Print a consistent error message and exit."""
-    error_console.print(f"Error: {message}")
-    raise typer.Exit(code=code)
+    _fail("Provide --catalog or set OGCAT_CATALOG.")
 
 
 def _open_catalog_or_fail(catalog: Path | None) -> Catalog:
