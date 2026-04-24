@@ -271,3 +271,48 @@ def test_add_artifacts_raises_helpful_error_for_missing_required_keys(tmp_path: 
         assert "record_type" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("Expected ValueError for missing record_type")
+
+
+def test_add_artifacts_raises_helpful_error_for_invalid_locator(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="artifacts"))
+
+    try:
+        catalog.add_artifacts(
+            [
+                {
+                    "record_type": "external_reference",
+                    "locator": {"kind": "path", "relative_path": None},
+                }
+            ]
+        )
+    except Exception as exc:
+        assert "artifact batch item 0" in str(exc)
+        assert "invalid locator" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("Expected locator validation error")
+
+
+def test_add_artifacts_assigns_sequential_record_ids_when_missing(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="artifacts"))
+    first = catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator.path("/tmp/data/existing.nc"),
+    )
+
+    records = catalog.add_artifacts(
+        [
+            {
+                "record_type": "external_reference",
+                "locator": ArtifactLocator.path("/tmp/data/first.nc"),
+            },
+            {
+                "record_type": "external_reference",
+                "locator": ArtifactLocator.path("/tmp/data/second.nc"),
+            },
+        ]
+    )
+
+    assert first.id == "rec_000001"
+    assert [record.id for record in records] == ["rec_000002", "rec_000003"]

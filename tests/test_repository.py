@@ -159,6 +159,13 @@ def test_empty_path_locator_does_not_resolve_to_current_directory() -> None:
     assert locator.as_path() is None
 
 
+def test_locator_from_dict_treats_null_value_as_empty() -> None:
+    locator = ArtifactLocator.from_dict({"kind": "path", "value": None, "relative_path": None})
+
+    assert locator.value == ""
+    assert locator.as_path() is None
+
+
 def test_from_dict_defaults_null_record_type_to_managed_file() -> None:
     record = CatalogRecord.from_dict(
         {

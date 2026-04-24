@@ -59,9 +59,14 @@ class ArtifactLocator:
     @classmethod
     def from_dict(cls, data: dict[str, JsonValue]) -> ArtifactLocator:
         """Build a locator from a plain dictionary."""
+        if "kind" not in data:
+            raise ValueError("locator dictionary is missing required key: kind")
+        if "value" not in data:
+            raise ValueError("locator dictionary is missing required key: value")
+        raw_value = data["value"]
         return cls(
             kind=str(data["kind"]),
-            value=str(data["value"]),
+            value="" if raw_value is None else str(raw_value),
             relative_path=(None if data.get("relative_path") is None else str(data["relative_path"])),
         )
 

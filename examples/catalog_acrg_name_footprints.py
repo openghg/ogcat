@@ -33,6 +33,10 @@ Records created by this script include metadata for:
 The current `fp_NAME` tree implies `model=NAME`, but that field is still written
 explicitly so the records remain readable and future comparisons with other LPDM
 models are straightforward.
+
+Run this example from an environment where `ogcat` is installed, for example:
+
+- `pip install -e .`
 """
 
 from __future__ import annotations
@@ -40,18 +44,12 @@ from __future__ import annotations
 import argparse
 import re
 import subprocess
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-SRC_ROOT = REPO_ROOT / "src"
-if str(SRC_ROOT) not in sys.path:
-    sys.path.insert(0, str(SRC_ROOT))
+from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn, TimeElapsedColumn
 
-from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn, TimeElapsedColumn  # noqa: E402
-
-from ogcat import ArtifactLocator, Catalog, CatalogSpec, MetadataFieldDescription  # noqa: E402
+from ogcat import ArtifactLocator, Catalog, CatalogSpec, MetadataFieldDescription
 
 FOOTPRINT_FILE_RE = re.compile(
     r"^(?P<site>[A-Za-z0-9]+)[-_](?P<inlet>\d{1,4}m)agl"

@@ -44,16 +44,7 @@ class Catalog:
 
     def _next_record_id(self) -> str:
         """Generate the next simple sequential record id."""
-        prefix = "rec"
-        existing_ids = [record.id for record in self.repository.all()]
-        max_number = 0
-        for record_id in existing_ids:
-            if record_id.startswith(f"{prefix}_"):
-                try:
-                    max_number = max(max_number, int(record_id.split("_", 1)[1]))
-                except ValueError:
-                    continue
-        return f"{prefix}_{max_number + 1:06d}"
+        return _format_record_id(_max_record_number(record.id for record in self.repository.all()) + 1)
 
     def add_file(
         self,
@@ -166,30 +157,59 @@ class Catalog:
         `add_artifact()`. This keeps the public artifact API small while allowing
         batch-oriented callers to avoid one-at-a-time repository writes.
         """
-        records = [
-            self._build_artifact_record(
-                record_type=str(validated["record_type"]),
-                locator=_coerce_artifact_locator(validated["locator"]),
-                metadata=validated.get("metadata"),  # type: ignore[arg-type]
-                storage_mode=(
-                    None if validated.get("storage_mode") is None else str(validated["storage_mode"])
-                ),
-                original_path=validated.get("original_path"),  # type: ignore[arg-type]
-                original_filename=(
-                    None
-                    if validated.get("original_filename") is None
-                    else str(validated["original_filename"])
-                ),
-                suffixes=validated.get("suffixes"),  # type: ignore[arg-type]
-                derived_metadata=validated.get("derived_metadata"),  # type: ignore[arg-type]
-                naming_metadata=validated.get("naming_metadata"),  # type: ignore[arg-type]
-                record_id=None if validated.get("record_id") is None else str(validated["record_id"]),
-                time_added=None if validated.get("time_added") is None else str(validated["time_added"]),
-            )
-            for validated in (
-                _validate_artifact_batch_item(item, index) for index, item in enumerate(artifacts)
-            )
+        validated_items = [
+            _validate_artifact_batch_item(item, index) for index, item in enumerate(artifacts)
         ]
+
+        next_record_number = _max_record_number(record.id for record in self.repository.all()) + 1
+        for validated in validated_items:
+            explicit_record_id = validated.get("record_id")
+            if explicit_record_id is None:
+                continue
+            next_record_number = max(
+                next_record_number,
+                _max_record_number([str(explicit_record_id)]) + 1,
+            )
+
+        records: list[CatalogRecord] = []
+        for index, validated in enumerate(validated_items):
+            try:
+                locator = _coerce_artifact_locator(validated["locator"])
+            except TypeError as exc:
+                raise TypeError(f"artifact batch item {index}: invalid locator: {exc}") from exc
+            except ValueError as exc:
+                raise ValueError(f"artifact batch item {index}: invalid locator: {exc}") from exc
+
+            record_id = None if validated.get("record_id") is None else str(validated["record_id"])
+            if record_id is None:
+                record_id = _format_record_id(next_record_number)
+                next_record_number += 1
+
+            records.append(
+                self._build_artifact_record(
+                    record_type=str(validated["record_type"]),
+                    locator=locator,
+                    metadata=validated.get("metadata"),  # type: ignore[arg-type]
+                    storage_mode=(
+                        None
+                        if validated.get("storage_mode") is None
+                        else str(validated["storage_mode"])
+                    ),
+                    original_path=validated.get("original_path"),  # type: ignore[arg-type]
+                    original_filename=(
+                        None
+                        if validated.get("original_filename") is None
+                        else str(validated["original_filename"])
+                    ),
+                    suffixes=validated.get("suffixes"),  # type: ignore[arg-type]
+                    derived_metadata=validated.get("derived_metadata"),  # type: ignore[arg-type]
+                    naming_metadata=validated.get("naming_metadata"),  # type: ignore[arg-type]
+                    record_id=record_id,
+                    time_added=(
+                        None if validated.get("time_added") is None else str(validated["time_added"])
+                    ),
+                )
+            )
         self.repository.insert_many(records)
         return records
 
@@ -326,3 +346,21 @@ def _validate_artifact_batch_item(item: object, index: int) -> dict[str, object]
         raise ValueError(f"artifact batch item {index} is missing required key(s): {missing}")
 
     return item
+
+
+def _max_record_number(record_ids: object) -> int:
+    """Return the highest sequential record number from an iterable of ids."""
+    max_number = 0
+    for record_id in record_ids:
+        if not isinstance(record_id, str) or not record_id.startswith("rec_"):
+            continue
+        try:
+            max_number = max(max_number, int(record_id.split("_", 1)[1]))
+        except ValueError:
+            continue
+    return max_number
+
+
+def _format_record_id(number: int) -> str:
+    """Format a sequential record number as the standard record id."""
+    return f"rec_{number:06d}"
