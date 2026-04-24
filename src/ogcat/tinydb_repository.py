@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from tinydb import Query, TinyDB
 
@@ -27,7 +27,11 @@ class TinyDbCatalogRepository:
         payload.pop("id", None)
         doc_id = self._db.insert(payload)
         persisted = replace(record, id=str(doc_id))
-        self._db.update(persisted.to_dict(), doc_ids=[doc_id])
+        try:
+            self._db.update(persisted.to_dict(), doc_ids=[doc_id])
+        except Exception:
+            self._db.remove(doc_ids=[doc_id])
+            raise
         return persisted
 
     def insert_many(self, records: list[CatalogRecord]) -> list[CatalogRecord]:
@@ -58,7 +62,7 @@ class TinyDbCatalogRepository:
             result = self._db.get(query.id == record_id)
         if result is None:
             return None
-        return CatalogRecord.from_dict(cast(dict[str, JsonValue], result))
+        return self._record_from_document(result)
 
     def update(self, record: CatalogRecord) -> None:
         """Update an existing record."""
@@ -107,4 +111,11 @@ class TinyDbCatalogRepository:
 
     def all(self) -> list[CatalogRecord]:
         """Return all records."""
-        return [CatalogRecord.from_dict(item) for item in self._db.all()]
+        return [self._record_from_document(item) for item in self._db.all()]
+
+    def _record_from_document(self, document: Any) -> CatalogRecord:
+        """Build a record, recovering the id from TinyDB doc_id when needed."""
+        data = dict(cast(dict[str, JsonValue], document))
+        if data.get("id") is None:
+            data["id"] = str(document.doc_id)
+        return CatalogRecord.from_dict(data)

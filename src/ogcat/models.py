@@ -147,8 +147,9 @@ class CatalogRecord:
             stored_relpath=data.get("stored_relpath"),
         )
         record_type = data.get("record_type")
+        raw_id = data.get("id")
         return cls(
-            id=str(data["id"]),
+            id=None if raw_id is None else str(raw_id),
             catalog=str(data["catalog"]),
             time_added=str(data["time_added"]),
             record_type="managed_file" if record_type is None else str(record_type),

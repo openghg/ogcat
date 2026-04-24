@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 from ogcat.models import ArtifactLocator, CatalogRecord
 from ogcat.tinydb_repository import TinyDbCatalogRepository
@@ -105,6 +108,25 @@ def test_from_dict_upgrades_legacy_path_only_records() -> None:
     assert record.path() == Path("/tmp/catalog/files/example.nc")
 
 
+def test_from_dict_tolerates_missing_or_null_id_for_draft_records() -> None:
+    missing_id_record = CatalogRecord.from_dict(
+        {
+            "catalog": "fluxes",
+            "time_added": "2026-04-23T12:00:00Z",
+        }
+    )
+    null_id_record = CatalogRecord.from_dict(
+        {
+            "id": None,
+            "catalog": "fluxes",
+            "time_added": "2026-04-23T12:00:00Z",
+        }
+    )
+
+    assert missing_id_record.id is None
+    assert null_id_record.id is None
+
+
 def test_record_to_dict_stays_json_serialisable() -> None:
     record = CatalogRecord(
         id="rec_000004",
@@ -160,6 +182,48 @@ def test_repository_delete(tmp_path: Path) -> None:
     repository.delete("1")
 
     assert repository.all() == []
+
+
+def test_repository_removes_inserted_document_when_id_update_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = TinyDbCatalogRepository(tmp_path / "db.json")
+    original_update = repository._db.update
+
+    def fail_update(*args: Any, **kwargs: Any) -> list[int]:
+        if kwargs.get("doc_ids") == [1]:
+            raise OSError("simulated update failure")
+        return original_update(*args, **kwargs)
+
+    monkeypatch.setattr(repository._db, "update", fail_update)
+
+    with pytest.raises(OSError, match="simulated update failure"):
+        repository.insert(
+            CatalogRecord(
+                catalog="fluxes",
+                time_added="2026-04-23T12:00:00Z",
+            )
+        )
+
+    assert repository.all() == []
+
+
+def test_repository_recovers_missing_document_id_from_tinydb_doc_id(tmp_path: Path) -> None:
+    repository = TinyDbCatalogRepository(tmp_path / "db.json")
+    repository._db.insert(
+        {
+            "catalog": "fluxes",
+            "time_added": "2026-04-23T12:00:00Z",
+            "record_type": "external_reference",
+        }
+    )
+
+    stored = repository.get("1")
+
+    assert stored is not None
+    assert stored.id == "1"
+    assert [record.id for record in repository.all()] == ["1"]
 
 
 def test_record_without_locator_does_not_resolve_to_current_directory() -> None:

@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -196,6 +197,31 @@ def test_add_file_rolls_back_record_when_copy_fails(tmp_path: Path) -> None:
 
     assert catalog.describe()["record_count"] == 0
     assert catalog.repository.all() == []
+
+
+def test_add_file_removes_partial_target_when_copy_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "partial.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="files"))
+
+    def fail_copy(source_path: Path, target_path: Path, *args: Any, **kwargs: Any) -> None:
+        target_path.write_text("partial", encoding="utf-8")
+        raise OSError("simulated copy failure")
+
+    monkeypatch.setattr("ogcat.catalog.shutil.copy2", fail_copy)
+
+    with pytest.raises(OSError, match="simulated copy failure"):
+        catalog.add_file(source)
+
+    assert catalog.describe()["record_count"] == 0
+    assert list((root / "files").rglob("*.nc")) == []
 
 
 def test_add_artifact_supports_non_path_locator_records(tmp_path: Path) -> None:

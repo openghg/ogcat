@@ -116,7 +116,9 @@ class Catalog:
             self.repository.update(record)
             return record
         except Exception:
-            with suppress(Exception):
+            with suppress(FileNotFoundError):
+                target.unlink()
+            with suppress(KeyError):
                 self.repository.delete(record_id)
             raise
 
