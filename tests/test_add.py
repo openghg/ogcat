@@ -219,6 +219,31 @@ def test_add_file_rolls_back_record_when_copy_fails(tmp_path: Path) -> None:
     assert catalog.repository.all() == []
 
 
+def test_add_file_rolls_back_record_when_naming_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "broken.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="files"))
+
+    def fail_render_storage_location(*args: object, **kwargs: object) -> None:
+        raise ValueError("simulated naming failure")
+
+    monkeypatch.setattr("ogcat.catalog.render_storage_location", fail_render_storage_location)
+
+    with pytest.raises(ValueError, match="simulated naming failure"):
+        catalog.add_file(source)
+
+    assert catalog.describe()["record_count"] == 0
+    assert catalog.repository.all() == []
+    assert list((root / "files").rglob("*.nc")) == []
+
+
 def test_add_file_removes_partial_target_when_copy_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

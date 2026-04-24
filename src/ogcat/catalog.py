@@ -70,22 +70,23 @@ class Catalog:
         persisted_record = self.repository.insert(draft_record)
         record_id = _require_record_id(persisted_record)
 
-        context = build_naming_context(
-            record_id=record_id,
-            original_path=source,
-            metadata=metadata,
-            date_added=date_added,
-        )
-        files_root = self.root / self.spec.files_root
-        target, rel_path, resolved_filename = render_storage_location(
-            files_root=files_root,
-            directory_template=self.spec.directory_template,
-            filename_template=self.spec.filename_template,
-            context=context,
-        )
-        target.parent.mkdir(parents=True, exist_ok=True)
-
+        target: Path | None = None
         try:
+            context = build_naming_context(
+                record_id=record_id,
+                original_path=source,
+                metadata=metadata,
+                date_added=date_added,
+            )
+            files_root = self.root / self.spec.files_root
+            target, rel_path, resolved_filename = render_storage_location(
+                files_root=files_root,
+                directory_template=self.spec.directory_template,
+                filename_template=self.spec.filename_template,
+                context=context,
+            )
+            target.parent.mkdir(parents=True, exist_ok=True)
+
             if chosen_operation == "copy":
                 shutil.copy2(source, target)
                 storage_mode = "copy"
@@ -116,7 +117,7 @@ class Catalog:
             self.repository.update(record)
             return record
         except Exception:
-            if chosen_operation == "copy":
+            if chosen_operation == "copy" and target is not None:
                 with suppress(Exception):
                     target.unlink()
             with suppress(Exception):
