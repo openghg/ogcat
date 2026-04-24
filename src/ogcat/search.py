@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 import re
-from typing import Any, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 from ogcat.models import CatalogRecord
-
 
 _RESERVED_FIELDS = {
     "id",
     "catalog",
+    "record_type",
+    "locator",
     "stored_abspath",
     "stored_relpath",
     "storage_mode",

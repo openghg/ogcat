@@ -1,6 +1,9 @@
 # Architecture
 
-`ogcat` is a small, spec-driven catalog for managed files. The current implementation is deliberately narrow: it creates a catalog on disk, stores records in a lightweight database, ingests files by copy or move, derives a small amount of metadata when possible, and exposes search through both Python and CLI.
+`ogcat` is a small, spec-driven catalog for managed artifacts, with managed local files as the
+current MVP. The current implementation is deliberately narrow: it creates a catalog on disk,
+stores records in a lightweight database, ingests files by copy or move, derives a small amount of
+metadata when possible, and exposes search through both Python and CLI.
 
 ## Current Architecture
 
@@ -25,6 +28,29 @@ The catalog root is self-describing:
 ```
 
 `catalog.json` defines how the catalog behaves. `db.json` stores records. `files/` is the managed storage root for ingested files.
+
+## First Pass Artifact Generalisation
+
+The current record model now separates two ideas that were previously collapsed into one stored
+path:
+
+- `record_type`: what the catalogued thing is, such as `managed_file`
+- `locator`: how that thing is located, such as a local `path` or a future URI
+
+This is intentionally small. The goal is not to introduce a full abstraction framework, only to
+stop the internal model from assuming every record is a copied or moved local file forever.
+
+For the current MVP:
+
+- `add_file()` still performs managed ingest by copy or move
+- managed file records store a `path` locator
+- compatibility fields `stored_abspath` and `stored_relpath` remain present for today's APIs and
+  CLI
+- `Catalog.path()` resolves only path-backed records and returns `None` for records that are
+  missing or not path-backed
+
+This leaves room for later work on managed directory-like stores, external references, and
+pre-allocated transform targets without forcing those features into the first pass.
 
 ## Why Hide TinyDB Behind a Repository Abstraction
 
@@ -72,7 +98,7 @@ The current derived metadata layer is intentionally small. For netCDF files, if 
 
 The present architecture is intentionally constrained.
 
-- records represent managed files with stored paths; there is no general locator abstraction yet
+- richer locator handling is still future work; today the generalisation is intentionally minimal
 - TinyDB is the only supported backend
 - metadata field descriptions are not typed schemas and are not validated on ingest
 - search supports exact equality, contains, and regex matching only

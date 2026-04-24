@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from ogcat.models import CatalogRecord
+import json
+from pathlib import Path
+
+from ogcat.models import ArtifactLocator, CatalogRecord
 from ogcat.tinydb_repository import TinyDbCatalogRepository
 
 
@@ -11,10 +14,14 @@ def test_repository_insert_get_update_and_all(tmp_path) -> None:
     record = CatalogRecord(
         id="rec_000001",
         catalog="fluxes",
+        time_added="2026-04-23T12:00:00Z",
+        locator=ArtifactLocator.path(
+            "/tmp/catalog/files/example.nc",
+            relative_path="files/example.nc",
+        ),
         stored_abspath="/tmp/catalog/files/example.nc",
         stored_relpath="files/example.nc",
         storage_mode="copy",
-        time_added="2026-04-23T12:00:00Z",
         original_path="/tmp/source/example.nc",
         original_filename="example.nc",
         suffixes=[".nc"],
@@ -32,10 +39,12 @@ def test_repository_insert_get_update_and_all(tmp_path) -> None:
     updated = CatalogRecord(
         id=record.id,
         catalog=record.catalog,
+        time_added=record.time_added,
+        record_type=record.record_type,
+        locator=record.locator,
         stored_abspath=record.stored_abspath,
         stored_relpath=record.stored_relpath,
         storage_mode=record.storage_mode,
-        time_added=record.time_added,
         original_path=record.original_path,
         original_filename=record.original_filename,
         suffixes=record.suffixes,
@@ -46,3 +55,68 @@ def test_repository_insert_get_update_and_all(tmp_path) -> None:
     repository.update(updated)
 
     assert repository.get(record.id) == updated
+
+
+def test_record_round_trips_with_non_path_locator(tmp_path: Path) -> None:
+    repository = TinyDbCatalogRepository(tmp_path / "db.json")
+    record = CatalogRecord(
+        id="rec_000002",
+        catalog="fluxes",
+        time_added="2026-04-23T12:00:00Z",
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/example.zarr"),
+        user_metadata={"species": "CO2"},
+    )
+
+    repository.insert(record)
+
+    stored = repository.get(record.id)
+    assert stored == record
+    assert stored is not None
+    assert stored.path() is None
+
+
+def test_from_dict_upgrades_legacy_path_only_records() -> None:
+    record = CatalogRecord.from_dict(
+        {
+            "id": "rec_000003",
+            "catalog": "fluxes",
+            "stored_abspath": "/tmp/catalog/files/example.nc",
+            "stored_relpath": "files/example.nc",
+            "storage_mode": "copy",
+            "time_added": "2026-04-23T12:00:00Z",
+            "original_path": "/tmp/source/example.nc",
+            "original_filename": "example.nc",
+            "suffixes": [".nc"],
+            "user_metadata": {},
+            "derived_metadata": {},
+            "naming_metadata": {},
+        }
+    )
+
+    assert record.record_type == "managed_file"
+    assert record.locator == ArtifactLocator.path(
+        "/tmp/catalog/files/example.nc",
+        relative_path="files/example.nc",
+    )
+    assert record.path() == Path("/tmp/catalog/files/example.nc")
+
+
+def test_record_to_dict_stays_json_serialisable() -> None:
+    record = CatalogRecord(
+        id="rec_000004",
+        catalog="fluxes",
+        time_added="2026-04-23T12:00:00Z",
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/example.zarr"),
+        user_metadata={"species": "CO2"},
+    )
+
+    payload = record.to_dict()
+
+    assert payload["locator"] == {
+        "kind": "uri",
+        "value": "s3://bucket/example.zarr",
+        "relative_path": None,
+    }
+    assert json.loads(json.dumps(payload)) == payload

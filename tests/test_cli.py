@@ -70,6 +70,8 @@ def test_show_json_output(tmp_path: Path) -> None:
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["id"] == "rec_000001"
+    assert payload["record_type"] == "managed_file"
+    assert payload["locator"]["kind"] == "path"
     assert payload["user_metadata"]["title"] == "Anthropogenic test flux"
 
 

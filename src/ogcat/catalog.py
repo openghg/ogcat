@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from pathlib import Path
 import shutil
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
 
 from ogcat.extractors import extract_derived_metadata
-from ogcat.models import CatalogRecord, MetadataDict
+from ogcat.models import ArtifactLocator, CatalogRecord, MetadataDict
 from ogcat.naming import build_naming_context, render_storage_location
 from ogcat.repository import CatalogRepository
 from ogcat.search import matches_record
@@ -25,7 +25,7 @@ class Catalog:
     repository: CatalogRepository
 
     @classmethod
-    def create(cls, root: str | Path, spec: CatalogSpec) -> "Catalog":
+    def create(cls, root: str | Path, spec: CatalogSpec) -> Catalog:
         """Create a new catalog directory and write its specification."""
         root_path = Path(root).expanduser().resolve()
         root_path.mkdir(parents=True, exist_ok=True)
@@ -35,7 +35,7 @@ class Catalog:
         return cls(root=root_path, spec=spec, repository=repository)
 
     @classmethod
-    def open(cls, root: str | Path) -> "Catalog":
+    def open(cls, root: str | Path) -> Catalog:
         """Open an existing catalog from disk."""
         root_path = Path(root).expanduser().resolve()
         spec = CatalogSpec.read(root_path / "catalog.json")
@@ -72,8 +72,7 @@ class Catalog:
             raise ValueError(f"Unsupported operation: {chosen_operation}")
 
         record_id = self._next_record_id()
-        timestamp = datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat()
-        timestamp = timestamp.replace("+00:00", "Z")
+        timestamp = _utc_timestamp()
         date_added = timestamp[:10]
 
         context = build_naming_context(
@@ -98,25 +97,68 @@ class Catalog:
             shutil.move(str(source), str(target))
             storage_mode = "move"
 
+        # NOTE: derived metadata is not used for location and filename creation
         derived_metadata = extract_derived_metadata(target)
+        locator = ArtifactLocator.path(target, relative_path=rel_path)
 
-        record = CatalogRecord(
-            id=record_id,
-            catalog=self.spec.catalog_name,
-            stored_abspath=str(target),
-            stored_relpath=rel_path,
+        return self.add_artifact(
+            record_type="managed_file",
+            locator=locator,
+            metadata=metadata,
             storage_mode=storage_mode,
-            time_added=timestamp,
-            original_path=str(source),
+            original_path=source,
             original_filename=source.name,
             suffixes=source.suffixes,
-            user_metadata=metadata,
             derived_metadata=derived_metadata,
             naming_metadata={
                 "directory_template": self.spec.directory_template,
                 "filename_template": self.spec.filename_template,
                 "resolved_filename": resolved_filename,
             },
+            record_id=record_id,
+            time_added=timestamp,
+        )
+
+    def add_artifact(
+        self,
+        *,
+        record_type: str,
+        locator: ArtifactLocator,
+        metadata: MetadataDict | None = None,
+        storage_mode: str | None = None,
+        original_path: str | Path | None = None,
+        original_filename: str | None = None,
+        suffixes: list[str] | None = None,
+        derived_metadata: MetadataDict | None = None,
+        naming_metadata: MetadataDict | None = None,
+        record_id: str | None = None,
+        time_added: str | None = None,
+    ) -> CatalogRecord:
+        """Add an artifact record without performing any file operation.
+
+        This is the minimal general record API. `add_file()` remains the managed
+        ingest convenience wrapper that prepares a path-backed locator and then
+        delegates here.
+        """
+        resolved_record_id = record_id or self._next_record_id()
+        resolved_time_added = time_added or _utc_timestamp()
+        resolved_original_path = None if original_path is None else str(Path(original_path))
+
+        record = CatalogRecord(
+            id=resolved_record_id,
+            catalog=self.spec.catalog_name,
+            time_added=resolved_time_added,
+            record_type=record_type,
+            locator=locator,
+            stored_abspath=str(locator.as_path()) if locator.as_path() is not None else None,
+            stored_relpath=locator.relative_path,
+            storage_mode=storage_mode,
+            original_path=resolved_original_path,
+            original_filename=original_filename,
+            suffixes=[] if suffixes is None else list(suffixes),
+            user_metadata={} if metadata is None else dict(metadata),
+            derived_metadata={} if derived_metadata is None else dict(derived_metadata),
+            naming_metadata={} if naming_metadata is None else dict(naming_metadata),
         )
         self.repository.insert(record)
         return record
@@ -171,11 +213,17 @@ class Catalog:
         return self.repository.get(record_id)
 
     def path(self, record_id: str) -> Path | None:
-        """Return the stored path for a record, if present."""
+        """Return the stored path for a path-backed record, if present."""
         record = self.get(record_id)
         if record is None:
             return None
-        return Path(record.stored_abspath)
+        return record.path()
+
+
+def _utc_timestamp() -> str:
+    """Return a stable UTC timestamp string for record creation."""
+    timestamp = datetime.now(tz=UTC).replace(microsecond=0).isoformat()
+    return timestamp.replace("+00:00", "Z")
 
 
 def _open_repository(root: Path, spec: CatalogSpec) -> CatalogRepository:

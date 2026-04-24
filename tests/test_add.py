@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from ogcat import Catalog, CatalogSpec
+from ogcat import ArtifactLocator, Catalog, CatalogSpec
 
 
 def test_add_file_uses_generic_default_storage_layout(tmp_path: Path) -> None:
@@ -16,6 +16,8 @@ def test_add_file_uses_generic_default_storage_layout(tmp_path: Path) -> None:
 
     expected = root / "files" / record.time_added[:4] / "example" / "example.nc"
     assert Path(record.stored_abspath) == expected
+    assert record.record_type == "managed_file"
+    assert record.locator == ArtifactLocator.path(expected, relative_path=record.stored_relpath)
     assert expected.exists()
     assert record.original_filename == "example.nc"
     assert record.suffixes == [".nc"]
@@ -170,3 +172,20 @@ def test_add_file_collision_suffixing_preserves_full_extension(tmp_path: Path) -
 
     assert Path(first_record.stored_abspath).name == "bundle.tar.gz"
     assert Path(second_record.stored_abspath).name == "bundle_2.tar.gz"
+
+
+def test_add_artifact_supports_non_path_locator_records(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="artifacts"))
+
+    record = catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/example.zarr"),
+        metadata={"species": "CO2"},
+    )
+
+    assert record.record_type == "external_reference"
+    assert record.locator.kind == "uri"
+    assert record.locator.value == "s3://bucket/example.zarr"
+    assert record.stored_abspath is None
+    assert catalog.path(record.id) is None
