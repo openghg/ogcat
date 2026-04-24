@@ -7,9 +7,14 @@ from typer.testing import CliRunner
 
 from ogcat import Catalog, CatalogSpec, MetadataFieldDescription
 from ogcat.cli import app
-from ogcat.models import ArtifactLocator
+from ogcat.models import ArtifactLocator, CatalogRecord
 
 runner = CliRunner()
+
+
+def _record_id(record: CatalogRecord) -> str:
+    assert record.id is not None
+    return record.id
 
 
 def _create_catalog(tmp_path: Path, *, with_fields: bool = True) -> Catalog:
@@ -59,7 +64,7 @@ def test_search_json_output(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert [item["id"] for item in payload] == [record.id]
+    assert [item["id"] for item in payload] == [_record_id(record)]
     assert payload[0]["user_metadata"]["species"] == "CO2"
 
 
@@ -67,11 +72,11 @@ def test_show_json_output(tmp_path: Path) -> None:
     catalog = _create_catalog(tmp_path)
     record = catalog.search()[0]
 
-    result = runner.invoke(app, ["show", record.id, "--catalog", str(catalog.root), "--json"])
+    result = runner.invoke(app, ["show", _record_id(record), "--catalog", str(catalog.root), "--json"])
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["id"] == record.id
+    assert payload["id"] == _record_id(record)
     assert payload["record_type"] == "managed_file"
     assert payload["locator"]["kind"] == "path"
     assert payload["user_metadata"]["title"] == "Anthropogenic test flux"

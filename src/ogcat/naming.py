@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import re
+from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
-
 
 _TEMPLATE_PATTERN = re.compile(r"\{([^{}]+)\}")
 _SLUG_SEPARATOR_PATTERN = re.compile(r"[\s_]+")
@@ -118,7 +118,7 @@ def build_naming_context(
     *,
     record_id: str,
     original_path: Path,
-    metadata: dict[str, object],
+    metadata: Mapping[str, object],
     date_added: str,
 ) -> dict[str, object]:
     """Build a simple naming context for template rendering."""
@@ -154,12 +154,19 @@ def _derive_year_month_or_original_stem(*, year: object, month: object, original
     """Return a compact year-month key when available, otherwise the original stem."""
     try:
         if year is not None and month is not None:
-            return f"{int(year):04d}{int(month):02d}"
+            return f"{_coerce_int(year):04d}{_coerce_int(month):02d}"
         if year is not None:
-            return f"{int(year):04d}"
+            return f"{_coerce_int(year):04d}"
     except (TypeError, ValueError):
         return original_stem
     return original_stem
+
+
+def _coerce_int(value: object) -> int:
+    """Coerce template metadata values that are intended to be integer-like."""
+    if isinstance(value, int | float | str | bytes | bytearray):
+        return int(value)
+    raise TypeError(f"Expected an integer-like value, got {type(value).__name__}")
 
 
 def render_storage_location(

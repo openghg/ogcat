@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
-import json
 from typing import Literal
 
 from ogcat.models import MetadataFieldDescription
@@ -41,11 +41,11 @@ class CatalogSpec:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, object]) -> "CatalogSpec":
+    def from_dict(cls, data: dict[str, object]) -> CatalogSpec:
         """Build a spec from a dictionary."""
         metadata_fields = [
             _coerce_metadata_field_description(item)
-            for item in data.get("metadata_fields", [])
+            for item in _coerce_object_list(data.get("metadata_fields", []))
         ]
         return cls(
             catalog_name=str(data["catalog_name"]),
@@ -57,7 +57,9 @@ class CatalogSpec:
                 data.get("filename_template", "{title_slug|original_stem}{original_suffix}")
             ),
             default_operation=data.get("default_operation", "copy"),  # type: ignore[arg-type]
-            field_resolution_order=[str(item) for item in data.get("field_resolution_order", [])]
+            field_resolution_order=[
+                str(item) for item in _coerce_object_list(data.get("field_resolution_order", []))
+            ]
             or ["top_level", "user_metadata", "derived_metadata"],
             metadata_fields=metadata_fields,
         )
@@ -67,7 +69,7 @@ class CatalogSpec:
         path.write_text(json.dumps(self.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     @classmethod
-    def read(cls, path: Path) -> "CatalogSpec":
+    def read(cls, path: Path) -> CatalogSpec:
         """Read a spec JSON file from disk."""
         data = json.loads(path.read_text(encoding="utf-8"))
         return cls.from_dict(data)
@@ -80,3 +82,10 @@ def _coerce_metadata_field_description(value: object) -> MetadataFieldDescriptio
     if not isinstance(value, dict):
         raise TypeError("metadata_fields entries must be dictionaries")
     return MetadataFieldDescription.from_dict(value)  # type: ignore[arg-type]
+
+
+def _coerce_object_list(value: object) -> list[object]:
+    """Coerce a JSON-like list value to a plain object list."""
+    if not isinstance(value, list):
+        return []
+    return value

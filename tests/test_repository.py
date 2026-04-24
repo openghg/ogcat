@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from ogcat.models import ArtifactLocator, CatalogRecord
@@ -12,7 +13,6 @@ from ogcat.tinydb_repository import TinyDbCatalogRepository
 def test_repository_insert_get_update_and_all(tmp_path) -> None:
     repository = TinyDbCatalogRepository(tmp_path / "db.json")
     record = CatalogRecord(
-        id="1",
         catalog="fluxes",
         time_added="2026-04-23T12:00:00Z",
         locator=ArtifactLocator.path(
@@ -30,14 +30,16 @@ def test_repository_insert_get_update_and_all(tmp_path) -> None:
         naming_metadata={"resolved_filename": "example.nc"},
     )
 
-    repository.insert(record)
+    persisted = repository.insert(record)
+    expected = replace(record, id="1")
 
-    stored = repository.get(record.id)
-    assert stored == record
-    assert repository.all() == [record]
+    assert persisted == expected
+    stored = repository.get("1")
+    assert stored == expected
+    assert repository.all() == [expected]
 
     updated = CatalogRecord(
-        id=record.id,
+        id=persisted.id,
         catalog=record.catalog,
         time_added=record.time_added,
         record_type=record.record_type,
@@ -54,13 +56,12 @@ def test_repository_insert_get_update_and_all(tmp_path) -> None:
     )
     repository.update(updated)
 
-    assert repository.get(record.id) == updated
+    assert repository.get("1") == updated
 
 
 def test_record_round_trips_with_non_path_locator(tmp_path: Path) -> None:
     repository = TinyDbCatalogRepository(tmp_path / "db.json")
     record = CatalogRecord(
-        id="1",
         catalog="fluxes",
         time_added="2026-04-23T12:00:00Z",
         record_type="external_reference",
@@ -68,10 +69,12 @@ def test_record_round_trips_with_non_path_locator(tmp_path: Path) -> None:
         user_metadata={"species": "CO2"},
     )
 
-    repository.insert(record)
+    persisted = repository.insert(record)
+    expected = replace(record, id="1")
 
-    stored = repository.get(record.id)
-    assert stored == record
+    assert persisted == expected
+    stored = repository.get("1")
+    assert stored == expected
     assert stored is not None
     assert stored.path() is None
 
@@ -126,7 +129,6 @@ def test_repository_insert_many(tmp_path: Path) -> None:
     repository = TinyDbCatalogRepository(tmp_path / "db.json")
     records = [
         CatalogRecord(
-            id=str(index + 1),
             catalog="fluxes",
             time_added="2026-04-23T12:00:00Z",
             record_type="external_reference",
@@ -137,25 +139,27 @@ def test_repository_insert_many(tmp_path: Path) -> None:
         for index in range(3)
     ]
 
-    repository.insert_many(records)
+    persisted = repository.insert_many(records)
+    expected = [replace(record, id=str(index + 1)) for index, record in enumerate(records)]
 
-    assert repository.all() == records
+    assert persisted == expected
+    assert repository.all() == expected
 
 
-def test_repository_allocate_record_ids(tmp_path: Path) -> None:
+def test_repository_delete(tmp_path: Path) -> None:
     repository = TinyDbCatalogRepository(tmp_path / "db.json")
-    assert repository.allocate_record_ids(2) == ["1", "2"]
-
-    repository.insert(
+    persisted = repository.insert(
         CatalogRecord(
-            id="1",
             catalog="fluxes",
             time_added="2026-04-23T12:00:00Z",
             locator=ArtifactLocator.path("/tmp/catalog/files/example.nc"),
         )
     )
 
-    assert repository.allocate_record_ids(2) == ["2", "3"]
+    assert persisted.id == "1"
+    repository.delete("1")
+
+    assert repository.all() == []
 
 
 def test_record_without_locator_does_not_resolve_to_current_directory() -> None:

@@ -1,5 +1,5 @@
-from pathlib import Path
 import json
+from pathlib import Path
 
 from ogcat import Catalog, CatalogSpec, MetadataFieldDescription
 

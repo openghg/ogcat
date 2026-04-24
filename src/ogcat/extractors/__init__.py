@@ -12,13 +12,18 @@ from ogcat.models import JsonValue, MetadataDict
 class DerivedMetadataExtractor(Protocol):
     """Simple interface for optional file metadata extractors."""
 
-    name: str
+    @property
+    def name(self) -> str:
+        """Extractor name used as the derived metadata key."""
+        ...
 
     def can_extract(self, path: Path) -> bool:
         """Return whether this extractor should run for the given file."""
+        ...
 
     def extract(self, path: Path) -> JsonValue | None:
         """Return extracted metadata for this file, or ``None`` if unavailable."""
+        ...
 
 
 @dataclass(frozen=True, slots=True)

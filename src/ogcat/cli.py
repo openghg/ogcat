@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any, NoReturn
 
 import typer
 from rich.console import Console
@@ -32,7 +32,7 @@ def _resolve_catalog_path(catalog: Path | None) -> Path:
     raise typer.BadParameter("Provide --catalog or set OGCAT_CATALOG.")
 
 
-def _fail(message: str, *, code: int = 1) -> None:
+def _fail(message: str, *, code: int = 1) -> NoReturn:
     """Print a consistent error message and exit."""
     error_console.print(f"Error: {message}")
     raise typer.Exit(code=code)
@@ -107,8 +107,8 @@ def _parse_key_value_options(items: list[str]) -> dict[str, str]:
 
 @app.command()
 def init(
-    root: Path = typer.Argument(..., help="Catalog root directory."),
-    name: str = typer.Option(..., "--name", help="Catalog name."),
+    root: Annotated[Path, typer.Argument(help="Catalog root directory.")],
+    name: Annotated[str, typer.Option("--name", help="Catalog name.")],
 ) -> None:
     """Create a new catalog."""
     spec = CatalogSpec(catalog_name=name)
@@ -122,48 +122,70 @@ def init(
 )
 def add_command(
     ctx: typer.Context,
-    path: Path = typer.Argument(..., help="Source file to add."),
-    catalog: Path | None = typer.Option(None, "--catalog", help="Catalog root."),
-    meta: list[str] = typer.Option(
-        [],
-        "--meta",
-        help="Metadata item KEY=VALUE. Repeatable. Additional KEY=VALUE items may follow a single --meta.",
-    ),
-    operation: str | None = typer.Option(None, "--operation", help="copy or move."),
+    path: Annotated[Path, typer.Argument(help="Source file to add.")],
+    catalog: Annotated[Path | None, typer.Option("--catalog", help="Catalog root.")] = None,
+    meta: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--meta",
+            help=(
+                "Metadata item KEY=VALUE. Repeatable. Additional KEY=VALUE items may follow a single --meta."
+            ),
+        ),
+    ] = None,
+    operation: Annotated[str | None, typer.Option("--operation", help="copy or move.")] = None,
 ) -> None:
     """Add a file to the catalog."""
     extra_meta_items = list(ctx.args)
-    if extra_meta_items and not meta:
-        raise typer.BadParameter(
-            "Unexpected extra arguments. Use --meta KEY=VALUE to supply metadata."
-        )
+    meta_items = [] if meta is None else meta
+    if extra_meta_items and not meta_items:
+        raise typer.BadParameter("Unexpected extra arguments. Use --meta KEY=VALUE to supply metadata.")
 
     active_catalog = _open_catalog_or_fail(catalog)
-    metadata = _parse_meta_items([*meta, *extra_meta_items])
+    metadata = _parse_meta_items([*meta_items, *extra_meta_items])
     record = active_catalog.add_file(path, metadata=metadata, operation=operation)
     console.print(f"Added {record.id}: {record.stored_abspath}")
 
 
 @app.command()
 def search(
-    catalog: Path | None = typer.Option(None, "--catalog", help="Catalog root."),
-    where: list[str] = typer.Option([], "--where", help="Equality filter KEY=VALUE. Repeatable."),
-    contains: list[str] = typer.Option(
-        [], "--contains", help="Substring filter KEY=VALUE. Repeatable."
-    ),
-    regex: list[str] = typer.Option([], "--regex", help="Regex filter KEY=VALUE. Repeatable."),
-    ignore_case: bool = typer.Option(False, "--ignore-case", help="Case-insensitive matching."),
-    json_mode: bool = typer.Option(False, "--json", help="Print matching records as JSON."),
-    ids_only: bool = typer.Option(False, "--ids", help="Print only matching record ids."),
-    paths_only: bool = typer.Option(False, "--paths", help="Print only matching stored paths."),
+    catalog: Annotated[Path | None, typer.Option("--catalog", help="Catalog root.")] = None,
+    where: Annotated[
+        list[str] | None,
+        typer.Option("--where", help="Equality filter KEY=VALUE. Repeatable."),
+    ] = None,
+    contains: Annotated[
+        list[str] | None,
+        typer.Option("--contains", help="Substring filter KEY=VALUE. Repeatable."),
+    ] = None,
+    regex: Annotated[
+        list[str] | None,
+        typer.Option("--regex", help="Regex filter KEY=VALUE. Repeatable."),
+    ] = None,
+    ignore_case: Annotated[
+        bool,
+        typer.Option("--ignore-case", help="Case-insensitive matching."),
+    ] = False,
+    json_mode: Annotated[
+        bool,
+        typer.Option("--json", help="Print matching records as JSON."),
+    ] = False,
+    ids_only: Annotated[
+        bool,
+        typer.Option("--ids", help="Print only matching record ids."),
+    ] = False,
+    paths_only: Annotated[
+        bool,
+        typer.Option("--paths", help="Print only matching stored paths."),
+    ] = False,
 ) -> None:
     """Search records in a catalog."""
     _validate_output_flags(json_mode=json_mode, ids_only=ids_only, paths_only=paths_only)
     active_catalog = _open_catalog_or_fail(catalog)
     results = active_catalog.search(
-        where=_parse_meta_items(where),
-        contains=_parse_key_value_options(contains),
-        regex=_parse_key_value_options(regex),
+        where=_parse_meta_items([] if where is None else where),
+        contains=_parse_key_value_options([] if contains is None else contains),
+        regex=_parse_key_value_options([] if regex is None else regex),
         ignore_case=ignore_case,
     )
 
@@ -210,9 +232,12 @@ def search(
 
 @app.command()
 def show(
-    record_id: str = typer.Argument(..., help="Record id."),
-    catalog: Path | None = typer.Option(None, "--catalog", help="Catalog root."),
-    json_mode: bool = typer.Option(False, "--json", help="Print the record as JSON."),
+    record_id: Annotated[str, typer.Argument(help="Record id.")],
+    catalog: Annotated[Path | None, typer.Option("--catalog", help="Catalog root.")] = None,
+    json_mode: Annotated[
+        bool,
+        typer.Option("--json", help="Print the record as JSON."),
+    ] = False,
 ) -> None:
     """Show a single record."""
     active_catalog = _open_catalog_or_fail(catalog)
@@ -246,8 +271,8 @@ def show(
 
 @app.command()
 def path(
-    record_id: str = typer.Argument(..., help="Record id."),
-    catalog: Path | None = typer.Option(None, "--catalog", help="Catalog root."),
+    record_id: Annotated[str, typer.Argument(help="Record id.")],
+    catalog: Annotated[Path | None, typer.Option("--catalog", help="Catalog root.")] = None,
 ) -> None:
     """Print the stored path for a record."""
     active_catalog = _open_catalog_or_fail(catalog)
@@ -262,8 +287,11 @@ def path(
 
 @app.command()
 def info(
-    catalog: Path | None = typer.Option(None, "--catalog", help="Catalog root."),
-    json_mode: bool = typer.Option(False, "--json", help="Print catalog info as JSON."),
+    catalog: Annotated[Path | None, typer.Option("--catalog", help="Catalog root.")] = None,
+    json_mode: Annotated[
+        bool,
+        typer.Option("--json", help="Print catalog info as JSON."),
+    ] = False,
 ) -> None:
     """Show a curated catalog overview."""
     active_catalog = _open_catalog_or_fail(catalog)
@@ -284,9 +312,12 @@ def info(
     table.add_row("default operation", str(description["default_operation"]))
     table.add_row("directory template", str(description["directory_template"]))
     table.add_row("filename template", str(description["filename_template"]))
+    field_resolution_order = description["field_resolution_order"]
+    if not isinstance(field_resolution_order, list):
+        field_resolution_order = []
     table.add_row(
         "field resolution order",
-        " -> ".join(str(item) for item in description["field_resolution_order"]),
+        " -> ".join(str(item) for item in field_resolution_order),
     )
     table.add_row("record count", str(description["record_count"]))
     table.add_row("metadata fields present", "yes" if description["has_metadata_fields"] else "no")
@@ -295,8 +326,11 @@ def info(
 
 @app.command()
 def fields(
-    catalog: Path | None = typer.Option(None, "--catalog", help="Catalog root."),
-    json_mode: bool = typer.Option(False, "--json", help="Print metadata field descriptions as JSON."),
+    catalog: Annotated[Path | None, typer.Option("--catalog", help="Catalog root.")] = None,
+    json_mode: Annotated[
+        bool,
+        typer.Option("--json", help="Print metadata field descriptions as JSON."),
+    ] = False,
 ) -> None:
     """List important metadata fields from the catalog spec."""
     active_catalog = _open_catalog_or_fail(catalog)

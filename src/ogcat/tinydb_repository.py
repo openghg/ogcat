@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 from tinydb import Query, TinyDB
 
-from ogcat.models import CatalogRecord
+from ogcat.models import CatalogRecord, JsonValue
+from ogcat.search import matches_record
 
 
 class TinyDbCatalogRepository:
@@ -17,35 +21,33 @@ class TinyDbCatalogRepository:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._db = TinyDB(db_path)
 
-    def allocate_record_ids(self, count: int = 1) -> list[str]:
-        """Allocate one or more new ids aligned with TinyDB doc_ids."""
-        if count < 1:
-            return []
-        start = 1
-        for document in self._db.all():
-            start = max(start, document.doc_id + 1)
-        return [str(number) for number in range(start, start + count)]
+    def insert(self, record: CatalogRecord) -> CatalogRecord:
+        """Insert a new record and return it with its TinyDB doc_id."""
+        payload = record.to_dict()
+        payload.pop("id", None)
+        doc_id = self._db.insert(payload)
+        persisted = replace(record, id=str(doc_id))
+        self._db.update(persisted.to_dict(), doc_ids=[doc_id])
+        return persisted
 
-    def insert(self, record: CatalogRecord) -> None:
-        """Insert a new record."""
-        doc_id = self._db.insert(record.to_dict())
-        expected_id = str(doc_id)
-        if record.id != expected_id:
-            raise ValueError(
-                f"Record id {record.id!r} does not match allocated TinyDB doc_id {expected_id!r}"
-            )
-
-    def insert_many(self, records: list[CatalogRecord]) -> None:
-        """Insert multiple records."""
+    def insert_many(self, records: list[CatalogRecord]) -> list[CatalogRecord]:
+        """Insert multiple records and return them with their TinyDB doc_ids."""
         if not records:
-            return
-        doc_ids = self._db.insert_multiple([record.to_dict() for record in records])
-        expected_ids = [str(doc_id) for doc_id in doc_ids]
-        actual_ids = [record.id for record in records]
-        if actual_ids != expected_ids:
-            raise ValueError(
-                f"Record ids {actual_ids!r} do not match allocated TinyDB doc_ids {expected_ids!r}"
-            )
+            return []
+        persisted_records: list[CatalogRecord] = []
+        inserted_doc_ids: list[int] = []
+        try:
+            for record in records:
+                persisted = self.insert(record)
+                if persisted.id is None:
+                    raise RuntimeError("Repository inserted a record without assigning an id.")
+                persisted_records.append(persisted)
+                inserted_doc_ids.append(int(persisted.id))
+        except Exception:
+            if inserted_doc_ids:
+                self._db.remove(doc_ids=inserted_doc_ids)
+            raise
+        return persisted_records
 
     def get(self, record_id: str) -> CatalogRecord | None:
         """Get a record by id."""
@@ -56,10 +58,12 @@ class TinyDbCatalogRepository:
             result = self._db.get(query.id == record_id)
         if result is None:
             return None
-        return CatalogRecord.from_dict(result)
+        return CatalogRecord.from_dict(cast(dict[str, JsonValue], result))
 
     def update(self, record: CatalogRecord) -> None:
         """Update an existing record."""
+        if record.id is None:
+            raise ValueError("Cannot update a record without an id.")
         if record.id.isdigit():
             updated_doc_ids = self._db.update(record.to_dict(), doc_ids=[int(record.id)])
         else:
@@ -67,6 +71,39 @@ class TinyDbCatalogRepository:
             updated_doc_ids = self._db.update(record.to_dict(), query.id == record.id)
         if not updated_doc_ids:
             raise KeyError(f"Record not found: {record.id}")
+
+    def delete(self, record_id: str) -> None:
+        """Delete an existing record."""
+        if record_id.isdigit():
+            removed_doc_ids = self._db.remove(doc_ids=[int(record_id)])
+        else:
+            query = Query()
+            removed_doc_ids = self._db.remove(query.id == record_id)
+        if not removed_doc_ids:
+            raise KeyError(f"Record not found: {record_id}")
+
+    def search(
+        self,
+        *,
+        where: dict[str, object] | None = None,
+        contains: dict[str, str] | None = None,
+        regex: dict[str, str] | None = None,
+        ignore_case: bool = False,
+        resolution_order: Sequence[str] | None = None,
+    ) -> list[CatalogRecord]:
+        """Search records."""
+        return [
+            record
+            for record in self.all()
+            if matches_record(
+                record,
+                where=where,
+                contains=contains,
+                regex=regex,
+                ignore_case=ignore_case,
+                resolution_order=resolution_order,
+            )
+        ]
 
     def all(self) -> list[CatalogRecord]:
         """Return all records."""

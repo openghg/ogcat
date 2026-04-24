@@ -1,6 +1,19 @@
 from pathlib import Path
 
+import pytest
+
 from ogcat import ArtifactLocator, Catalog, CatalogSpec
+from ogcat.models import CatalogRecord
+
+
+def _record_id(record: CatalogRecord) -> str:
+    assert record.id is not None
+    return record.id
+
+
+def _stored_path(record: CatalogRecord) -> Path:
+    assert record.stored_abspath is not None
+    return Path(record.stored_abspath)
 
 
 def test_add_file_uses_generic_default_storage_layout(tmp_path: Path) -> None:
@@ -15,7 +28,7 @@ def test_add_file_uses_generic_default_storage_layout(tmp_path: Path) -> None:
     record = catalog.add_file(source)
 
     expected = root / "files" / record.time_added[:4] / "example" / "example.nc"
-    assert Path(record.stored_abspath) == expected
+    assert _stored_path(record) == expected
     assert record.record_type == "managed_file"
     assert record.locator == ArtifactLocator.path(expected, relative_path=record.stored_relpath)
     assert expected.exists()
@@ -69,7 +82,7 @@ def test_add_file_supports_flux_style_templates_when_requested(tmp_path: Path) -
         / "anthropogenic"
         / "CTE-HR_v4.2_CO2_EUROPE_anthropogenic_202401.nc"
     )
-    assert Path(record.stored_abspath) == expected
+    assert _stored_path(record) == expected
     assert expected.exists()
     assert record.original_filename == "anthropogenic.202401.nc"
     assert record.storage_mode == "copy"
@@ -87,7 +100,7 @@ def test_add_file_preserves_dotted_stems_and_simple_suffixes(tmp_path: Path) -> 
     record = catalog.add_file(source)
 
     expected = root / "files" / record.time_added[:4] / "anthropogenic.202401" / "anthropogenic.202401.nc"
-    assert Path(record.stored_abspath) == expected
+    assert _stored_path(record) == expected
     assert record.original_filename == "anthropogenic.202401.nc"
     assert record.suffixes == [".202401", ".nc"]
 
@@ -104,7 +117,7 @@ def test_add_file_preserves_compressed_suffixes(tmp_path: Path) -> None:
     record = catalog.add_file(source)
 
     expected = root / "files" / record.time_added[:4] / "archive" / "archive.tar.gz"
-    assert Path(record.stored_abspath) == expected
+    assert _stored_path(record) == expected
     assert record.original_filename == "archive.tar.gz"
     assert record.suffixes == [".tar", ".gz"]
 
@@ -145,8 +158,8 @@ def test_add_file_appends_numeric_suffix_on_collision(tmp_path: Path) -> None:
     first_record = catalog.add_file(first, metadata=metadata)
     second_record = catalog.add_file(second, metadata=metadata)
 
-    assert Path(first_record.stored_abspath).name == "CTE-HR_v4.2_CO2_EUROPE_anthropogenic_202401.nc"
-    assert Path(second_record.stored_abspath).name == "CTE-HR_v4.2_CO2_EUROPE_anthropogenic_202401_2.nc"
+    assert _stored_path(first_record).name == "CTE-HR_v4.2_CO2_EUROPE_anthropogenic_202401.nc"
+    assert _stored_path(second_record).name == "CTE-HR_v4.2_CO2_EUROPE_anthropogenic_202401_2.nc"
 
 
 def test_add_file_collision_suffixing_preserves_full_extension(tmp_path: Path) -> None:
@@ -170,8 +183,19 @@ def test_add_file_collision_suffixing_preserves_full_extension(tmp_path: Path) -
     first_record = catalog.add_file(first)
     second_record = catalog.add_file(second)
 
-    assert Path(first_record.stored_abspath).name == "bundle.tar.gz"
-    assert Path(second_record.stored_abspath).name == "bundle_2.tar.gz"
+    assert _stored_path(first_record).name == "bundle.tar.gz"
+    assert _stored_path(second_record).name == "bundle_2.tar.gz"
+
+
+def test_add_file_rolls_back_record_when_copy_fails(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="files"))
+
+    with pytest.raises(FileNotFoundError):
+        catalog.add_file(tmp_path / "source" / "missing.nc")
+
+    assert catalog.describe()["record_count"] == 0
+    assert catalog.repository.all() == []
 
 
 def test_add_artifact_supports_non_path_locator_records(tmp_path: Path) -> None:
@@ -188,7 +212,7 @@ def test_add_artifact_supports_non_path_locator_records(tmp_path: Path) -> None:
     assert record.locator.kind == "uri"
     assert record.locator.value == "s3://bucket/example.zarr"
     assert record.stored_abspath is None
-    assert catalog.path(record.id) is None
+    assert catalog.path(_record_id(record)) is None
 
 
 def test_add_artifacts_supports_batch_artifact_creation(tmp_path: Path) -> None:
@@ -314,7 +338,9 @@ def test_add_artifacts_assigns_sequential_record_ids_when_missing(tmp_path: Path
     assert first.id == "1"
     assert [record.id for record in records] == ["2", "3"]
 
-def test_add_artifacts_rejects_record_id_in_batch_input(tmp_path: Path) -> None:
+
+@pytest.mark.parametrize("id_key", ["record_id", "id"])
+def test_add_artifacts_rejects_id_fields_in_batch_input(tmp_path: Path, id_key: str) -> None:
     root = tmp_path / "catalog"
     catalog = Catalog.create(root, CatalogSpec(catalog_name="artifacts"))
 
@@ -322,14 +348,14 @@ def test_add_artifacts_rejects_record_id_in_batch_input(tmp_path: Path) -> None:
         catalog.add_artifacts(
             [
                 {
-                    "record_id": "10",
+                    id_key: "10",
                     "record_type": "external_reference",
                     "locator": ArtifactLocator.path("/tmp/data/first.nc"),
                 },
             ]
         )
     except ValueError as exc:
-        assert "must not supply record_id" in str(exc)
+        assert f"must not supply {id_key}" in str(exc)
         assert "artifact batch item 0" in str(exc)
     else:  # pragma: no cover
-        raise AssertionError("Expected record_id rejection for batch input")
+        raise AssertionError("Expected id rejection for batch input")
