@@ -151,3 +151,31 @@ def test_record_without_locator_does_not_resolve_to_current_directory() -> None:
 
     assert record.stored_abspath is None
     assert record.path() is None
+
+
+def test_empty_path_locator_does_not_resolve_to_current_directory() -> None:
+    locator = ArtifactLocator(kind="path", value="  ")
+
+    assert locator.as_path() is None
+
+
+def test_from_dict_defaults_null_record_type_to_managed_file() -> None:
+    record = CatalogRecord.from_dict(
+        {
+            "id": "rec_000100",
+            "catalog": "fluxes",
+            "record_type": None,
+            "stored_abspath": "/tmp/catalog/files/example.nc",
+            "stored_relpath": "files/example.nc",
+            "storage_mode": "copy",
+            "time_added": "2026-04-23T12:00:00Z",
+            "original_path": "/tmp/source/example.nc",
+            "original_filename": "example.nc",
+            "suffixes": [".nc"],
+            "user_metadata": {},
+            "derived_metadata": {},
+            "naming_metadata": {},
+        }
+    )
+
+    assert record.record_type == "managed_file"

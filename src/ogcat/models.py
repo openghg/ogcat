@@ -69,6 +69,8 @@ class ArtifactLocator:
         """Return the locator as a path when the locator is path-backed."""
         if self.kind != "path":
             return None
+        if not self.value.strip():
+            return None
         return Path(self.value)
 
 
@@ -136,11 +138,12 @@ class CatalogRecord:
             stored_abspath=data.get("stored_abspath"),
             stored_relpath=data.get("stored_relpath"),
         )
+        record_type = data.get("record_type")
         return cls(
             id=str(data["id"]),
             catalog=str(data["catalog"]),
             time_added=str(data["time_added"]),
-            record_type=str(data.get("record_type", "managed_file")),
+            record_type="managed_file" if record_type is None else str(record_type),
             locator=locator,
             stored_abspath=(None if data.get("stored_abspath") is None else str(data["stored_abspath"])),
             stored_relpath=(None if data.get("stored_relpath") is None else str(data["stored_relpath"])),

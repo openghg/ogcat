@@ -271,6 +271,7 @@ class Catalog:
             resolved_original_path = str(original_path)
         else:
             resolved_original_path = original_path
+        locator_path = locator.as_path()
 
         return CatalogRecord(
             id=resolved_record_id,
@@ -278,7 +279,7 @@ class Catalog:
             time_added=resolved_time_added,
             record_type=record_type,
             locator=locator,
-            stored_abspath=str(locator.as_path()) if locator.as_path() is not None else None,
+            stored_abspath=str(locator_path) if locator_path is not None else None,
             stored_relpath=locator.relative_path,
             storage_mode=storage_mode,
             original_path=resolved_original_path,

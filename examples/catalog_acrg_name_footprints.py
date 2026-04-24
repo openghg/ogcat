@@ -53,7 +53,6 @@ from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn, T
 
 from ogcat import ArtifactLocator, Catalog, CatalogSpec, MetadataFieldDescription  # noqa: E402
 
-KNOWN_LPDM_MODELS = {"NAME", "FLEXPART"}
 FOOTPRINT_FILE_RE = re.compile(
     r"^(?P<site>[A-Za-z0-9]+)[-_](?P<inlet>\d{1,4}m)agl"
     r"_(?:(?P<model>NAME|FLEXPART)_)?"
