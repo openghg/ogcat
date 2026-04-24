@@ -1,7 +1,7 @@
 """TinyDB-backed repository implementation.
 
-This module includes a very small JSON-file fallback so the skeleton remains runnable
-in environments where TinyDB is not yet installed. Codex can simplify this later if desired.
+This module also includes a small JSON-file fallback so the package remains usable
+in environments where TinyDB is not installed.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ except ImportError:  # pragma: no cover
 
 
 class TinyDbCatalogRepository:
-    """TinyDB-backed catalog repository with a JSON fallback for the skeleton."""
+    """TinyDB-backed catalog repository with a small JSON fallback."""
 
     def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
