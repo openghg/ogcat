@@ -89,6 +89,26 @@ def test_add_file_supports_flux_style_templates_when_requested(tmp_path: Path) -
     assert record.storage_mode == "copy"
 
 
+def test_add_file_does_not_truncate_fractional_year_metadata_for_naming(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "floatyear.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(
+        root,
+        CatalogSpec(
+            catalog_name="fluxes",
+            filename_template="{year_month_or_original_stem}{original_suffix}",
+        ),
+    )
+
+    record = catalog.add_file(source, metadata={"year": 2024.9, "month": 1})
+
+    assert _stored_path(record).name == "floatyear.nc"
+
+
 def test_add_file_preserves_dotted_stems_and_simple_suffixes(tmp_path: Path) -> None:
     source_dir = tmp_path / "source"
     source_dir.mkdir()
@@ -222,6 +242,33 @@ def test_add_file_removes_partial_target_when_copy_fails(
 
     assert catalog.describe()["record_count"] == 0
     assert list((root / "files").rglob("*.nc")) == []
+
+
+def test_add_file_does_not_delete_moved_file_when_record_update_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "moved.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="files"))
+
+    def fail_update(record: CatalogRecord) -> None:
+        raise OSError("simulated update failure")
+
+    monkeypatch.setattr(catalog.repository, "update", fail_update)
+
+    with pytest.raises(OSError, match="simulated update failure"):
+        catalog.add_file(source, operation="move")
+
+    moved_files = list((root / "files").rglob("moved.nc"))
+    assert len(moved_files) == 1
+    assert moved_files[0].read_text(encoding="utf-8") == "dummy"
+    assert not source.exists()
+    assert catalog.describe()["record_count"] == 0
 
 
 def test_add_artifact_supports_non_path_locator_records(tmp_path: Path) -> None:

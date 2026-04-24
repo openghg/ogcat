@@ -60,6 +60,16 @@ def test_catalog_spec_round_trips_via_catalog_json(tmp_path: Path) -> None:
     assert reloaded == spec
 
 
+def test_catalog_spec_rejects_malformed_list_fields() -> None:
+    for field_name in ["metadata_fields", "field_resolution_order"]:
+        try:
+            CatalogSpec.from_dict({"catalog_name": "fluxes", field_name: "not-a-list"})
+        except TypeError as exc:
+            assert f"{field_name} must be a list" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError(f"Expected malformed {field_name} to be rejected")
+
+
 def test_catalog_describe_and_list_metadata_fields_return_serialisable_values(tmp_path: Path) -> None:
     root = tmp_path / "fluxes"
     spec = CatalogSpec(

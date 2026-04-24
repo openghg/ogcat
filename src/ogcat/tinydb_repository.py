@@ -26,32 +26,19 @@ class TinyDbCatalogRepository:
         payload = record.to_dict()
         payload.pop("id", None)
         doc_id = self._db.insert(payload)
-        persisted = replace(record, id=str(doc_id))
-        try:
-            self._db.update(persisted.to_dict(), doc_ids=[doc_id])
-        except Exception:
-            self._db.remove(doc_ids=[doc_id])
-            raise
-        return persisted
+        return replace(record, id=str(doc_id))
 
     def insert_many(self, records: list[CatalogRecord]) -> list[CatalogRecord]:
         """Insert multiple records and return them with their TinyDB doc_ids."""
         if not records:
             return []
-        persisted_records: list[CatalogRecord] = []
-        inserted_doc_ids: list[int] = []
-        try:
-            for record in records:
-                persisted = self.insert(record)
-                if persisted.id is None:
-                    raise RuntimeError("Repository inserted a record without assigning an id.")
-                persisted_records.append(persisted)
-                inserted_doc_ids.append(int(persisted.id))
-        except Exception:
-            if inserted_doc_ids:
-                self._db.remove(doc_ids=inserted_doc_ids)
-            raise
-        return persisted_records
+        payloads = []
+        for record in records:
+            payload = record.to_dict()
+            payload.pop("id", None)
+            payloads.append(payload)
+        doc_ids = self._db.insert_multiple(payloads)
+        return [replace(record, id=str(doc_id)) for record, doc_id in zip(records, doc_ids, strict=True)]
 
     def get(self, record_id: str) -> CatalogRecord | None:
         """Get a record by id."""

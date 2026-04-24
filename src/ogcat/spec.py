@@ -45,7 +45,7 @@ class CatalogSpec:
         """Build a spec from a dictionary."""
         metadata_fields = [
             _coerce_metadata_field_description(item)
-            for item in _coerce_object_list(data.get("metadata_fields", []))
+            for item in _coerce_object_list(data.get("metadata_fields"), field_name="metadata_fields")
         ]
         return cls(
             catalog_name=str(data["catalog_name"]),
@@ -58,7 +58,11 @@ class CatalogSpec:
             ),
             default_operation=data.get("default_operation", "copy"),  # type: ignore[arg-type]
             field_resolution_order=[
-                str(item) for item in _coerce_object_list(data.get("field_resolution_order", []))
+                str(item)
+                for item in _coerce_object_list(
+                    data.get("field_resolution_order"),
+                    field_name="field_resolution_order",
+                )
             ]
             or ["top_level", "user_metadata", "derived_metadata"],
             metadata_fields=metadata_fields,
@@ -84,8 +88,10 @@ def _coerce_metadata_field_description(value: object) -> MetadataFieldDescriptio
     return MetadataFieldDescription.from_dict(value)  # type: ignore[arg-type]
 
 
-def _coerce_object_list(value: object) -> list[object]:
+def _coerce_object_list(value: object, *, field_name: str) -> list[object]:
     """Coerce a JSON-like list value to a plain object list."""
-    if not isinstance(value, list):
+    if value is None:
         return []
+    if not isinstance(value, list):
+        raise TypeError(f"{field_name} must be a list")
     return value

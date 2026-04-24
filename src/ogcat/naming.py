@@ -164,7 +164,15 @@ def _derive_year_month_or_original_stem(*, year: object, month: object, original
 
 def _coerce_int(value: object) -> int:
     """Coerce template metadata values that are intended to be integer-like."""
-    if isinstance(value, int | float | str | bytes | bytearray):
+    if isinstance(value, bool):
+        raise TypeError("Boolean values are not integer-like metadata values")
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, float):
+        if value.is_integer():
+            return int(value)
+        raise ValueError(f"Expected an integer-like float, got {value!r}")
+    if isinstance(value, str | bytes | bytearray):
         return int(value)
     raise TypeError(f"Expected an integer-like value, got {type(value).__name__}")
 

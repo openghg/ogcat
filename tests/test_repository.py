@@ -5,9 +5,6 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
-
-import pytest
 
 from ogcat.models import ArtifactLocator, CatalogRecord
 from ogcat.tinydb_repository import TinyDbCatalogRepository
@@ -180,31 +177,6 @@ def test_repository_delete(tmp_path: Path) -> None:
 
     assert persisted.id == "1"
     repository.delete("1")
-
-    assert repository.all() == []
-
-
-def test_repository_removes_inserted_document_when_id_update_fails(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    repository = TinyDbCatalogRepository(tmp_path / "db.json")
-    original_update = repository._db.update
-
-    def fail_update(*args: Any, **kwargs: Any) -> list[int]:
-        if kwargs.get("doc_ids") == [1]:
-            raise OSError("simulated update failure")
-        return original_update(*args, **kwargs)
-
-    monkeypatch.setattr(repository._db, "update", fail_update)
-
-    with pytest.raises(OSError, match="simulated update failure"):
-        repository.insert(
-            CatalogRecord(
-                catalog="fluxes",
-                time_added="2026-04-23T12:00:00Z",
-            )
-        )
 
     assert repository.all() == []
 
