@@ -15,7 +15,7 @@ from ogcat.catalog import Catalog
 from ogcat.spec import CatalogSpec
 
 app = typer.Typer(
-    help="Lightweight local file catalog.",
+    help="Lightweight artifact catalog with managed file ingest.",
     context_settings={"help_option_names": ["-h", "--help"]},
 )
 console = Console()
@@ -178,7 +178,9 @@ def search(
 
     if paths_only:
         for record in results:
-            typer.echo(record.stored_abspath)
+            resolved = record.path()
+            if resolved is not None:
+                typer.echo(str(resolved))
         return
 
     if not results:
@@ -193,12 +195,13 @@ def search(
     table.add_column("path")
 
     for record in results:
+        resolved_path = record.path()
         table.add_row(
             record.id,
             str(record.user_metadata.get("title", "")),
             str(record.user_metadata.get("product", "")),
             str(record.user_metadata.get("species", "")),
-            record.stored_abspath,
+            "" if resolved_path is None else str(resolved_path),
         )
 
     console.print(f"{len(results)} result(s)")
@@ -226,9 +229,11 @@ def show(
     table.add_column("value")
     table.add_row("id", record.id)
     table.add_row("catalog", record.catalog)
-    table.add_row("stored path", record.stored_abspath)
-    table.add_row("relative path", record.stored_relpath)
-    table.add_row("storage mode", record.storage_mode)
+    table.add_row("record type", record.record_type)
+    table.add_row("locator", json.dumps(record.locator.to_dict(), sort_keys=True))
+    table.add_row("stored path", str(record.stored_abspath or ""))
+    table.add_row("relative path", str(record.stored_relpath or ""))
+    table.add_row("storage mode", str(record.storage_mode or ""))
     table.add_row("time added", record.time_added)
     table.add_row("original path", str(record.original_path or ""))
     table.add_row("original filename", str(record.original_filename or ""))
@@ -246,9 +251,12 @@ def path(
 ) -> None:
     """Print the stored path for a record."""
     active_catalog = _open_catalog_or_fail(catalog)
-    resolved = active_catalog.path(record_id)
-    if resolved is None:
+    record = active_catalog.get(record_id)
+    if record is None:
         _fail(f"Record not found: {record_id}")
+    resolved = record.path()
+    if resolved is None:
+        _fail(f"Record is not path-backed: {record_id}")
     console.print(str(resolved))
 
 

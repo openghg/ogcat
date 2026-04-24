@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from ogcat import Catalog, CatalogSpec
+from ogcat import ArtifactLocator, Catalog, CatalogSpec
 
 
 def test_add_file_uses_generic_default_storage_layout(tmp_path: Path) -> None:
@@ -16,6 +16,8 @@ def test_add_file_uses_generic_default_storage_layout(tmp_path: Path) -> None:
 
     expected = root / "files" / record.time_added[:4] / "example" / "example.nc"
     assert Path(record.stored_abspath) == expected
+    assert record.record_type == "managed_file"
+    assert record.locator == ArtifactLocator.path(expected, relative_path=record.stored_relpath)
     assert expected.exists()
     assert record.original_filename == "example.nc"
     assert record.suffixes == [".nc"]
@@ -170,3 +172,164 @@ def test_add_file_collision_suffixing_preserves_full_extension(tmp_path: Path) -
 
     assert Path(first_record.stored_abspath).name == "bundle.tar.gz"
     assert Path(second_record.stored_abspath).name == "bundle_2.tar.gz"
+
+
+def test_add_artifact_supports_non_path_locator_records(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="artifacts"))
+
+    record = catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/example.zarr"),
+        metadata={"species": "CO2"},
+    )
+
+    assert record.record_type == "external_reference"
+    assert record.locator.kind == "uri"
+    assert record.locator.value == "s3://bucket/example.zarr"
+    assert record.stored_abspath is None
+    assert catalog.path(record.id) is None
+
+
+def test_add_artifacts_supports_batch_artifact_creation(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="artifacts"))
+
+    records = catalog.add_artifacts(
+        [
+            {
+                "record_type": "external_reference",
+                "locator": ArtifactLocator.path("/tmp/data/first.nc"),
+                "metadata": {"site": "AAA", "month": 1},
+                "original_filename": "first.nc",
+                "suffixes": [".nc"],
+            },
+            {
+                "record_type": "external_reference",
+                "locator": ArtifactLocator.path("/tmp/data/second.nc"),
+                "metadata": {"site": "BBB", "month": 2},
+                "original_filename": "second.nc",
+                "suffixes": [".nc"],
+            },
+        ]
+    )
+
+    assert [record.id for record in records] == ["1", "2"]
+    assert catalog.describe()["record_count"] == 2
+    assert catalog.get("1") is not None
+    assert catalog.get("2") is not None
+
+
+def test_add_artifacts_accepts_locator_dicts(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="artifacts"))
+
+    records = catalog.add_artifacts(
+        [
+            {
+                "record_type": "external_reference",
+                "locator": {
+                    "kind": "path",
+                    "value": "/tmp/data/third.nc",
+                    "relative_path": None,
+                },
+                "metadata": {"site": "CCC"},
+                "original_filename": "third.nc",
+                "suffixes": [".nc"],
+            }
+        ]
+    )
+
+    assert len(records) == 1
+    assert records[0].locator == ArtifactLocator.path("/tmp/data/third.nc")
+
+
+def test_add_artifact_preserves_non_path_original_path_strings(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="artifacts"))
+
+    record = catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/example.zarr"),
+        original_path="s3://bucket/source/example.zarr",
+    )
+
+    assert record.original_path == "s3://bucket/source/example.zarr"
+
+
+def test_add_artifacts_raises_helpful_error_for_missing_required_keys(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="artifacts"))
+
+    try:
+        catalog.add_artifacts([{"locator": {"kind": "path", "value": "/tmp/data/file.nc"}}])
+    except ValueError as exc:
+        assert "artifact batch item 0" in str(exc)
+        assert "record_type" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("Expected ValueError for missing record_type")
+
+
+def test_add_artifacts_raises_helpful_error_for_invalid_locator(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="artifacts"))
+
+    try:
+        catalog.add_artifacts(
+            [
+                {
+                    "record_type": "external_reference",
+                    "locator": {"kind": "path", "relative_path": None},
+                }
+            ]
+        )
+    except Exception as exc:
+        assert "artifact batch item 0" in str(exc)
+        assert "invalid locator" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("Expected locator validation error")
+
+
+def test_add_artifacts_assigns_sequential_record_ids_when_missing(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="artifacts"))
+    first = catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator.path("/tmp/data/existing.nc"),
+    )
+
+    records = catalog.add_artifacts(
+        [
+            {
+                "record_type": "external_reference",
+                "locator": ArtifactLocator.path("/tmp/data/first.nc"),
+            },
+            {
+                "record_type": "external_reference",
+                "locator": ArtifactLocator.path("/tmp/data/second.nc"),
+            },
+        ]
+    )
+
+    assert first.id == "1"
+    assert [record.id for record in records] == ["2", "3"]
+
+def test_add_artifacts_rejects_record_id_in_batch_input(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="artifacts"))
+
+    try:
+        catalog.add_artifacts(
+            [
+                {
+                    "record_id": "10",
+                    "record_type": "external_reference",
+                    "locator": ArtifactLocator.path("/tmp/data/first.nc"),
+                },
+            ]
+        )
+    except ValueError as exc:
+        assert "must not supply record_id" in str(exc)
+        assert "artifact batch item 0" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("Expected record_id rejection for batch input")

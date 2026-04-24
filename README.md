@@ -2,11 +2,13 @@
 
 `ogcat` stands for OpenGHG Catalog.
 
-`ogcat` is a lightweight local file catalog for managed file ingest, flexible metadata, and simple search. Today it provides a self-describing on-disk catalog layout, a small Python API, and a CLI for creating catalogs, adding files by copy or move, listing metadata field descriptions, and locating stored paths.
+`ogcat` is a lightweight artifact catalog with a managed-file MVP. Today it provides a
+self-describing on-disk catalog layout, a small Python API, and a CLI for creating catalogs,
+adding files by copy or move, listing metadata field descriptions, and locating stored paths.
 
 ## Scope
 
-- local, file-based catalogs
+- local catalogs centred on managed file ingest
 - a self-describing catalog layout with `catalog.json`, `db.json`, and `files/`
 - path-based managed ingest using `copy` or `move`
 - flexible JSON-serialisable user metadata
@@ -29,7 +31,9 @@
 
 - Catalog spec: `catalog.json` stores the catalog name, storage layout templates, default ingest mode, field resolution order, and descriptive metadata field definitions.
 - Repository abstraction: catalog records are stored through a repository protocol so the rest of the package does not depend directly on TinyDB details.
-- Records: each record stores reserved top-level fields plus `user_metadata`, `derived_metadata`, and `naming_metadata`.
+- Records: each record stores reserved top-level fields plus `user_metadata`, `derived_metadata`,
+  and `naming_metadata`. Records now also carry a small `record_type` and `locator` so the model
+  can grow beyond copied or moved local files without changing the basic catalog shape.
 - Naming and templates: file placement under `files/` is driven by simple directory and filename templates evaluated from record id, source filename parts, timestamps, and user metadata.
 - Derived metadata extractors: optional extractors can add lightweight summaries after ingest. The current implementation includes a netCDF extractor when `xarray` is installed.
 - Search and CLI: search supports exact equality, substring contains, and regex matching, with flattened field lookup and dotted-path access for nested metadata. The CLI exposes the same search model and adds shell-oriented output modes.
@@ -131,8 +135,8 @@ ogcat search --catalog ./example-catalog --where derived_metadata.netcdf.dims.ti
 Show a record or print its stored path:
 
 ```bash
-ogcat show rec_000001 --catalog ./example-catalog
-ogcat path rec_000001 --catalog ./example-catalog
+ogcat show 1 --catalog ./example-catalog
+ogcat path 1 --catalog ./example-catalog
 ```
 
 Inspect catalog info and declared metadata fields:
@@ -159,14 +163,26 @@ Current search is intentionally small. It does not support numeric range queries
 
 ## Storage Model
 
-Current storage is path-based managed ingest. Files are copied or moved into the catalog's `files/` tree, and the resulting stored path is recorded in the catalog database alongside metadata and naming information.
+Current storage is still path-based managed ingest for the MVP. Files are copied or moved into the
+catalog's `files/` tree, and the resulting stored path is recorded in the catalog database
+alongside metadata and naming information.
+
+Records now also include a minimal locator block:
+
+- `record_type`: what kind of artifact the record represents, for example `managed_file`
+- `locator`: how that artifact is located, currently most often a local `path`
+
+For compatibility, managed local files still keep `stored_abspath` and `stored_relpath`. Those
+fields remain the simple path-facing surface for today's workflows while the locator model opens a
+path toward external references, directory-like stores, and future transform targets.
 
 `catalog.json` stores the naming templates and descriptive metadata field definitions so a catalog remains understandable without additional application state. `metadata_fields` are descriptive only today; they are not enforced as typed schemas.
 
 ## Current Limitations
 
 - the only supported backend today is TinyDB behind the repository abstraction
-- records are catalogued files, not yet more general artefacts with other locator types
+- non-file record types are only partially modelled so far; readers, managers, and richer URI
+  handling are still future work
 - derived metadata extraction is intentionally small and currently focused on optional netCDF summaries
 - there are no typed per-record schemas, readers, or manager bindings yet
 - richer readers, managers, and import workflows are future work
@@ -179,4 +195,6 @@ The current direction is:
 - next: generalise from managed files to catalogued artefacts with clearer record typing and locator handling
 - later: typed schemas, reader hooks, manager bindings, and scan or import workflows
 
-See [docs/architecture.md](/Users/bm13805/Documents/ogcat/docs/architecture.md) and [docs/roadmap.md](/Users/bm13805/Documents/ogcat/docs/roadmap.md) for more detail.
+See [docs/architecture.md](docs/architecture.md),
+[docs/design-note-artifact-locators.md](docs/design-note-artifact-locators.md),
+and [docs/roadmap.md](docs/roadmap.md) for more detail.

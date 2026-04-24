@@ -7,7 +7,7 @@ from typer.testing import CliRunner
 
 from ogcat import Catalog, CatalogSpec, MetadataFieldDescription
 from ogcat.cli import app
-
+from ogcat.models import ArtifactLocator
 
 runner = CliRunner()
 
@@ -50,6 +50,7 @@ def _create_catalog(tmp_path: Path, *, with_fields: bool = True) -> Catalog:
 
 def test_search_json_output(tmp_path: Path) -> None:
     catalog = _create_catalog(tmp_path)
+    record = catalog.search()[0]
 
     result = runner.invoke(
         app,
@@ -58,18 +59,21 @@ def test_search_json_output(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert [item["id"] for item in payload] == ["rec_000001"]
+    assert [item["id"] for item in payload] == [record.id]
     assert payload[0]["user_metadata"]["species"] == "CO2"
 
 
 def test_show_json_output(tmp_path: Path) -> None:
     catalog = _create_catalog(tmp_path)
+    record = catalog.search()[0]
 
-    result = runner.invoke(app, ["show", "rec_000001", "--catalog", str(catalog.root), "--json"])
+    result = runner.invoke(app, ["show", record.id, "--catalog", str(catalog.root), "--json"])
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["id"] == "rec_000001"
+    assert payload["id"] == record.id
+    assert payload["record_type"] == "managed_file"
+    assert payload["locator"]["kind"] == "path"
     assert payload["user_metadata"]["title"] == "Anthropogenic test flux"
 
 
@@ -147,7 +151,7 @@ def test_add_accepts_multiple_metadata_items_after_single_meta_flag(tmp_path: Pa
     )
 
     assert result.exit_code == 0
-    record = Catalog.open(catalog.root).get("rec_000001")
+    record = Catalog.open(catalog.root).get("1")
     assert record is not None
     assert record.user_metadata == {"species": "CO2", "product": "CTE-HR", "version": "v4.2"}
 
@@ -170,7 +174,7 @@ def test_add_accepts_json_object_metadata(tmp_path: Path) -> None:
     )
 
     assert result.exit_code == 0
-    record = Catalog.open(catalog.root).get("rec_000001")
+    record = Catalog.open(catalog.root).get("1")
     assert record is not None
     assert record.user_metadata == {"species": "CO2", "month": 1}
 
@@ -189,3 +193,40 @@ def test_missing_catalog_configuration_returns_helpful_error() -> None:
 
     assert result.exit_code != 0
     assert "Provide --catalog or set OGCAT_CATALOG." in result.stderr
+
+
+def test_search_paths_skips_non_path_backed_records(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
+    source = tmp_path / "source.nc"
+    source.write_text("dummy", encoding="utf-8")
+    catalog.add_file(source, metadata={"species": "CO2"})
+    catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/example.zarr"),
+        metadata={"species": "CO2"},
+    )
+
+    result = runner.invoke(
+        app,
+        ["search", "--catalog", str(catalog.root), "--where", "species=CO2", "--paths"],
+    )
+
+    assert result.exit_code == 0
+    lines = [line for line in result.stdout.splitlines() if line.strip()]
+    assert len(lines) == 1
+    assert lines[0].endswith("source.nc")
+
+
+def test_search_human_output_uses_empty_path_for_non_path_backed_records(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
+    catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/example.zarr"),
+        metadata={"species": "CO2", "title": "Remote artifact"},
+    )
+
+    result = runner.invoke(app, ["search", "--catalog", str(catalog.root), "--where", "species=CO2"])
+
+    assert result.exit_code == 0
+    assert "Remote artifact" in result.stdout
+    assert "None" not in result.stdout

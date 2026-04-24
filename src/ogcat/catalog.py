@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from pathlib import Path
 import shutil
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
 
 from ogcat.extractors import extract_derived_metadata
-from ogcat.models import CatalogRecord, MetadataDict
+from ogcat.models import ArtifactLocator, CatalogRecord, MetadataDict
 from ogcat.naming import build_naming_context, render_storage_location
 from ogcat.repository import CatalogRepository
 from ogcat.search import matches_record
@@ -25,7 +25,7 @@ class Catalog:
     repository: CatalogRepository
 
     @classmethod
-    def create(cls, root: str | Path, spec: CatalogSpec) -> "Catalog":
+    def create(cls, root: str | Path, spec: CatalogSpec) -> Catalog:
         """Create a new catalog directory and write its specification."""
         root_path = Path(root).expanduser().resolve()
         root_path.mkdir(parents=True, exist_ok=True)
@@ -35,25 +35,12 @@ class Catalog:
         return cls(root=root_path, spec=spec, repository=repository)
 
     @classmethod
-    def open(cls, root: str | Path) -> "Catalog":
+    def open(cls, root: str | Path) -> Catalog:
         """Open an existing catalog from disk."""
         root_path = Path(root).expanduser().resolve()
         spec = CatalogSpec.read(root_path / "catalog.json")
         repository = _open_repository(root_path, spec)
         return cls(root=root_path, spec=spec, repository=repository)
-
-    def _next_record_id(self) -> str:
-        """Generate the next simple sequential record id."""
-        prefix = "rec"
-        existing_ids = [record.id for record in self.repository.all()]
-        max_number = 0
-        for record_id in existing_ids:
-            if record_id.startswith(f"{prefix}_"):
-                try:
-                    max_number = max(max_number, int(record_id.split("_", 1)[1]))
-                except ValueError:
-                    continue
-        return f"{prefix}_{max_number + 1:06d}"
 
     def add_file(
         self,
@@ -71,9 +58,8 @@ class Catalog:
         if chosen_operation not in {"copy", "move"}:
             raise ValueError(f"Unsupported operation: {chosen_operation}")
 
-        record_id = self._next_record_id()
-        timestamp = datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat()
-        timestamp = timestamp.replace("+00:00", "Z")
+        record_id = self.repository.allocate_record_ids(1)[0]
+        timestamp = _utc_timestamp()
         date_added = timestamp[:10]
 
         context = build_naming_context(
@@ -98,28 +84,120 @@ class Catalog:
             shutil.move(str(source), str(target))
             storage_mode = "move"
 
+        # NOTE: derived metadata is not used for location and filename creation
         derived_metadata = extract_derived_metadata(target)
-
-        record = CatalogRecord(
-            id=record_id,
-            catalog=self.spec.catalog_name,
-            stored_abspath=str(target),
-            stored_relpath=rel_path,
+        locator = ArtifactLocator.path(target, relative_path=rel_path)
+        record = self._build_artifact_record(
+            record_id=record_id,
+            record_type="managed_file",
+            locator=locator,
+            metadata=metadata,
             storage_mode=storage_mode,
-            time_added=timestamp,
-            original_path=str(source),
+            original_path=source,
             original_filename=source.name,
             suffixes=source.suffixes,
-            user_metadata=metadata,
             derived_metadata=derived_metadata,
             naming_metadata={
                 "directory_template": self.spec.directory_template,
                 "filename_template": self.spec.filename_template,
                 "resolved_filename": resolved_filename,
             },
+            time_added=timestamp,
         )
         self.repository.insert(record)
         return record
+
+    def add_artifact(
+        self,
+        *,
+        record_type: str,
+        locator: ArtifactLocator,
+        metadata: MetadataDict | None = None,
+        storage_mode: str | None = None,
+        original_path: str | Path | None = None,
+        original_filename: str | None = None,
+        suffixes: list[str] | None = None,
+        derived_metadata: MetadataDict | None = None,
+        naming_metadata: MetadataDict | None = None,
+        time_added: str | None = None,
+    ) -> CatalogRecord:
+        """Add an artifact record without performing any file operation.
+
+        This is the minimal general record API. `add_file()` remains the managed
+        ingest convenience wrapper that prepares a path-backed locator and then
+        delegates here.
+        """
+        record = self._build_artifact_record(
+            record_id=self.repository.allocate_record_ids(1)[0],
+            record_type=record_type,
+            locator=locator,
+            metadata=metadata,
+            storage_mode=storage_mode,
+            original_path=original_path,
+            original_filename=original_filename,
+            suffixes=suffixes,
+            derived_metadata=derived_metadata,
+            naming_metadata=naming_metadata,
+            time_added=time_added,
+        )
+        self.repository.insert(record)
+        return record
+
+    def add_artifacts(
+        self,
+        artifacts: list[dict[str, object]],
+    ) -> list[CatalogRecord]:
+        """Add multiple artifact records.
+
+        Each item should provide the same keyword-style fields accepted by
+        `add_artifact()`. This keeps the public artifact API small while allowing
+        batch-oriented callers to avoid one-at-a-time repository writes.
+        """
+        validated_items = [
+            _validate_artifact_batch_item(item, index) for index, item in enumerate(artifacts)
+        ]
+        allocated_record_ids = self.repository.allocate_record_ids(len(validated_items))
+
+        records: list[CatalogRecord] = []
+        for record_id, (index, validated) in zip(
+            allocated_record_ids,
+            enumerate(validated_items),
+            strict=True,
+        ):
+            try:
+                locator = _coerce_artifact_locator(validated["locator"])
+            except TypeError as exc:
+                raise TypeError(f"artifact batch item {index}: invalid locator: {exc}") from exc
+            except ValueError as exc:
+                raise ValueError(f"artifact batch item {index}: invalid locator: {exc}") from exc
+
+            records.append(
+                self._build_artifact_record(
+                    record_id=record_id,
+                    record_type=str(validated["record_type"]),
+                    locator=locator,
+                    metadata=validated.get("metadata"),  # type: ignore[arg-type]
+                    storage_mode=(
+                        None
+                        if validated.get("storage_mode") is None
+                        else str(validated["storage_mode"])
+                    ),
+                    original_path=validated.get("original_path"),  # type: ignore[arg-type]
+                    original_filename=(
+                        None
+                        if validated.get("original_filename") is None
+                        else str(validated["original_filename"])
+                    ),
+                    suffixes=validated.get("suffixes"),  # type: ignore[arg-type]
+                    derived_metadata=validated.get("derived_metadata"),  # type: ignore[arg-type]
+                    naming_metadata=validated.get("naming_metadata"),  # type: ignore[arg-type]
+                    time_added=(
+                        None if validated.get("time_added") is None else str(validated["time_added"])
+                    ),
+                )
+            )
+        self.repository.insert_many(records)
+        return records
 
     def search(
         self,
@@ -171,11 +249,59 @@ class Catalog:
         return self.repository.get(record_id)
 
     def path(self, record_id: str) -> Path | None:
-        """Return the stored path for a record, if present."""
+        """Return the stored path for a path-backed record, if present."""
         record = self.get(record_id)
         if record is None:
             return None
-        return Path(record.stored_abspath)
+        return record.path()
+
+    def _build_artifact_record(
+        self,
+        *,
+        record_id: str,
+        record_type: str,
+        locator: ArtifactLocator,
+        metadata: MetadataDict | None = None,
+        storage_mode: str | None = None,
+        original_path: str | Path | None = None,
+        original_filename: str | None = None,
+        suffixes: list[str] | None = None,
+        derived_metadata: MetadataDict | None = None,
+        naming_metadata: MetadataDict | None = None,
+        time_added: str | None = None,
+    ) -> CatalogRecord:
+        """Build an artifact record without persisting it."""
+        resolved_time_added = time_added or _utc_timestamp()
+        if original_path is None:
+            resolved_original_path = None
+        elif isinstance(original_path, Path):
+            resolved_original_path = str(original_path)
+        else:
+            resolved_original_path = original_path
+        locator_path = locator.as_path()
+
+        return CatalogRecord(
+            id=record_id,
+            catalog=self.spec.catalog_name,
+            time_added=resolved_time_added,
+            record_type=record_type,
+            locator=locator,
+            stored_abspath=str(locator_path) if locator_path is not None else None,
+            stored_relpath=locator.relative_path,
+            storage_mode=storage_mode,
+            original_path=resolved_original_path,
+            original_filename=original_filename,
+            suffixes=[] if suffixes is None else list(suffixes),
+            user_metadata={} if metadata is None else dict(metadata),
+            derived_metadata={} if derived_metadata is None else dict(derived_metadata),
+            naming_metadata={} if naming_metadata is None else dict(naming_metadata),
+        )
+
+
+def _utc_timestamp() -> str:
+    """Return a stable UTC timestamp string for record creation."""
+    timestamp = datetime.now(tz=UTC).replace(microsecond=0).isoformat()
+    return timestamp.replace("+00:00", "Z")
 
 
 def _open_repository(root: Path, spec: CatalogSpec) -> CatalogRepository:
@@ -183,3 +309,27 @@ def _open_repository(root: Path, spec: CatalogSpec) -> CatalogRepository:
     if spec.db_backend != "tinydb":
         raise ValueError(f"Unsupported db_backend: {spec.db_backend}")
     return TinyDbCatalogRepository(root / spec.db_path)
+
+
+def _coerce_artifact_locator(value: object) -> ArtifactLocator:
+    """Coerce a locator value for batch artifact creation."""
+    if isinstance(value, ArtifactLocator):
+        return value
+    if isinstance(value, dict):
+        return ArtifactLocator.from_dict(value)
+    raise TypeError("artifact locator must be an ArtifactLocator or locator dictionary")
+
+
+def _validate_artifact_batch_item(item: object, index: int) -> dict[str, object]:
+    """Validate one batch artifact item and return it as a dictionary."""
+    if not isinstance(item, dict):
+        raise TypeError(f"artifact batch item {index} must be a dictionary")
+
+    missing_keys = [key for key in ["record_type", "locator"] if key not in item]
+    if missing_keys:
+        missing = ", ".join(missing_keys)
+        raise ValueError(f"artifact batch item {index} is missing required key(s): {missing}")
+    if "record_id" in item:
+        raise ValueError(f"artifact batch item {index} must not supply record_id")
+
+    return item
