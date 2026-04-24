@@ -169,7 +169,7 @@ class Catalog:
         records = [
             self._build_artifact_record(
                 record_type=str(item["record_type"]),
-                locator=item["locator"],  # type: ignore[arg-type]
+                locator=_coerce_artifact_locator(item["locator"]),
                 metadata=item.get("metadata"),  # type: ignore[arg-type]
                 storage_mode=(
                     None if item.get("storage_mode") is None else str(item["storage_mode"])
@@ -265,7 +265,12 @@ class Catalog:
         """Build an artifact record without persisting it."""
         resolved_record_id = record_id or self._next_record_id()
         resolved_time_added = time_added or _utc_timestamp()
-        resolved_original_path = None if original_path is None else str(Path(original_path))
+        if original_path is None:
+            resolved_original_path = None
+        elif isinstance(original_path, Path):
+            resolved_original_path = str(original_path)
+        else:
+            resolved_original_path = original_path
 
         return CatalogRecord(
             id=resolved_record_id,
@@ -296,3 +301,12 @@ def _open_repository(root: Path, spec: CatalogSpec) -> CatalogRepository:
     if spec.db_backend != "tinydb":
         raise ValueError(f"Unsupported db_backend: {spec.db_backend}")
     return TinyDbCatalogRepository(root / spec.db_path)
+
+
+def _coerce_artifact_locator(value: object) -> ArtifactLocator:
+    """Coerce a locator value for batch artifact creation."""
+    if isinstance(value, ArtifactLocator):
+        return value
+    if isinstance(value, dict):
+        return ArtifactLocator.from_dict(value)
+    raise TypeError("artifact locator must be an ArtifactLocator or locator dictionary")

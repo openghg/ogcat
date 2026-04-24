@@ -54,8 +54,6 @@ from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn, T
 from ogcat import ArtifactLocator, Catalog, CatalogSpec, MetadataFieldDescription  # noqa: E402
 
 KNOWN_LPDM_MODELS = {"NAME", "FLEXPART"}
-SITE_INLET_RE = re.compile(r"^(?P<site>[A-Za-z0-9]+)[-_](?P<inlet>\d{1,4}m)agl$")
-YYYYMM_RE = re.compile(r"^(?P<year>\d{4})(?P<month>\d{2})$")
 FOOTPRINT_FILE_RE = re.compile(
     r"^(?P<site>[A-Za-z0-9]+)[-_](?P<inlet>\d{1,4}m)agl"
     r"_(?:(?P<model>NAME|FLEXPART)_)?"
@@ -298,7 +296,7 @@ def build_catalog(
         task_id = progress.add_task("Cataloging footprint files", total=len(all_paths))
         pending_artifacts: list[dict[str, object]] = []
         for index, path in enumerate(all_paths, start=1):
-            if index == 1 or index % 250 == 0 or index == len(all_paths):
+            if index == 1 or index % batch_size == 0 or index == len(all_paths):
                 print(
                     f"Processing file {index:,} of {len(all_paths):,}: {path.name}",
                     flush=True,
