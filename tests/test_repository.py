@@ -120,3 +120,23 @@ def test_record_to_dict_stays_json_serialisable() -> None:
         "relative_path": None,
     }
     assert json.loads(json.dumps(payload)) == payload
+
+
+def test_repository_insert_many(tmp_path: Path) -> None:
+    repository = TinyDbCatalogRepository(tmp_path / "db.json")
+    records = [
+        CatalogRecord(
+            id="rec_000010",
+            catalog="fluxes",
+            time_added="2026-04-23T12:00:00Z",
+            record_type="external_reference",
+            locator=ArtifactLocator.path(f"/tmp/catalog/files/example-{index}.nc"),
+            original_filename=f"example-{index}.nc",
+            suffixes=[".nc"],
+        )
+        for index in range(3)
+    ]
+
+    repository.insert_many(records)
+
+    assert repository.all() == records

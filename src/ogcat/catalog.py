@@ -140,28 +140,56 @@ class Catalog:
         ingest convenience wrapper that prepares a path-backed locator and then
         delegates here.
         """
-        resolved_record_id = record_id or self._next_record_id()
-        resolved_time_added = time_added or _utc_timestamp()
-        resolved_original_path = None if original_path is None else str(Path(original_path))
-
-        record = CatalogRecord(
-            id=resolved_record_id,
-            catalog=self.spec.catalog_name,
-            time_added=resolved_time_added,
+        record = self._build_artifact_record(
             record_type=record_type,
             locator=locator,
-            stored_abspath=str(locator.as_path()) if locator.as_path() is not None else None,
-            stored_relpath=locator.relative_path,
+            metadata=metadata,
             storage_mode=storage_mode,
-            original_path=resolved_original_path,
+            original_path=original_path,
             original_filename=original_filename,
-            suffixes=[] if suffixes is None else list(suffixes),
-            user_metadata={} if metadata is None else dict(metadata),
-            derived_metadata={} if derived_metadata is None else dict(derived_metadata),
-            naming_metadata={} if naming_metadata is None else dict(naming_metadata),
+            suffixes=suffixes,
+            derived_metadata=derived_metadata,
+            naming_metadata=naming_metadata,
+            record_id=record_id,
+            time_added=time_added,
         )
         self.repository.insert(record)
         return record
+
+    def add_artifacts(
+        self,
+        artifacts: list[dict[str, object]],
+    ) -> list[CatalogRecord]:
+        """Add multiple artifact records.
+
+        Each item should provide the same keyword-style fields accepted by
+        `add_artifact()`. This keeps the public artifact API small while allowing
+        batch-oriented callers to avoid one-at-a-time repository writes.
+        """
+        records = [
+            self._build_artifact_record(
+                record_type=str(item["record_type"]),
+                locator=item["locator"],  # type: ignore[arg-type]
+                metadata=item.get("metadata"),  # type: ignore[arg-type]
+                storage_mode=(
+                    None if item.get("storage_mode") is None else str(item["storage_mode"])
+                ),
+                original_path=item.get("original_path"),  # type: ignore[arg-type]
+                original_filename=(
+                    None
+                    if item.get("original_filename") is None
+                    else str(item["original_filename"])
+                ),
+                suffixes=item.get("suffixes"),  # type: ignore[arg-type]
+                derived_metadata=item.get("derived_metadata"),  # type: ignore[arg-type]
+                naming_metadata=item.get("naming_metadata"),  # type: ignore[arg-type]
+                record_id=None if item.get("record_id") is None else str(item["record_id"]),
+                time_added=None if item.get("time_added") is None else str(item["time_added"]),
+            )
+            for item in artifacts
+        ]
+        self.repository.insert_many(records)
+        return records
 
     def search(
         self,
@@ -218,6 +246,43 @@ class Catalog:
         if record is None:
             return None
         return record.path()
+
+    def _build_artifact_record(
+        self,
+        *,
+        record_type: str,
+        locator: ArtifactLocator,
+        metadata: MetadataDict | None = None,
+        storage_mode: str | None = None,
+        original_path: str | Path | None = None,
+        original_filename: str | None = None,
+        suffixes: list[str] | None = None,
+        derived_metadata: MetadataDict | None = None,
+        naming_metadata: MetadataDict | None = None,
+        record_id: str | None = None,
+        time_added: str | None = None,
+    ) -> CatalogRecord:
+        """Build an artifact record without persisting it."""
+        resolved_record_id = record_id or self._next_record_id()
+        resolved_time_added = time_added or _utc_timestamp()
+        resolved_original_path = None if original_path is None else str(Path(original_path))
+
+        return CatalogRecord(
+            id=resolved_record_id,
+            catalog=self.spec.catalog_name,
+            time_added=resolved_time_added,
+            record_type=record_type,
+            locator=locator,
+            stored_abspath=str(locator.as_path()) if locator.as_path() is not None else None,
+            stored_relpath=locator.relative_path,
+            storage_mode=storage_mode,
+            original_path=resolved_original_path,
+            original_filename=original_filename,
+            suffixes=[] if suffixes is None else list(suffixes),
+            user_metadata={} if metadata is None else dict(metadata),
+            derived_metadata={} if derived_metadata is None else dict(derived_metadata),
+            naming_metadata={} if naming_metadata is None else dict(naming_metadata),
+        )
 
 
 def _utc_timestamp() -> str:

@@ -51,6 +51,17 @@ class TinyDbCatalogRepository:
         records.append(record.to_dict())
         self._write_json_records(records)
 
+    def insert_many(self, records: list[CatalogRecord]) -> None:
+        """Insert multiple records."""
+        if not records:
+            return
+        if self._db is not None:
+            self._db.insert_multiple([record.to_dict() for record in records])
+            return
+        existing_records = self._load_json_records()
+        existing_records.extend(record.to_dict() for record in records)
+        self._write_json_records(existing_records)
+
     def get(self, record_id: str) -> CatalogRecord | None:
         """Get a record by id."""
         if self._db is not None:

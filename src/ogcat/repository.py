@@ -13,6 +13,9 @@ class CatalogRepository(Protocol):
     def insert(self, record: CatalogRecord) -> None:
         """Insert a new record."""
 
+    def insert_many(self, records: list[CatalogRecord]) -> None:
+        """Insert multiple records."""
+
     def get(self, record_id: str) -> CatalogRecord | None:
         """Get a record by id."""
 

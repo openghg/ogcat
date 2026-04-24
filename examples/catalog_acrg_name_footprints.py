@@ -60,9 +60,9 @@ FOOTPRINT_FILE_RE = re.compile(
     r"^(?P<site>[A-Za-z0-9]+)[-_](?P<inlet>\d{1,4}m)agl"
     r"_(?:(?P<model>NAME|FLEXPART)_)?"
     r"(?:(?P<met_model>[A-Z0-9]+)_)?"
-    r"(?:(?P<domain>[A-Z0-9]+)_(?P<species>[a-z0-9-]+)"
-    r"|(?P<species_first>[a-z0-9-]+)_(?P<domain_last>[A-Z0-9]+)"
-    r"|(?P<domain_only>[A-Z0-9]+))"
+    r"(?:(?P<domain>[A-Za-z0-9-]+)_(?P<species>[a-z0-9-]+)"
+    r"|(?P<species_first>[a-z0-9-]+)_(?P<domain_last>[A-Za-z0-9-]+)"
+    r"|(?P<domain_only>[A-Za-z0-9-]+))"
     r"_(?P<year>\d{4})(?P<month>\d{2})\.nc$"
 )
 
@@ -281,6 +281,8 @@ def build_catalog(
 
     all_paths = list(discovered_paths.values())
     existing_record_number = _max_record_number(catalog)
+    next_record_number = existing_record_number + 1
+    batch_size = 250
     skipped: list[Path] = []
     added_count = 0
     print(f"Discovered {len(all_paths)} candidate NetCDF files.")
@@ -294,6 +296,7 @@ def build_catalog(
     )
     with progress:
         task_id = progress.add_task("Cataloging footprint files", total=len(all_paths))
+        pending_artifacts: list[dict[str, object]] = []
         for index, path in enumerate(all_paths, start=1):
             if index == 1 or index % 250 == 0 or index == len(all_paths):
                 print(
@@ -306,16 +309,28 @@ def build_catalog(
                 progress.advance(task_id)
                 continue
 
-            catalog.add_artifact(
-                record_id=f"rec_{existing_record_number + index:06d}",
-                record_type="external_reference",
-                locator=ArtifactLocator.path(path),
-                metadata=metadata.to_user_metadata(),
-                original_filename=path.name,
-                suffixes=path.suffixes,
+            pending_artifacts.append(
+                {
+                    "record_id": f"rec_{next_record_number:06d}",
+                    "record_type": "external_reference",
+                    "locator": ArtifactLocator.path(path),
+                    "metadata": metadata.to_user_metadata(),
+                    "original_filename": path.name,
+                    "suffixes": path.suffixes,
+                }
             )
-            added_count += 1
+            next_record_number += 1
+
+            if len(pending_artifacts) >= batch_size:
+                catalog.add_artifacts(pending_artifacts)
+                added_count += len(pending_artifacts)
+                pending_artifacts.clear()
+
             progress.advance(task_id)
+
+        if pending_artifacts:
+            catalog.add_artifacts(pending_artifacts)
+            added_count += len(pending_artifacts)
 
     return catalog, added_count, skipped
 

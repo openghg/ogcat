@@ -189,3 +189,34 @@ def test_add_artifact_supports_non_path_locator_records(tmp_path: Path) -> None:
     assert record.locator.value == "s3://bucket/example.zarr"
     assert record.stored_abspath is None
     assert catalog.path(record.id) is None
+
+
+def test_add_artifacts_supports_batch_artifact_creation(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="artifacts"))
+
+    records = catalog.add_artifacts(
+        [
+            {
+                "record_id": "rec_000010",
+                "record_type": "external_reference",
+                "locator": ArtifactLocator.path("/tmp/data/first.nc"),
+                "metadata": {"site": "AAA", "month": 1},
+                "original_filename": "first.nc",
+                "suffixes": [".nc"],
+            },
+            {
+                "record_id": "rec_000011",
+                "record_type": "external_reference",
+                "locator": ArtifactLocator.path("/tmp/data/second.nc"),
+                "metadata": {"site": "BBB", "month": 2},
+                "original_filename": "second.nc",
+                "suffixes": [".nc"],
+            },
+        ]
+    )
+
+    assert [record.id for record in records] == ["rec_000010", "rec_000011"]
+    assert catalog.describe()["record_count"] == 2
+    assert catalog.get("rec_000010") is not None
+    assert catalog.get("rec_000011") is not None
