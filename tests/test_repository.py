@@ -140,3 +140,14 @@ def test_repository_insert_many(tmp_path: Path) -> None:
     repository.insert_many(records)
 
     assert repository.all() == records
+
+
+def test_record_without_locator_does_not_resolve_to_current_directory() -> None:
+    record = CatalogRecord(
+        id="rec_000099",
+        catalog="fluxes",
+        time_added="2026-04-23T12:00:00Z",
+    )
+
+    assert record.stored_abspath is None
+    assert record.path() is None

@@ -80,7 +80,7 @@ class CatalogRecord:
     catalog: str
     time_added: str
     record_type: str = "managed_file"
-    locator: ArtifactLocator = field(default_factory=lambda: ArtifactLocator(kind="path", value=""))
+    locator: ArtifactLocator = field(default_factory=lambda: ArtifactLocator(kind="opaque", value=""))
     stored_abspath: str | None = None
     stored_relpath: str | None = None
     storage_mode: str | None = None

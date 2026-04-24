@@ -195,6 +195,6 @@ The current direction is:
 - next: generalise from managed files to catalogued artefacts with clearer record typing and locator handling
 - later: typed schemas, reader hooks, manager bindings, and scan or import workflows
 
-See [docs/architecture.md](/Users/bm13805/Documents/ogcat/docs/architecture.md),
-[docs/design-note-artifact-locators.md](/Users/bm13805/Documents/ogcat/docs/design-note-artifact-locators.md),
-and [docs/roadmap.md](/Users/bm13805/Documents/ogcat/docs/roadmap.md) for more detail.
+See [docs/architecture.md](docs/architecture.md),
+[docs/design-note-artifact-locators.md](docs/design-note-artifact-locators.md),
+and [docs/roadmap.md](docs/roadmap.md) for more detail.
