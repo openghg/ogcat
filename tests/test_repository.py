@@ -12,7 +12,7 @@ from ogcat.tinydb_repository import TinyDbCatalogRepository
 def test_repository_insert_get_update_and_all(tmp_path) -> None:
     repository = TinyDbCatalogRepository(tmp_path / "db.json")
     record = CatalogRecord(
-        id="rec_000001",
+        id="1",
         catalog="fluxes",
         time_added="2026-04-23T12:00:00Z",
         locator=ArtifactLocator.path(
@@ -60,7 +60,7 @@ def test_repository_insert_get_update_and_all(tmp_path) -> None:
 def test_record_round_trips_with_non_path_locator(tmp_path: Path) -> None:
     repository = TinyDbCatalogRepository(tmp_path / "db.json")
     record = CatalogRecord(
-        id="rec_000002",
+        id="1",
         catalog="fluxes",
         time_added="2026-04-23T12:00:00Z",
         record_type="external_reference",
@@ -126,7 +126,7 @@ def test_repository_insert_many(tmp_path: Path) -> None:
     repository = TinyDbCatalogRepository(tmp_path / "db.json")
     records = [
         CatalogRecord(
-            id="rec_000010",
+            id=str(index + 1),
             catalog="fluxes",
             time_added="2026-04-23T12:00:00Z",
             record_type="external_reference",
@@ -140,6 +140,22 @@ def test_repository_insert_many(tmp_path: Path) -> None:
     repository.insert_many(records)
 
     assert repository.all() == records
+
+
+def test_repository_allocate_record_ids(tmp_path: Path) -> None:
+    repository = TinyDbCatalogRepository(tmp_path / "db.json")
+    assert repository.allocate_record_ids(2) == ["1", "2"]
+
+    repository.insert(
+        CatalogRecord(
+            id="1",
+            catalog="fluxes",
+            time_added="2026-04-23T12:00:00Z",
+            locator=ArtifactLocator.path("/tmp/catalog/files/example.nc"),
+        )
+    )
+
+    assert repository.allocate_record_ids(2) == ["2", "3"]
 
 
 def test_record_without_locator_does_not_resolve_to_current_directory() -> None:

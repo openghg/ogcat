@@ -111,3 +111,62 @@ Examples:
 
 This should stay advisory rather than executable application state. The catalog
 can describe what something is, while higher-level code decides how to open it.
+
+## Follow-Up PR: Repository-Owned Search And Record Identity
+
+This should be treated as a focused architectural cleanup PR.
+
+Problem statement:
+
+- the current repository interface is too thin
+- `Catalog.search(...)` currently loads `repository.all()` and filters in Python
+- that leaks search policy out of the backend layer and prevents backends such
+  as TinyDB, SQLite, or MongoDB from owning query execution
+- `CatalogRecord` currently requires `id`, even though record identity is really
+  assigned by the repository/database layer
+- `allocate_record_ids()` is a workaround for that mismatch and should likely be
+  removed
+
+Preferred direction:
+
+- move search behind the repository interface
+- adopt "option 1" for record identity:
+  - `CatalogRecord.id` becomes optional before persistence
+  - repository `insert(...)` / `insert_many(...)` assign ids
+  - catalog-facing methods return persisted records with ids populated
+
+Suggested scope:
+
+- add a repository search method, likely reusing the current search inputs:
+  - `where`
+  - `contains`
+  - `regex`
+  - `ignore_case`
+- provide a simple backend implementation for TinyDB
+- update `Catalog.search(...)` to delegate to the repository instead of calling
+  `all()` and filtering in Python
+- remove `allocate_record_ids()` from the repository interface
+- update `Catalog.add_file(...)`, `add_artifact(...)`, and `add_artifacts(...)`
+  so they build records without ids and persist them through repository methods
+  that return ids or persisted records
+- keep the public `Catalog` API lightweight
+- avoid introducing a large ORM-like abstraction layer
+
+Questions to resolve in that PR:
+
+- should repository `insert(...)` return the assigned id, or the full persisted
+  `CatalogRecord`?
+- what is the cleanest shape for batch insert return values?
+- how should managed-file naming behave if templates want `{id}` before the
+  record is persisted?
+- should id-based naming remain supported, or should it become discouraged or
+  removed from the default design?
+- how much query expressiveness should the repository interface expose before it
+  becomes too backend-specific?
+
+Desired outcome:
+
+- repository backends own both identity assignment and search execution
+- `CatalogRecord` no longer needs caller-supplied ids
+- the catalog layer becomes thinner and less tied to backend implementation
+  details

@@ -42,10 +42,6 @@ class Catalog:
         repository = _open_repository(root_path, spec)
         return cls(root=root_path, spec=spec, repository=repository)
 
-    def _next_record_id(self) -> str:
-        """Generate the next simple sequential record id."""
-        return _format_record_id(_max_record_number(record.id for record in self.repository.all()) + 1)
-
     def add_file(
         self,
         path: str | Path,
@@ -62,7 +58,7 @@ class Catalog:
         if chosen_operation not in {"copy", "move"}:
             raise ValueError(f"Unsupported operation: {chosen_operation}")
 
-        record_id = self._next_record_id()
+        record_id = self.repository.allocate_record_ids(1)[0]
         timestamp = _utc_timestamp()
         date_added = timestamp[:10]
 
@@ -91,8 +87,8 @@ class Catalog:
         # NOTE: derived metadata is not used for location and filename creation
         derived_metadata = extract_derived_metadata(target)
         locator = ArtifactLocator.path(target, relative_path=rel_path)
-
-        return self.add_artifact(
+        record = self._build_artifact_record(
+            record_id=record_id,
             record_type="managed_file",
             locator=locator,
             metadata=metadata,
@@ -106,9 +102,10 @@ class Catalog:
                 "filename_template": self.spec.filename_template,
                 "resolved_filename": resolved_filename,
             },
-            record_id=record_id,
             time_added=timestamp,
         )
+        self.repository.insert(record)
+        return record
 
     def add_artifact(
         self,
@@ -122,7 +119,6 @@ class Catalog:
         suffixes: list[str] | None = None,
         derived_metadata: MetadataDict | None = None,
         naming_metadata: MetadataDict | None = None,
-        record_id: str | None = None,
         time_added: str | None = None,
     ) -> CatalogRecord:
         """Add an artifact record without performing any file operation.
@@ -132,6 +128,7 @@ class Catalog:
         delegates here.
         """
         record = self._build_artifact_record(
+            record_id=self.repository.allocate_record_ids(1)[0],
             record_type=record_type,
             locator=locator,
             metadata=metadata,
@@ -141,7 +138,6 @@ class Catalog:
             suffixes=suffixes,
             derived_metadata=derived_metadata,
             naming_metadata=naming_metadata,
-            record_id=record_id,
             time_added=time_added,
         )
         self.repository.insert(record)
@@ -160,19 +156,14 @@ class Catalog:
         validated_items = [
             _validate_artifact_batch_item(item, index) for index, item in enumerate(artifacts)
         ]
-
-        next_record_number = _max_record_number(record.id for record in self.repository.all()) + 1
-        for validated in validated_items:
-            explicit_record_id = validated.get("record_id")
-            if explicit_record_id is None:
-                continue
-            next_record_number = max(
-                next_record_number,
-                _max_record_number([str(explicit_record_id)]) + 1,
-            )
+        allocated_record_ids = self.repository.allocate_record_ids(len(validated_items))
 
         records: list[CatalogRecord] = []
-        for index, validated in enumerate(validated_items):
+        for record_id, (index, validated) in zip(
+            allocated_record_ids,
+            enumerate(validated_items),
+            strict=True,
+        ):
             try:
                 locator = _coerce_artifact_locator(validated["locator"])
             except TypeError as exc:
@@ -180,13 +171,9 @@ class Catalog:
             except ValueError as exc:
                 raise ValueError(f"artifact batch item {index}: invalid locator: {exc}") from exc
 
-            record_id = None if validated.get("record_id") is None else str(validated["record_id"])
-            if record_id is None:
-                record_id = _format_record_id(next_record_number)
-                next_record_number += 1
-
             records.append(
                 self._build_artifact_record(
+                    record_id=record_id,
                     record_type=str(validated["record_type"]),
                     locator=locator,
                     metadata=validated.get("metadata"),  # type: ignore[arg-type]
@@ -204,7 +191,6 @@ class Catalog:
                     suffixes=validated.get("suffixes"),  # type: ignore[arg-type]
                     derived_metadata=validated.get("derived_metadata"),  # type: ignore[arg-type]
                     naming_metadata=validated.get("naming_metadata"),  # type: ignore[arg-type]
-                    record_id=record_id,
                     time_added=(
                         None if validated.get("time_added") is None else str(validated["time_added"])
                     ),
@@ -272,6 +258,7 @@ class Catalog:
     def _build_artifact_record(
         self,
         *,
+        record_id: str,
         record_type: str,
         locator: ArtifactLocator,
         metadata: MetadataDict | None = None,
@@ -281,11 +268,9 @@ class Catalog:
         suffixes: list[str] | None = None,
         derived_metadata: MetadataDict | None = None,
         naming_metadata: MetadataDict | None = None,
-        record_id: str | None = None,
         time_added: str | None = None,
     ) -> CatalogRecord:
         """Build an artifact record without persisting it."""
-        resolved_record_id = record_id or self._next_record_id()
         resolved_time_added = time_added or _utc_timestamp()
         if original_path is None:
             resolved_original_path = None
@@ -296,7 +281,7 @@ class Catalog:
         locator_path = locator.as_path()
 
         return CatalogRecord(
-            id=resolved_record_id,
+            id=record_id,
             catalog=self.spec.catalog_name,
             time_added=resolved_time_added,
             record_type=record_type,
@@ -344,23 +329,7 @@ def _validate_artifact_batch_item(item: object, index: int) -> dict[str, object]
     if missing_keys:
         missing = ", ".join(missing_keys)
         raise ValueError(f"artifact batch item {index} is missing required key(s): {missing}")
+    if "record_id" in item:
+        raise ValueError(f"artifact batch item {index} must not supply record_id")
 
     return item
-
-
-def _max_record_number(record_ids: object) -> int:
-    """Return the highest sequential record number from an iterable of ids."""
-    max_number = 0
-    for record_id in record_ids:
-        if not isinstance(record_id, str) or not record_id.startswith("rec_"):
-            continue
-        try:
-            max_number = max(max_number, int(record_id.split("_", 1)[1]))
-        except ValueError:
-            continue
-    return max_number
-
-
-def _format_record_id(number: int) -> str:
-    """Format a sequential record number as the standard record id."""
-    return f"rec_{number:06d}"

@@ -135,8 +135,8 @@ ogcat search --catalog ./example-catalog --where derived_metadata.netcdf.dims.ti
 Show a record or print its stored path:
 
 ```bash
-ogcat show rec_000001 --catalog ./example-catalog
-ogcat path rec_000001 --catalog ./example-catalog
+ogcat show 1 --catalog ./example-catalog
+ogcat path 1 --catalog ./example-catalog
 ```
 
 Inspect catalog info and declared metadata fields:

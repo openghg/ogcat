@@ -198,7 +198,6 @@ def test_add_artifacts_supports_batch_artifact_creation(tmp_path: Path) -> None:
     records = catalog.add_artifacts(
         [
             {
-                "record_id": "rec_000010",
                 "record_type": "external_reference",
                 "locator": ArtifactLocator.path("/tmp/data/first.nc"),
                 "metadata": {"site": "AAA", "month": 1},
@@ -206,7 +205,6 @@ def test_add_artifacts_supports_batch_artifact_creation(tmp_path: Path) -> None:
                 "suffixes": [".nc"],
             },
             {
-                "record_id": "rec_000011",
                 "record_type": "external_reference",
                 "locator": ArtifactLocator.path("/tmp/data/second.nc"),
                 "metadata": {"site": "BBB", "month": 2},
@@ -216,10 +214,10 @@ def test_add_artifacts_supports_batch_artifact_creation(tmp_path: Path) -> None:
         ]
     )
 
-    assert [record.id for record in records] == ["rec_000010", "rec_000011"]
+    assert [record.id for record in records] == ["1", "2"]
     assert catalog.describe()["record_count"] == 2
-    assert catalog.get("rec_000010") is not None
-    assert catalog.get("rec_000011") is not None
+    assert catalog.get("1") is not None
+    assert catalog.get("2") is not None
 
 
 def test_add_artifacts_accepts_locator_dicts(tmp_path: Path) -> None:
@@ -229,7 +227,6 @@ def test_add_artifacts_accepts_locator_dicts(tmp_path: Path) -> None:
     records = catalog.add_artifacts(
         [
             {
-                "record_id": "rec_000020",
                 "record_type": "external_reference",
                 "locator": {
                     "kind": "path",
@@ -314,5 +311,25 @@ def test_add_artifacts_assigns_sequential_record_ids_when_missing(tmp_path: Path
         ]
     )
 
-    assert first.id == "rec_000001"
-    assert [record.id for record in records] == ["rec_000002", "rec_000003"]
+    assert first.id == "1"
+    assert [record.id for record in records] == ["2", "3"]
+
+def test_add_artifacts_rejects_record_id_in_batch_input(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="artifacts"))
+
+    try:
+        catalog.add_artifacts(
+            [
+                {
+                    "record_id": "10",
+                    "record_type": "external_reference",
+                    "locator": ArtifactLocator.path("/tmp/data/first.nc"),
+                },
+            ]
+        )
+    except ValueError as exc:
+        assert "must not supply record_id" in str(exc)
+        assert "artifact batch item 0" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("Expected record_id rejection for batch input")

@@ -275,8 +275,6 @@ def build_catalog(
             discovered_paths[str(path)] = path
 
     all_paths = list(discovered_paths.values())
-    existing_record_number = _max_record_number(catalog)
-    next_record_number = existing_record_number + 1
     batch_size = 250
     skipped: list[Path] = []
     added_count = 0
@@ -306,7 +304,6 @@ def build_catalog(
 
             pending_artifacts.append(
                 {
-                    "record_id": f"rec_{next_record_number:06d}",
                     "record_type": "external_reference",
                     "locator": ArtifactLocator.path(path),
                     "metadata": metadata.to_user_metadata(),
@@ -314,7 +311,6 @@ def build_catalog(
                     "suffixes": path.suffixes,
                 }
             )
-            next_record_number += 1
 
             if len(pending_artifacts) >= batch_size:
                 catalog.add_artifacts(pending_artifacts)
@@ -328,19 +324,6 @@ def build_catalog(
             added_count += len(pending_artifacts)
 
     return catalog, added_count, skipped
-
-
-def _max_record_number(catalog: Catalog) -> int:
-    """Return the largest existing sequential record number in the catalog."""
-    max_number = 0
-    for record in catalog.repository.all():
-        if not record.id.startswith("rec_"):
-            continue
-        try:
-            max_number = max(max_number, int(record.id.split("_", 1)[1]))
-        except ValueError:
-            continue
-    return max_number
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

@@ -195,12 +195,13 @@ def search(
     table.add_column("path")
 
     for record in results:
+        resolved_path = record.path()
         table.add_row(
             record.id,
             str(record.user_metadata.get("title", "")),
             str(record.user_metadata.get("product", "")),
             str(record.user_metadata.get("species", "")),
-            "" if record.path() is None else str(record.path()),
+            "" if resolved_path is None else str(resolved_path),
         )
 
     console.print(f"{len(results)} result(s)")

@@ -10,6 +10,9 @@ from ogcat.models import CatalogRecord
 class CatalogRepository(Protocol):
     """Abstract storage for catalog records."""
 
+    def allocate_record_ids(self, count: int = 1) -> list[str]:
+        """Allocate one or more new record ids."""
+
     def insert(self, record: CatalogRecord) -> None:
         """Insert a new record."""
 

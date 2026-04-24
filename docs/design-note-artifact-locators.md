@@ -49,6 +49,10 @@ break in record shape.
 `record_type` and `locator`. That keeps the current managed-file path simple while creating a small
 entry point for future non-file records.
 
+Artifact ids remain present on records and in CLI lookup, but they are now repository-generated.
+With the TinyDB backend, these ids follow TinyDB's document-id sequence. `add_artifact(...)`
+and `add_artifacts(...)` do not accept caller-supplied record ids.
+
 ## Intentionally Out Of Scope
 
 This pass does not implement:
