@@ -2,6 +2,13 @@
 
 from ogcat.catalog import Catalog
 from ogcat.models import ArtifactLocator, CatalogRecord, MetadataFieldDescription
-from ogcat.spec import CatalogSpec
+from ogcat.spec import CatalogSpec, RecordSchema
 
-__all__ = ["ArtifactLocator", "Catalog", "CatalogRecord", "CatalogSpec", "MetadataFieldDescription"]
+__all__ = [
+    "ArtifactLocator",
+    "Catalog",
+    "CatalogRecord",
+    "CatalogSpec",
+    "MetadataFieldDescription",
+    "RecordSchema",
+]

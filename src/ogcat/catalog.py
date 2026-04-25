@@ -12,7 +12,7 @@ from ogcat.extractors import extract_derived_metadata
 from ogcat.models import ArtifactLocator, CatalogRecord, JsonValue, MetadataDict
 from ogcat.naming import build_naming_context, render_storage_location
 from ogcat.repository import CatalogRepository
-from ogcat.spec import CatalogSpec
+from ogcat.spec import CatalogSpec, RecordSchema
 from ogcat.tinydb_repository import TinyDbCatalogRepository
 
 
@@ -47,10 +47,14 @@ class Catalog:
         path: str | Path,
         metadata: MetadataDict | None = None,
         operation: str | None = None,
+        record_type: str | None = None,
     ) -> CatalogRecord:
         """Add a file to the catalog using managed copy or move."""
         source = Path(path).expanduser().resolve()
         metadata = metadata or {}
+        schema = self._select_schema(record_type, require_known=record_type is not None)
+        self._validate_metadata(schema=schema, metadata=metadata, record_type=record_type)
+        resolved_record_type = "managed_file" if record_type is None else record_type
         chosen_operation = operation or self.spec.default_operation
         if chosen_operation not in {"copy", "move"}:
             raise ValueError(f"Unsupported operation: {chosen_operation}")
@@ -58,7 +62,7 @@ class Catalog:
         timestamp = _utc_timestamp()
         date_added = timestamp[:10]
         draft_record = self._build_artifact_record(
-            record_type="managed_file",
+            record_type=resolved_record_type,
             locator=ArtifactLocator(kind="opaque", value=""),
             metadata=metadata,
             storage_mode=chosen_operation,
@@ -81,8 +85,8 @@ class Catalog:
             files_root = self.root / self.spec.files_root
             target, rel_path, resolved_filename = render_storage_location(
                 files_root=files_root,
-                directory_template=self.spec.directory_template,
-                filename_template=self.spec.filename_template,
+                directory_template=schema.directory_template or self.spec.directory_template,
+                filename_template=schema.filename_template or self.spec.filename_template,
                 context=context,
             )
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -99,7 +103,7 @@ class Catalog:
             locator = ArtifactLocator.path(target, relative_path=rel_path)
             record = self._build_artifact_record(
                 record_id=record_id,
-                record_type="managed_file",
+                record_type=resolved_record_type,
                 locator=locator,
                 metadata=metadata,
                 storage_mode=storage_mode,
@@ -108,8 +112,9 @@ class Catalog:
                 suffixes=source.suffixes,
                 derived_metadata=derived_metadata,
                 naming_metadata={
-                    "directory_template": self.spec.directory_template,
-                    "filename_template": self.spec.filename_template,
+                    "record_schema": "default" if record_type is None else record_type,
+                    "directory_template": schema.directory_template or self.spec.directory_template,
+                    "filename_template": schema.filename_template or self.spec.filename_template,
                     "resolved_filename": resolved_filename,
                 },
                 time_added=timestamp,
@@ -144,6 +149,8 @@ class Catalog:
         ingest convenience wrapper that prepares a path-backed locator and then
         delegates here.
         """
+        schema = self._select_schema(record_type, require_known=False)
+        self._validate_metadata(schema=schema, metadata=metadata or {}, record_type=record_type)
         record = self._build_artifact_record(
             record_type=record_type,
             locator=locator,
@@ -179,11 +186,19 @@ class Catalog:
             except ValueError as exc:
                 raise ValueError(f"artifact batch item {index}: invalid locator: {exc}") from exc
 
+            record_type = str(validated["record_type"])
+            metadata = validated.get("metadata")  # type: ignore[assignment]
+            schema = self._select_schema(record_type, require_known=False)
+            self._validate_metadata(
+                schema=schema,
+                metadata={} if metadata is None else metadata,  # type: ignore[arg-type]
+                record_type=record_type,
+            )
             records.append(
                 self._build_artifact_record(
-                    record_type=str(validated["record_type"]),
+                    record_type=record_type,
                     locator=locator,
-                    metadata=validated.get("metadata"),  # type: ignore[arg-type]
+                    metadata=metadata,  # type: ignore[arg-type]
                     storage_mode=(
                         None if validated.get("storage_mode") is None else str(validated["storage_mode"])
                     ),
@@ -236,11 +251,21 @@ class Catalog:
             "field_resolution_order": list(self.spec.field_resolution_order),
             "record_count": len(self.repository.all()),
             "has_metadata_fields": bool(self.spec.metadata_fields),
+            "record_schemas": self.list_record_schemas(),
         }
 
-    def list_metadata_fields(self) -> list[dict[str, JsonValue]]:
+    def list_metadata_fields(self, record_type: str | None = None) -> list[dict[str, JsonValue]]:
         """Return serialisable metadata field descriptions."""
-        return [field_description.to_dict() for field_description in self.spec.metadata_fields]
+        schema = self._select_schema(record_type, require_known=record_type is not None)
+        return [field_description.to_dict() for field_description in schema.metadata_fields]
+
+    def get_schema(self, record_type: str | None = None) -> dict[str, object]:
+        """Return a serialisable schema description."""
+        return self._select_schema(record_type, require_known=record_type is not None).to_dict()
+
+    def list_record_schemas(self) -> list[str]:
+        """Return available named record schema names."""
+        return self.spec.list_record_schemas()
 
     def get(self, record_id: str) -> CatalogRecord | None:
         """Get a record by id."""
@@ -294,6 +319,35 @@ class Catalog:
             derived_metadata={} if derived_metadata is None else dict(derived_metadata),
             naming_metadata={} if naming_metadata is None else dict(naming_metadata),
         )
+
+    def _select_schema(self, record_type: str | None, *, require_known: bool) -> RecordSchema:
+        """Select the schema that applies to a record."""
+        if record_type is None:
+            return self.spec.get_schema()
+        if record_type in self.spec.record_schemas:
+            return self.spec.get_schema(record_type)
+        if require_known:
+            raise ValueError(f"Unknown record schema: {record_type}")
+        return self.spec.get_schema()
+
+    def _validate_metadata(
+        self,
+        *,
+        schema: RecordSchema,
+        metadata: MetadataDict,
+        record_type: str | None,
+    ) -> None:
+        """Apply lightweight required-field validation for the selected schema."""
+        missing = [field_name for field_name in schema.required_field_names() if field_name not in metadata]
+        if not missing:
+            return
+        schema_name = (
+            record_type
+            if record_type is not None and record_type in self.spec.record_schemas
+            else "default"
+        )
+        joined = ", ".join(missing)
+        raise ValueError(f"Missing required metadata for schema {schema_name}: {joined}")
 
 
 def _utc_timestamp() -> str:
