@@ -51,7 +51,7 @@ class Catalog:
     ) -> CatalogRecord:
         """Add a file to the catalog using managed copy or move."""
         source = Path(path).expanduser().resolve()
-        metadata = metadata or {}
+        metadata = {} if metadata is None else metadata
         schema = self._select_schema(record_type, require_known=record_type is not None)
         self._validate_metadata(schema=schema, metadata=metadata, record_type=record_type)
         resolved_record_type = "managed_file" if record_type is None else record_type
@@ -152,7 +152,11 @@ class Catalog:
         delegates here.
         """
         schema = self._select_schema(record_type, require_known=False)
-        self._validate_metadata(schema=schema, metadata=metadata or {}, record_type=record_type)
+        self._validate_metadata(
+            schema=schema,
+            metadata={} if metadata is None else metadata,
+            record_type=record_type,
+        )
         record = self._build_artifact_record(
             record_type=record_type,
             locator=locator,

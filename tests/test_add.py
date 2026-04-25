@@ -215,6 +215,21 @@ def test_add_file_enforces_required_metadata_for_selected_schema(tmp_path: Path)
     assert catalog.describe()["record_count"] == 0
 
 
+def test_add_file_rejects_falsy_non_dict_metadata(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "example.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="files"))
+
+    with pytest.raises(TypeError, match="Metadata for schema default must be a dictionary, got list"):
+        catalog.add_file(source, metadata=[])  # type: ignore[arg-type]
+
+    assert catalog.describe()["record_count"] == 0
+
+
 def test_add_artifact_uses_default_schema_required_fields(tmp_path: Path) -> None:
     root = tmp_path / "catalog"
     catalog = Catalog.create(
@@ -238,6 +253,20 @@ def test_add_artifact_uses_default_schema_required_fields(tmp_path: Path) -> Non
             record_type="external_reference",
             locator=ArtifactLocator(kind="uri", value="s3://bucket/example.zarr"),
         )
+
+
+def test_add_artifact_rejects_falsy_non_dict_metadata(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="artifacts"))
+
+    with pytest.raises(TypeError, match="Metadata for schema default must be a dictionary, got str"):
+        catalog.add_artifact(
+            record_type="external_reference",
+            locator=ArtifactLocator(kind="uri", value="s3://bucket/example.zarr"),
+            metadata="",  # type: ignore[arg-type]
+        )
+
+    assert catalog.describe()["record_count"] == 0
 
 
 def test_add_file_does_not_truncate_fractional_year_metadata_for_naming(tmp_path: Path) -> None:
