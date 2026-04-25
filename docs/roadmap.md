@@ -25,9 +25,11 @@ Today each record assumes a stored file path. A next step would be to separate "
 
 ### Typed or Per-Record Schemas
 
-Future work: add optional typed schemas for record classes or catalog-defined record groups.
+Current direction: keep a broad `default_schema` plus optional named schemas for record types.
 
-Today `metadata_fields` in `catalog.json` are descriptive only. A likely next step is to support stricter schema definitions where needed, while keeping unstructured metadata possible for lightweight use cases. This should be additive and should not force domain-specific validation into the core package.
+Schemas remain lightweight: they describe expected metadata fields and naming templates, and only
+required-field presence is validated at ingest. Rich type validation, automatic dispatch, and
+domain-specific built-in schemas remain out of scope for the catalog core.
 
 ### Reader Hooks
 
@@ -52,7 +54,7 @@ The current implementation assumes managed ingest into the catalog's own `files/
 Later work may include:
 
 - broader artefact support beyond managed files
-- typed schemas associated with record types
+- richer schema behavior where it stays lightweight
 - reader and manager integration points
 - scan or import workflows for existing datasets
 

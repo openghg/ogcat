@@ -5,7 +5,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from ogcat import Catalog, CatalogSpec, MetadataFieldDescription
+from ogcat import Catalog, CatalogSpec, MetadataFieldDescription, RecordSchema
 from ogcat.cli import app
 from ogcat.models import ArtifactLocator, CatalogRecord
 
@@ -37,7 +37,10 @@ def _create_catalog(tmp_path: Path, *, with_fields: bool = True) -> Catalog:
     )
     catalog = Catalog.create(
         tmp_path / "catalog",
-        CatalogSpec(catalog_name="fluxes", metadata_fields=metadata_fields),
+        CatalogSpec(
+            catalog_name="fluxes",
+            default_schema=RecordSchema(metadata_fields=metadata_fields),
+        ),
     )
     source = tmp_path / "anthropogenic.202401.nc"
     source.write_text("dummy", encoding="utf-8")

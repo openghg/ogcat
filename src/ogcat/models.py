@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TypeAlias, cast
 
@@ -19,19 +19,30 @@ class MetadataFieldDescription:
     description: str
     example: JsonValue | None = None
     required: bool = False
+    value_types: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, JsonValue]:
         """Convert the field description to a plain dictionary."""
-        return asdict(self)
+        payload: dict[str, JsonValue] = {
+            "name": self.name,
+            "description": self.description,
+            "example": self.example,
+            "required": self.required,
+        }
+        if self.value_types:
+            payload["type"] = list(self.value_types)
+        return payload
 
     @classmethod
     def from_dict(cls, data: dict[str, JsonValue]) -> MetadataFieldDescription:
         """Build a field description from a plain dictionary."""
+        value_types = data.get("type", [])
         return cls(
             name=str(data["name"]),
             description=str(data["description"]),
             example=data.get("example"),
             required=bool(data.get("required", False)),
+            value_types=_coerce_string_list(value_types),
         )
 
 

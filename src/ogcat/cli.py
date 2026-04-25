@@ -134,6 +134,10 @@ def add_command(
         ),
     ] = None,
     operation: Annotated[str | None, typer.Option("--operation", help="copy or move.")] = None,
+    record_type: Annotated[
+        str | None,
+        typer.Option("--record-type", help="Named record schema to use for this file."),
+    ] = None,
 ) -> None:
     """Add a file to the catalog."""
     extra_meta_items = list(ctx.args)
@@ -143,7 +147,15 @@ def add_command(
 
     active_catalog = _open_catalog_or_fail(catalog)
     metadata = _parse_meta_items([*meta_items, *extra_meta_items])
-    record = active_catalog.add_file(path, metadata=metadata, operation=operation)
+    try:
+        record = active_catalog.add_file(
+            path,
+            metadata=metadata,
+            operation=operation,
+            record_type=record_type,
+        )
+    except ValueError as exc:
+        _fail(str(exc))
     console.print(f"Added {record.id}: {record.stored_abspath}")
 
 
@@ -321,12 +333,20 @@ def info(
     )
     table.add_row("record count", str(description["record_count"]))
     table.add_row("metadata fields present", "yes" if description["has_metadata_fields"] else "no")
+    record_schemas = description["record_schemas"]
+    if not isinstance(record_schemas, list):
+        record_schemas = []
+    table.add_row("record schemas", ", ".join(str(item) for item in record_schemas) or "none")
     console.print(table)
 
 
 @app.command()
 def fields(
     catalog: Annotated[Path | None, typer.Option("--catalog", help="Catalog root.")] = None,
+    record_type: Annotated[
+        str | None,
+        typer.Option("--record-type", help="Named record schema whose fields should be shown."),
+    ] = None,
     json_mode: Annotated[
         bool,
         typer.Option("--json", help="Print metadata field descriptions as JSON."),
@@ -334,7 +354,10 @@ def fields(
 ) -> None:
     """List important metadata fields from the catalog spec."""
     active_catalog = _open_catalog_or_fail(catalog)
-    metadata_fields = active_catalog.list_metadata_fields()
+    try:
+        metadata_fields = active_catalog.list_metadata_fields(record_type=record_type)
+    except ValueError as exc:
+        _fail(str(exc))
 
     if json_mode:
         _print_json(metadata_fields)
@@ -347,13 +370,18 @@ def fields(
     table = Table(title="metadata fields", expand=True)
     table.add_column("name")
     table.add_column("required")
+    table.add_column("type")
     table.add_column("description", overflow="fold")
     table.add_column("example")
 
     for field_description in metadata_fields:
+        value_types = field_description.get("type", [])
+        if not isinstance(value_types, list):
+            value_types = []
         table.add_row(
             str(field_description["name"]),
             "yes" if field_description.get("required") else "no",
+            " | ".join(str(item) for item in value_types),
             str(field_description["description"]),
             "" if field_description.get("example") is None else json.dumps(field_description["example"]),
         )

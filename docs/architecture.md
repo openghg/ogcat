@@ -66,15 +66,17 @@ This is not a claim that multiple backends already exist. It only means the pack
 
 ## Why Templates and Metadata Live in `catalog.json`
 
-The naming templates, default operation, field resolution order, and descriptive metadata field definitions are stored in `catalog.json` so a catalog remains self-describing on disk.
+The default schema, optional named record schemas, default operation, and field resolution order
+are stored in `catalog.json` so a catalog remains self-describing on disk.
 
 That choice has a few practical benefits:
 
 - a catalog can be opened without separate application configuration
 - stored records can be interpreted in the context of the catalog that produced them
-- metadata field descriptions travel with the catalog instead of being hard-coded elsewhere
+- schema-level metadata field descriptions travel with the catalog instead of being hard-coded elsewhere
 
-`metadata_fields` are descriptive only today. They document important fields and examples, but they are not enforced as strict schemas.
+Schemas are intentionally lightweight. Required metadata fields are checked at ingest, but there
+is no deep type validation or domain-specific schema language in the catalog core.
 
 ## User Metadata and Derived Metadata
 
@@ -100,7 +102,7 @@ The present architecture is intentionally constrained.
 
 - richer locator handling is still future work; today the generalisation is intentionally minimal
 - TinyDB is the only supported backend
-- metadata field descriptions are not typed schemas and are not validated on ingest
+- metadata validation is intentionally shallow and limited to required-field presence
 - search supports exact equality, contains, and regex matching only
 - there are no reader hooks, manager APIs, or import or scan workflows yet
 - extractor support is limited and should not be described as a general reader framework

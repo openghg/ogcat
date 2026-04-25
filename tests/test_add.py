@@ -3,7 +3,7 @@ from typing import Any
 
 import pytest
 
-from ogcat import ArtifactLocator, Catalog, CatalogSpec
+from ogcat import ArtifactLocator, Catalog, CatalogSpec, MetadataFieldDescription, RecordSchema
 from ogcat.models import CatalogRecord
 
 
@@ -49,13 +49,15 @@ def test_add_file_supports_flux_style_templates_when_requested(tmp_path: Path) -
         root,
         CatalogSpec(
             catalog_name="fluxes",
-            directory_template=(
-                "{species|UNKNOWN_SPECIES}/{domain|GLOBAL}/{product|unknown}/"
-                "{version|unversioned}/{flux_type|misc}"
-            ),
-            filename_template=(
-                "{product}_{version}_{species}_{domain}_{flux_type}_{year_month_or_original_stem}"
-                "{original_suffix}"
+            default_schema=RecordSchema(
+                directory_template=(
+                    "{species|UNKNOWN_SPECIES}/{domain|GLOBAL}/{product|unknown}/"
+                    "{version|unversioned}/{flux_type|misc}"
+                ),
+                filename_template=(
+                    "{product}_{version}_{species}_{domain}_{flux_type}_{year_month_or_original_stem}"
+                    "{original_suffix}"
+                ),
             ),
         ),
     )
@@ -89,6 +91,184 @@ def test_add_file_supports_flux_style_templates_when_requested(tmp_path: Path) -
     assert record.storage_mode == "copy"
 
 
+def test_add_file_uses_record_type_schema_for_naming(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "anthropogenic.202401.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(
+        root,
+        CatalogSpec(
+            catalog_name="fluxes",
+            record_schemas={
+                "flux": RecordSchema(
+                    directory_template="{species}/{domain|GLOBAL}/{product}",
+                    filename_template="{product}_{species}_{year_month_or_original_stem}{original_suffix}",
+                    metadata_fields=[
+                        MetadataFieldDescription(
+                            name="species",
+                            description="Gas species.",
+                            required=True,
+                        ),
+                        MetadataFieldDescription(
+                            name="product",
+                            description="Product name.",
+                            required=True,
+                        ),
+                    ],
+                )
+            },
+        ),
+    )
+
+    record = catalog.add_file(
+        source,
+        record_type="flux",
+        metadata={"product": "CTE-HR", "species": "CO2", "year": 2024, "month": 1},
+    )
+
+    expected = root / "files" / "CO2" / "GLOBAL" / "CTE-HR" / "CTE-HR_CO2_202401.nc"
+    assert _stored_path(record) == expected
+    assert record.record_type == "flux"
+    assert record.naming_metadata["record_schema"] == "flux"
+    assert expected.exists()
+
+
+def test_add_file_preserves_empty_schema_directory_template(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "anthropogenic.202401.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(
+        root,
+        CatalogSpec(
+            catalog_name="fluxes",
+            record_schemas={
+                "flux": RecordSchema(
+                    directory_template="",
+                    filename_template="{product}{original_suffix}",
+                    metadata_fields=[
+                        MetadataFieldDescription(
+                            name="product",
+                            description="Product name.",
+                            required=True,
+                        )
+                    ],
+                )
+            },
+        ),
+    )
+
+    record = catalog.add_file(source, record_type="flux", metadata={"product": "CTE-HR"})
+
+    expected = root / "files" / "CTE-HR.nc"
+    assert _stored_path(record) == expected
+    assert record.naming_metadata["directory_template"] == ""
+    assert expected.exists()
+
+
+def test_add_file_rejects_unknown_explicit_record_schema(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "example.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="files"))
+
+    with pytest.raises(ValueError, match="Unknown record schema: flux"):
+        catalog.add_file(source, record_type="flux")
+
+
+def test_add_file_enforces_required_metadata_for_selected_schema(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "example.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(
+        root,
+        CatalogSpec(
+            catalog_name="fluxes",
+            record_schemas={
+                "flux": RecordSchema(
+                    metadata_fields=[
+                        MetadataFieldDescription(
+                            name="species",
+                            description="Gas species.",
+                            required=True,
+                        )
+                    ]
+                )
+            },
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Missing required metadata for schema flux: species"):
+        catalog.add_file(source, record_type="flux", metadata={})
+
+    assert catalog.describe()["record_count"] == 0
+
+
+def test_add_file_rejects_falsy_non_dict_metadata(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "example.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="files"))
+
+    with pytest.raises(TypeError, match="Metadata for schema default must be a dictionary, got list"):
+        catalog.add_file(source, metadata=[])  # type: ignore[arg-type]
+
+    assert catalog.describe()["record_count"] == 0
+
+
+def test_add_artifact_uses_default_schema_required_fields(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(
+        root,
+        CatalogSpec(
+            catalog_name="artifacts",
+            default_schema=RecordSchema(
+                metadata_fields=[
+                    MetadataFieldDescription(
+                        name="title",
+                        description="Short title.",
+                        required=True,
+                    )
+                ]
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Missing required metadata for schema default: title"):
+        catalog.add_artifact(
+            record_type="external_reference",
+            locator=ArtifactLocator(kind="uri", value="s3://bucket/example.zarr"),
+        )
+
+
+def test_add_artifact_rejects_falsy_non_dict_metadata(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="artifacts"))
+
+    with pytest.raises(TypeError, match="Metadata for schema default must be a dictionary, got str"):
+        catalog.add_artifact(
+            record_type="external_reference",
+            locator=ArtifactLocator(kind="uri", value="s3://bucket/example.zarr"),
+            metadata="",  # type: ignore[arg-type]
+        )
+
+    assert catalog.describe()["record_count"] == 0
+
+
 def test_add_file_does_not_truncate_fractional_year_metadata_for_naming(tmp_path: Path) -> None:
     source_dir = tmp_path / "source"
     source_dir.mkdir()
@@ -100,7 +280,9 @@ def test_add_file_does_not_truncate_fractional_year_metadata_for_naming(tmp_path
         root,
         CatalogSpec(
             catalog_name="fluxes",
-            filename_template="{year_month_or_original_stem}{original_suffix}",
+            default_schema=RecordSchema(
+                filename_template="{year_month_or_original_stem}{original_suffix}",
+            ),
         ),
     )
 
@@ -156,13 +338,15 @@ def test_add_file_appends_numeric_suffix_on_collision(tmp_path: Path) -> None:
         root,
         CatalogSpec(
             catalog_name="fluxes",
-            directory_template=(
-                "{species|UNKNOWN_SPECIES}/{domain|GLOBAL}/{product|unknown}/"
-                "{version|unversioned}/{flux_type|misc}"
-            ),
-            filename_template=(
-                "{product}_{version}_{species}_{domain}_{flux_type}_{year_month_or_original_stem}"
-                "{original_suffix}"
+            default_schema=RecordSchema(
+                directory_template=(
+                    "{species|UNKNOWN_SPECIES}/{domain|GLOBAL}/{product|unknown}/"
+                    "{version|unversioned}/{flux_type|misc}"
+                ),
+                filename_template=(
+                    "{product}_{version}_{species}_{domain}_{flux_type}_{year_month_or_original_stem}"
+                    "{original_suffix}"
+                ),
             ),
         ),
     )
@@ -196,8 +380,10 @@ def test_add_file_collision_suffixing_preserves_full_extension(tmp_path: Path) -
         root,
         CatalogSpec(
             catalog_name="archives",
-            directory_template="{year_added}",
-            filename_template="bundle{original_suffix}",
+            default_schema=RecordSchema(
+                directory_template="{year_added}",
+                filename_template="bundle{original_suffix}",
+            ),
         ),
     )
 
@@ -410,6 +596,79 @@ def test_add_artifacts_raises_helpful_error_for_invalid_locator(tmp_path: Path) 
         assert "invalid locator" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("Expected locator validation error")
+
+
+def test_add_artifacts_rejects_non_dict_metadata_for_schema_validation(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(
+        root,
+        CatalogSpec(
+            catalog_name="artifacts",
+            default_schema=RecordSchema(
+                metadata_fields=[
+                    MetadataFieldDescription(
+                        name="title",
+                        description="Short title.",
+                        required=True,
+                    )
+                ]
+            ),
+        ),
+    )
+
+    with pytest.raises(
+        TypeError,
+        match="artifact batch item 0: Metadata for schema default must be a dictionary, got list",
+    ):
+        catalog.add_artifacts(
+            [
+                {
+                    "record_type": "external_reference",
+                    "locator": ArtifactLocator.path("/tmp/data/file.nc"),
+                    "metadata": ["not", "metadata"],
+                }
+            ]
+        )
+
+
+def test_add_artifacts_identifies_batch_item_for_missing_schema_metadata(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(
+        root,
+        CatalogSpec(
+            catalog_name="artifacts",
+            record_schemas={
+                "external_reference": RecordSchema(
+                    metadata_fields=[
+                        MetadataFieldDescription(
+                            name="title",
+                            description="Short title.",
+                            required=True,
+                        )
+                    ]
+                )
+            },
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="artifact batch item 1: Missing required metadata for schema external_reference: title",
+    ):
+        catalog.add_artifacts(
+            [
+                {
+                    "record_type": "external_reference",
+                    "locator": ArtifactLocator.path("/tmp/data/first.nc"),
+                    "metadata": {"title": "First"},
+                },
+                {
+                    "record_type": "external_reference",
+                    "locator": ArtifactLocator.path("/tmp/data/second.nc"),
+                    "metadata": {},
+                },
+            ]
+        )
 
 
 def test_add_artifacts_assigns_sequential_record_ids_when_missing(tmp_path: Path) -> None:

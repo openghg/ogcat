@@ -38,23 +38,22 @@ Fields:
 - `db_backend: str = "tinydb"`
 - `db_path: str = "db.json"`
 - `files_root: str = "files"`
-- `directory_template: str`
-- `filename_template: str`
 - `default_operation: Literal["copy", "move"] = "copy"`
 - `field_resolution_order: list[str] = ["top_level", "user_metadata", "derived_metadata"]`
-- `metadata_fields: list[MetadataFieldDescription] = []`
+- `default_schema: RecordSchema`
+- `record_schemas: dict[str, RecordSchema] = {}`
 
-Recommended defaults:
+Default schema naming templates:
 - `directory_template = "{year_added}/{original_stem}"`
 - `filename_template = "{title_slug|original_stem}{original_suffix}"`
 
-`metadata_fields` is descriptive only for now. Each entry is JSON-serialisable and human-readable:
+Each schema can define `metadata_fields`. Each entry is JSON-serialisable and human-readable:
 - `name: str`
 - `description: str`
 - `example: JSON value | null = null`
 - `required: bool = false`
 
-Flux-specific templates remain valid example templates:
+Flux-specific schemas remain valid examples:
 - `directory_template = "{species|UNKNOWN_SPECIES}/{domain|GLOBAL}/{product|unknown}/{version|unversioned}/{flux_type|misc}"`
 - `filename_template = "{product}_{version}_{species}_{domain}_{flux_type}_{year_month_or_original_stem}{original_suffix}"`
 
@@ -93,7 +92,7 @@ Metadata is split into:
 - `user_metadata`, and
 - `derived_metadata`.
 
-Catalog specifications may also describe important metadata through `metadata_fields`,
+Catalog schemas may also describe important metadata through `metadata_fields`,
 but this is not yet used for strict validation.
 
 Only JSON-serialisable values are supported.
@@ -201,12 +200,14 @@ Example:
 
 ```python
 from pathlib import Path
-from ogcat import Catalog, CatalogSpec
+from ogcat import Catalog, CatalogSpec, RecordSchema
 
 spec = CatalogSpec(
     catalog_name="fluxes",
-    directory_template="{species|UNKNOWN_SPECIES}/{domain|GLOBAL}/{product|unknown}/{version|unversioned}/{flux_type|misc}",
-    filename_template="{product}_{version}_{species}_{domain}_{flux_type}_{year_month_or_original_stem}{original_suffix}",
+    default_schema=RecordSchema(
+        directory_template="{species|UNKNOWN_SPECIES}/{domain|GLOBAL}/{product|unknown}/{version|unversioned}/{flux_type|misc}",
+        filename_template="{product}_{version}_{species}_{domain}_{flux_type}_{year_month_or_original_stem}{original_suffix}",
+    ),
 )
 
 catalog = Catalog.create("/tmp/fluxes", spec)
