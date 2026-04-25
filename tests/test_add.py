@@ -134,6 +134,41 @@ def test_add_file_uses_record_type_schema_for_naming(tmp_path: Path) -> None:
     assert expected.exists()
 
 
+def test_add_file_preserves_empty_schema_directory_template(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "anthropogenic.202401.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(
+        root,
+        CatalogSpec(
+            catalog_name="fluxes",
+            record_schemas={
+                "flux": RecordSchema(
+                    directory_template="",
+                    filename_template="{product}{original_suffix}",
+                    metadata_fields=[
+                        MetadataFieldDescription(
+                            name="product",
+                            description="Product name.",
+                            required=True,
+                        )
+                    ],
+                )
+            },
+        ),
+    )
+
+    record = catalog.add_file(source, record_type="flux", metadata={"product": "CTE-HR"})
+
+    expected = root / "files" / "CTE-HR.nc"
+    assert _stored_path(record) == expected
+    assert record.naming_metadata["directory_template"] == ""
+    assert expected.exists()
+
+
 def test_add_file_rejects_unknown_explicit_record_schema(tmp_path: Path) -> None:
     source_dir = tmp_path / "source"
     source_dir.mkdir()
@@ -524,6 +559,36 @@ def test_add_artifacts_raises_helpful_error_for_invalid_locator(tmp_path: Path) 
         assert "invalid locator" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("Expected locator validation error")
+
+
+def test_add_artifacts_rejects_non_dict_metadata_for_schema_validation(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(
+        root,
+        CatalogSpec(
+            catalog_name="artifacts",
+            default_schema=RecordSchema(
+                metadata_fields=[
+                    MetadataFieldDescription(
+                        name="title",
+                        description="Short title.",
+                        required=True,
+                    )
+                ]
+            ),
+        ),
+    )
+
+    with pytest.raises(TypeError, match="Metadata for schema default must be a dictionary, got list"):
+        catalog.add_artifacts(
+            [
+                {
+                    "record_type": "external_reference",
+                    "locator": ArtifactLocator.path("/tmp/data/file.nc"),
+                    "metadata": ["not", "metadata"],
+                }
+            ]
+        )
 
 
 def test_add_artifacts_assigns_sequential_record_ids_when_missing(tmp_path: Path) -> None:

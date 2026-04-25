@@ -57,8 +57,12 @@ class RecordSchema:
         """Return this schema with missing naming templates filled from a fallback schema."""
         return RecordSchema(
             description=self.description,
-            directory_template=self.directory_template or fallback.directory_template,
-            filename_template=self.filename_template or fallback.filename_template,
+            directory_template=(
+                fallback.directory_template if self.directory_template is None else self.directory_template
+            ),
+            filename_template=(
+                fallback.filename_template if self.filename_template is None else self.filename_template
+            ),
             metadata_fields=list(self.metadata_fields),
         )
 

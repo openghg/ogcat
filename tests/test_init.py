@@ -193,6 +193,7 @@ def test_catalog_schema_helpers_return_serialisable_values(tmp_path: Path) -> No
     )
 
     assert catalog.list_record_schemas() == ["flux"]
+    assert catalog.describe()["has_metadata_fields"] is True
     assert catalog.describe()["record_schemas"] == ["flux"]
     assert catalog.get_schema("flux")["metadata_fields"] == [
         {
@@ -203,3 +204,13 @@ def test_catalog_schema_helpers_return_serialisable_values(tmp_path: Path) -> No
         }
     ]
     assert catalog.list_metadata_fields("flux")[0]["name"] == "species"
+
+
+def test_record_schema_fallbacks_preserve_empty_templates() -> None:
+    schema = RecordSchema(directory_template="", filename_template="")
+    fallback = RecordSchema(directory_template="{year_added}", filename_template="{original_filename}")
+
+    resolved = schema.with_fallbacks(fallback)
+
+    assert resolved.directory_template == ""
+    assert resolved.filename_template == ""

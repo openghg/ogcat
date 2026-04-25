@@ -55,6 +55,8 @@ class Catalog:
         schema = self._select_schema(record_type, require_known=record_type is not None)
         self._validate_metadata(schema=schema, metadata=metadata, record_type=record_type)
         resolved_record_type = "managed_file" if record_type is None else record_type
+        directory_template = _template_or_default(schema.directory_template, self.spec.directory_template)
+        filename_template = _template_or_default(schema.filename_template, self.spec.filename_template)
         chosen_operation = operation or self.spec.default_operation
         if chosen_operation not in {"copy", "move"}:
             raise ValueError(f"Unsupported operation: {chosen_operation}")
@@ -85,8 +87,8 @@ class Catalog:
             files_root = self.root / self.spec.files_root
             target, rel_path, resolved_filename = render_storage_location(
                 files_root=files_root,
-                directory_template=schema.directory_template or self.spec.directory_template,
-                filename_template=schema.filename_template or self.spec.filename_template,
+                directory_template=directory_template,
+                filename_template=filename_template,
                 context=context,
             )
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -113,8 +115,8 @@ class Catalog:
                 derived_metadata=derived_metadata,
                 naming_metadata={
                     "record_schema": "default" if record_type is None else record_type,
-                    "directory_template": schema.directory_template or self.spec.directory_template,
-                    "filename_template": schema.filename_template or self.spec.filename_template,
+                    "directory_template": directory_template,
+                    "filename_template": filename_template,
                     "resolved_filename": resolved_filename,
                 },
                 time_added=timestamp,
@@ -250,7 +252,7 @@ class Catalog:
             "filename_template": self.spec.filename_template,
             "field_resolution_order": list(self.spec.field_resolution_order),
             "record_count": len(self.repository.all()),
-            "has_metadata_fields": bool(self.spec.metadata_fields),
+            "has_metadata_fields": self._has_metadata_fields(),
             "record_schemas": self.list_record_schemas(),
         }
 
@@ -334,18 +336,30 @@ class Catalog:
         self,
         *,
         schema: RecordSchema,
-        metadata: MetadataDict,
+        metadata: object,
         record_type: str | None,
     ) -> None:
         """Apply lightweight required-field validation for the selected schema."""
-        missing = [field_name for field_name in schema.required_field_names() if field_name not in metadata]
-        if not missing:
-            return
         schema_name = (
             record_type if record_type is not None and record_type in self.spec.record_schemas else "default"
         )
+        if not isinstance(metadata, dict):
+            raise TypeError(
+                f"Metadata for schema {schema_name} must be a dictionary, got {type(metadata).__name__}"
+            )
+        missing = [field_name for field_name in schema.required_field_names() if field_name not in metadata]
+        if not missing:
+            return
         joined = ", ".join(missing)
         raise ValueError(f"Missing required metadata for schema {schema_name}: {joined}")
+
+    def _has_metadata_fields(self) -> bool:
+        """Return whether any default or named schema describes metadata fields."""
+        if self.spec.metadata_fields:
+            return True
+        if self.spec.get_schema().metadata_fields:
+            return True
+        return any(schema.metadata_fields for schema in self.spec.record_schemas.values())
 
 
 def _utc_timestamp() -> str:
@@ -359,6 +373,11 @@ def _open_repository(root: Path, spec: CatalogSpec) -> CatalogRepository:
     if spec.db_backend != "tinydb":
         raise ValueError(f"Unsupported db_backend: {spec.db_backend}")
     return TinyDbCatalogRepository(root / spec.db_path)
+
+
+def _template_or_default(value: str | None, default: str) -> str:
+    """Return a template value, treating only None as missing."""
+    return default if value is None else value
 
 
 def _coerce_artifact_locator(value: object) -> ArtifactLocator:
