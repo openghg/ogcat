@@ -124,6 +124,23 @@ def test_catalog_spec_does_not_mutate_default_schema_input() -> None:
     assert spec.default_schema.filename_template == "{title_slug|original_stem}{original_suffix}"
 
 
+def test_catalog_spec_normalises_constructor_record_schema_keys() -> None:
+    spec = CatalogSpec(
+        catalog_name="files",
+        record_schemas={1: RecordSchema(metadata_fields=[])},  # type: ignore[dict-item]
+    )
+
+    assert spec.list_record_schemas() == ["1"]
+    assert spec.get_schema("1").directory_template == "{year_added}/{original_stem}"
+
+
+def test_record_schema_null_description_loads_as_empty_string() -> None:
+    schema = RecordSchema.from_dict({"description": None, "metadata_fields": []})
+
+    assert schema.description == ""
+    assert "description" not in schema.to_dict()
+
+
 def test_catalog_spec_get_schema_raises_value_error_for_unknown_schema() -> None:
     spec = CatalogSpec(catalog_name="files")
 

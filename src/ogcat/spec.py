@@ -43,7 +43,7 @@ class RecordSchema:
             for item in _coerce_object_list(data.get("metadata_fields"), field_name="metadata_fields")
         ]
         return cls(
-            description=str(data.get("description", "")),
+            description=_coerce_optional_string(data.get("description"), default=""),
             directory_template=(
                 None if data.get("directory_template") is None else str(data["directory_template"])
             ),
@@ -90,7 +90,7 @@ class CatalogSpec:
 
     def __post_init__(self) -> None:
         """Fill required defaults on the broad fallback schema."""
-        self.record_schemas = dict(self.record_schemas)
+        self.record_schemas = _coerce_record_schema_mapping(self.record_schemas)
         self.default_schema = self.default_schema.with_fallbacks(_default_record_schema())
 
     def to_dict(self) -> dict[str, object]:
@@ -200,11 +200,21 @@ def _coerce_record_schema_mapping(value: object) -> dict[str, RecordSchema]:
 
     schemas: dict[str, RecordSchema] = {}
     for record_type, raw_schema in value.items():
-        schema = _coerce_record_schema(raw_schema, field_name=f"record_schemas.{record_type}")
+        schema = _coerce_record_schema(
+            raw_schema,
+            field_name=f"record_schemas[{record_type!r}]",
+        )
         if schema is None:
-            raise TypeError(f"record_schemas.{record_type} must be a dictionary")
+            raise TypeError(f"record_schemas[{record_type!r}] must be a dictionary")
         schemas[str(record_type)] = schema
     return schemas
+
+
+def _coerce_optional_string(value: object, *, default: str) -> str:
+    """Coerce optional JSON string-like values without turning null into 'None'."""
+    if value is None:
+        return default
+    return str(value)
 
 
 def _coerce_object_list(value: object, *, field_name: str) -> list[object]:

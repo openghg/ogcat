@@ -587,7 +587,10 @@ def test_add_artifacts_rejects_non_dict_metadata_for_schema_validation(tmp_path:
         ),
     )
 
-    with pytest.raises(TypeError, match="Metadata for schema default must be a dictionary, got list"):
+    with pytest.raises(
+        TypeError,
+        match="artifact batch item 0: Metadata for schema default must be a dictionary, got list",
+    ):
         catalog.add_artifacts(
             [
                 {
@@ -595,6 +598,46 @@ def test_add_artifacts_rejects_non_dict_metadata_for_schema_validation(tmp_path:
                     "locator": ArtifactLocator.path("/tmp/data/file.nc"),
                     "metadata": ["not", "metadata"],
                 }
+            ]
+        )
+
+
+def test_add_artifacts_identifies_batch_item_for_missing_schema_metadata(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(
+        root,
+        CatalogSpec(
+            catalog_name="artifacts",
+            record_schemas={
+                "external_reference": RecordSchema(
+                    metadata_fields=[
+                        MetadataFieldDescription(
+                            name="title",
+                            description="Short title.",
+                            required=True,
+                        )
+                    ]
+                )
+            },
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="artifact batch item 1: Missing required metadata for schema external_reference: title",
+    ):
+        catalog.add_artifacts(
+            [
+                {
+                    "record_type": "external_reference",
+                    "locator": ArtifactLocator.path("/tmp/data/first.nc"),
+                    "metadata": {"title": "First"},
+                },
+                {
+                    "record_type": "external_reference",
+                    "locator": ArtifactLocator.path("/tmp/data/second.nc"),
+                    "metadata": {},
+                },
             ]
         )
 

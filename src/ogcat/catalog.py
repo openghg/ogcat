@@ -191,11 +191,16 @@ class Catalog:
             record_type = str(validated["record_type"])
             metadata = validated.get("metadata")  # type: ignore[assignment]
             schema = self._select_schema(record_type, require_known=False)
-            self._validate_metadata(
-                schema=schema,
-                metadata={} if metadata is None else metadata,  # type: ignore[arg-type]
-                record_type=record_type,
-            )
+            try:
+                self._validate_metadata(
+                    schema=schema,
+                    metadata={} if metadata is None else metadata,  # type: ignore[arg-type]
+                    record_type=record_type,
+                )
+            except TypeError as exc:
+                raise TypeError(f"artifact batch item {index}: {exc}") from exc
+            except ValueError as exc:
+                raise ValueError(f"artifact batch item {index}: {exc}") from exc
             records.append(
                 self._build_artifact_record(
                     record_type=record_type,
