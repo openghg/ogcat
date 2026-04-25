@@ -203,13 +203,18 @@ def _coerce_record_schema_mapping(value: object) -> dict[str, RecordSchema]:
 
     schemas: dict[str, RecordSchema] = {}
     for record_type, raw_schema in value.items():
+        schema_name = str(record_type)
+        if schema_name in schemas:
+            raise ValueError(
+                f"record_schemas contains duplicate schema name after string coercion: {schema_name}"
+            )
         schema = _coerce_record_schema(
             raw_schema,
             field_name=f"record_schemas[{record_type!r}]",
         )
         if schema is None:
             raise TypeError(f"record_schemas[{record_type!r}] must be a dictionary")
-        schemas[str(record_type)] = schema
+        schemas[schema_name] = schema
     return schemas
 
 

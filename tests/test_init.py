@@ -150,6 +150,21 @@ def test_catalog_spec_normalises_constructor_record_schema_keys() -> None:
     assert spec.get_schema("1").directory_template == "{year_added}/{original_stem}"
 
 
+def test_catalog_spec_rejects_record_schema_key_collisions_after_string_coercion() -> None:
+    try:
+        CatalogSpec(
+            catalog_name="files",
+            record_schemas={
+                1: RecordSchema(description="Integer key."),  # type: ignore[dict-item]
+                "1": RecordSchema(description="String key."),
+            },
+        )
+    except ValueError as exc:
+        assert "duplicate schema name after string coercion: 1" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("Expected ValueError for colliding record schema keys")
+
+
 def test_catalog_spec_accepts_default_schema_dict_at_constructor_boundary() -> None:
     spec = CatalogSpec(
         catalog_name="files",
