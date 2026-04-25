@@ -103,6 +103,22 @@ def test_catalog_spec_round_trips_record_schemas(tmp_path: Path) -> None:
     assert reloaded == spec
 
 
+def test_metadata_field_description_serialises_type_information() -> None:
+    field_description = MetadataFieldDescription(
+        name="species",
+        description="Gas species.",
+        example="co2",
+        required=True,
+        value_types=["str", "species"],
+    )
+
+    payload = field_description.to_dict()
+    reloaded = MetadataFieldDescription.from_dict(payload)
+
+    assert payload["type"] == ["str", "species"]
+    assert reloaded == field_description
+
+
 def test_catalog_spec_rejects_malformed_list_fields() -> None:
     for field_name in ["field_resolution_order"]:
         try:

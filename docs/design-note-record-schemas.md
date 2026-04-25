@@ -6,6 +6,10 @@
 metadata fields, a directory template, a filename template, and a short
 description.
 
+Metadata field descriptions can also carry lightweight type names. These are
+serialised as human-readable schema hints for now; they are not enforced by the
+catalog core.
+
 `default_schema` is the source of truth for broad catalog behavior. Earlier MVP
 top-level fields such as `metadata_fields`, `directory_template`, and
 `filename_template` were removed before any real catalog migration burden existed,

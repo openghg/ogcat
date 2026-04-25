@@ -370,13 +370,18 @@ def fields(
     table = Table(title="metadata fields", expand=True)
     table.add_column("name")
     table.add_column("required")
+    table.add_column("type")
     table.add_column("description", overflow="fold")
     table.add_column("example")
 
     for field_description in metadata_fields:
+        value_types = field_description.get("type", [])
+        if not isinstance(value_types, list):
+            value_types = []
         table.add_row(
             str(field_description["name"]),
             "yes" if field_description.get("required") else "no",
+            " | ".join(str(item) for item in value_types),
             str(field_description["description"]),
             "" if field_description.get("example") is None else json.dumps(field_description["example"]),
         )
