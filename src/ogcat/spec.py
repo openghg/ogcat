@@ -91,10 +91,7 @@ class CatalogSpec:
     def __post_init__(self) -> None:
         """Fill required defaults on the broad fallback schema."""
         self.record_schemas = dict(self.record_schemas)
-        if self.default_schema.directory_template is None:
-            self.default_schema.directory_template = DEFAULT_DIRECTORY_TEMPLATE
-        if self.default_schema.filename_template is None:
-            self.default_schema.filename_template = DEFAULT_FILENAME_TEMPLATE
+        self.default_schema = self.default_schema.with_fallbacks(_default_record_schema())
 
     def to_dict(self) -> dict[str, object]:
         """Convert the spec to a serialisable dictionary."""
@@ -142,12 +139,12 @@ class CatalogSpec:
             record_type: Optional record type. When omitted, the broad default schema is returned.
 
         Raises:
-            KeyError: If a non-default record type has no schema.
+            ValueError: If a non-default record type has no schema.
         """
         if record_type is None:
             return self.default_schema
         if record_type not in self.record_schemas:
-            raise KeyError(f"Unknown record schema: {record_type}")
+            raise ValueError(f"Unknown record schema: {record_type}")
         return self.record_schemas[record_type].with_fallbacks(self.default_schema)
 
     def list_record_schemas(self) -> list[str]:

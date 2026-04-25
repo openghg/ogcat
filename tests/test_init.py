@@ -113,6 +113,28 @@ def test_catalog_spec_rejects_malformed_list_fields() -> None:
             raise AssertionError(f"Expected malformed {field_name} to be rejected")
 
 
+def test_catalog_spec_does_not_mutate_default_schema_input() -> None:
+    schema = RecordSchema(metadata_fields=[MetadataFieldDescription(name="title", description="Title.")])
+
+    spec = CatalogSpec(catalog_name="files", default_schema=schema)
+
+    assert schema.directory_template is None
+    assert schema.filename_template is None
+    assert spec.default_schema.directory_template == "{year_added}/{original_stem}"
+    assert spec.default_schema.filename_template == "{title_slug|original_stem}{original_suffix}"
+
+
+def test_catalog_spec_get_schema_raises_value_error_for_unknown_schema() -> None:
+    spec = CatalogSpec(catalog_name="files")
+
+    try:
+        spec.get_schema("missing")
+    except ValueError as exc:
+        assert "Unknown record schema: missing" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("Expected ValueError for unknown record schema")
+
+
 def test_catalog_describe_and_list_metadata_fields_return_serialisable_values(tmp_path: Path) -> None:
     root = tmp_path / "fluxes"
     spec = CatalogSpec(
