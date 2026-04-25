@@ -342,9 +342,7 @@ class Catalog:
         if not missing:
             return
         schema_name = (
-            record_type
-            if record_type is not None and record_type in self.spec.record_schemas
-            else "default"
+            record_type if record_type is not None and record_type in self.spec.record_schemas else "default"
         )
         joined = ", ".join(missing)
         raise ValueError(f"Missing required metadata for schema {schema_name}: {joined}")

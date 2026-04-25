@@ -25,9 +25,7 @@ class RecordSchema:
     def to_dict(self) -> dict[str, object]:
         """Convert the schema to a serialisable dictionary."""
         payload: dict[str, object] = {
-            "metadata_fields": [
-                field_description.to_dict() for field_description in self.metadata_fields
-            ],
+            "metadata_fields": [field_description.to_dict() for field_description in self.metadata_fields],
         }
         if self.description:
             payload["description"] = self.description
@@ -67,9 +65,7 @@ class RecordSchema:
     def required_field_names(self) -> list[str]:
         """Return required metadata field names for this schema."""
         return [
-            field_description.name
-            for field_description in self.metadata_fields
-            if field_description.required
+            field_description.name for field_description in self.metadata_fields if field_description.required
         ]
 
 
