@@ -24,26 +24,31 @@ def test_catalog_spec_round_trips_via_catalog_json(tmp_path: Path) -> None:
         catalog_name="fluxes",
         default_operation="move",
         field_resolution_order=["user_metadata", "top_level", "derived_metadata"],
-        metadata_fields=[
-            MetadataFieldDescription(
-                name="species",
-                description="Gas species name used for grouping and search.",
-                example="CO2",
-                required=True,
-            ),
-            MetadataFieldDescription(
-                name="product",
-                description="Upstream product identifier.",
-                example="CTE-HR",
-            ),
-        ],
+        default_schema=RecordSchema(
+            metadata_fields=[
+                MetadataFieldDescription(
+                    name="species",
+                    description="Gas species name used for grouping and search.",
+                    example="CO2",
+                    required=True,
+                ),
+                MetadataFieldDescription(
+                    name="product",
+                    description="Upstream product identifier.",
+                    example="CTE-HR",
+                ),
+            ]
+        ),
     )
 
     Catalog.create(root, spec)
     serialized = json.loads((root / "catalog.json").read_text(encoding="utf-8"))
     reloaded = CatalogSpec.read(root / "catalog.json")
 
-    assert serialized["metadata_fields"] == [
+    assert "metadata_fields" not in serialized
+    assert "directory_template" not in serialized
+    assert "filename_template" not in serialized
+    assert serialized["default_schema"]["metadata_fields"] == [
         {
             "name": "species",
             "description": "Gas species name used for grouping and search.",
@@ -58,34 +63,6 @@ def test_catalog_spec_round_trips_via_catalog_json(tmp_path: Path) -> None:
         },
     ]
     assert reloaded == spec
-
-
-def test_catalog_spec_preserves_legacy_top_level_schema_fields(tmp_path: Path) -> None:
-    root = tmp_path / "fluxes"
-    root.mkdir()
-    legacy_spec = {
-        "catalog_name": "fluxes",
-        "db_backend": "tinydb",
-        "db_path": "db.json",
-        "files_root": "files",
-        "directory_template": "{species}/{product}",
-        "filename_template": "{product}{original_suffix}",
-        "metadata_fields": [
-            {
-                "name": "species",
-                "description": "Gas species.",
-                "required": True,
-            }
-        ],
-    }
-    (root / "catalog.json").write_text(json.dumps(legacy_spec), encoding="utf-8")
-
-    spec = CatalogSpec.read(root / "catalog.json")
-
-    assert spec.directory_template == "{species}/{product}"
-    assert spec.filename_template == "{product}{original_suffix}"
-    assert spec.get_schema().directory_template == "{species}/{product}"
-    assert spec.get_schema().metadata_fields[0].required is True
 
 
 def test_catalog_spec_round_trips_record_schemas(tmp_path: Path) -> None:
@@ -127,7 +104,7 @@ def test_catalog_spec_round_trips_record_schemas(tmp_path: Path) -> None:
 
 
 def test_catalog_spec_rejects_malformed_list_fields() -> None:
-    for field_name in ["metadata_fields", "field_resolution_order"]:
+    for field_name in ["field_resolution_order"]:
         try:
             CatalogSpec.from_dict({"catalog_name": "fluxes", field_name: "not-a-list"})
         except TypeError as exc:
@@ -140,14 +117,16 @@ def test_catalog_describe_and_list_metadata_fields_return_serialisable_values(tm
     root = tmp_path / "fluxes"
     spec = CatalogSpec(
         catalog_name="fluxes",
-        metadata_fields=[
-            MetadataFieldDescription(
-                name="species",
-                description="Gas species name used for grouping and search.",
-                example="CO2",
-                required=True,
-            )
-        ],
+        default_schema=RecordSchema(
+            metadata_fields=[
+                MetadataFieldDescription(
+                    name="species",
+                    description="Gas species name used for grouping and search.",
+                    example="CO2",
+                    required=True,
+                )
+            ]
+        ),
     )
 
     catalog = Catalog.create(root, spec)

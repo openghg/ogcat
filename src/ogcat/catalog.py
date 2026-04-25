@@ -55,8 +55,8 @@ class Catalog:
         schema = self._select_schema(record_type, require_known=record_type is not None)
         self._validate_metadata(schema=schema, metadata=metadata, record_type=record_type)
         resolved_record_type = "managed_file" if record_type is None else record_type
-        directory_template = _template_or_default(schema.directory_template, self.spec.directory_template)
-        filename_template = _template_or_default(schema.filename_template, self.spec.filename_template)
+        directory_template = _require_template(schema.directory_template, field_name="directory_template")
+        filename_template = _require_template(schema.filename_template, field_name="filename_template")
         chosen_operation = operation or self.spec.default_operation
         if chosen_operation not in {"copy", "move"}:
             raise ValueError(f"Unsupported operation: {chosen_operation}")
@@ -241,6 +241,7 @@ class Catalog:
         """Return a simple serialisable summary of the catalog."""
         db_path = self.root / self.spec.db_path
         files_root = self.root / self.spec.files_root
+        default_schema = self.spec.get_schema()
         return {
             "catalog_name": self.spec.catalog_name,
             "root_path": str(self.root),
@@ -248,8 +249,8 @@ class Catalog:
             "database_path": str(db_path),
             "files_root": str(files_root),
             "default_operation": self.spec.default_operation,
-            "directory_template": self.spec.directory_template,
-            "filename_template": self.spec.filename_template,
+            "directory_template": default_schema.directory_template,
+            "filename_template": default_schema.filename_template,
             "field_resolution_order": list(self.spec.field_resolution_order),
             "record_count": len(self.repository.all()),
             "has_metadata_fields": self._has_metadata_fields(),
@@ -355,8 +356,6 @@ class Catalog:
 
     def _has_metadata_fields(self) -> bool:
         """Return whether any default or named schema describes metadata fields."""
-        if self.spec.metadata_fields:
-            return True
         if self.spec.get_schema().metadata_fields:
             return True
         return any(schema.metadata_fields for schema in self.spec.record_schemas.values())
@@ -375,9 +374,11 @@ def _open_repository(root: Path, spec: CatalogSpec) -> CatalogRepository:
     return TinyDbCatalogRepository(root / spec.db_path)
 
 
-def _template_or_default(value: str | None, default: str) -> str:
-    """Return a template value, treating only None as missing."""
-    return default if value is None else value
+def _require_template(value: str | None, *, field_name: str) -> str:
+    """Return a schema template that should have been filled by the spec."""
+    if value is None:
+        raise ValueError(f"Default schema is missing {field_name}")
+    return value
 
 
 def _coerce_artifact_locator(value: object) -> ArtifactLocator:

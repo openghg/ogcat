@@ -6,11 +6,10 @@
 metadata fields, a directory template, a filename template, and a short
 description.
 
-Backward compatibility is preserved by keeping the older top-level
-`metadata_fields`, `directory_template`, and `filename_template` fields on
-`CatalogSpec`. When older `catalog.json` files are read, those fields are used to
-construct the effective default schema. When a newer default schema is supplied,
-the legacy attributes remain available as compatibility accessors.
+`default_schema` is the source of truth for broad catalog behavior. Earlier MVP
+top-level fields such as `metadata_fields`, `directory_template`, and
+`filename_template` were removed before any real catalog migration burden existed,
+which keeps `CatalogSpec` smaller and avoids parallel compatibility state.
 
 For this first pass, record type and schema name are the same concept only where
 a named schema exists. `Catalog.add_file(..., record_type="flux")` selects the

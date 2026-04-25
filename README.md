@@ -20,7 +20,7 @@ adding files by copy or move, listing metadata field descriptions, and locating 
 ## Non-goals
 
 - domain-specific validation or workflow logic
-- strict typed schemas for records or metadata
+- domain-specific built-in schemas
 - in-place indexing of arbitrary existing directories
 - reader or manager APIs beyond the current small extractor layer
 - promising richer catalog backends or integrations that do not exist yet
@@ -29,7 +29,8 @@ adding files by copy or move, listing metadata field descriptions, and locating 
 
 `ogcat` is organised around a small catalog specification and a narrow catalog API.
 
-- Catalog spec: `catalog.json` stores the catalog name, storage layout templates, default ingest mode, field resolution order, and descriptive metadata field definitions.
+- Catalog spec: `catalog.json` stores the catalog name, default ingest mode, field resolution
+  order, and a default record schema with optional named schemas.
 - Repository abstraction: catalog records are stored through a repository protocol so the rest of the package does not depend directly on TinyDB details.
 - Records: each record stores reserved top-level fields plus `user_metadata`, `derived_metadata`,
   and `naming_metadata`. Records now also carry a small `record_type` and `locator` so the model
@@ -49,7 +50,7 @@ Each catalog root is self-describing:
   files/
 ```
 
-- `catalog.json`: catalog specification and descriptive metadata field definitions
+- `catalog.json`: catalog specification, default schema, and optional named record schemas
 - `db.json`: TinyDB-backed record store
 - `files/`: managed storage root for ingested files
 
@@ -176,7 +177,8 @@ For compatibility, managed local files still keep `stored_abspath` and `stored_r
 fields remain the simple path-facing surface for today's workflows while the locator model opens a
 path toward external references, directory-like stores, and future transform targets.
 
-`catalog.json` stores the naming templates and descriptive metadata field definitions so a catalog remains understandable without additional application state. `metadata_fields` are descriptive only today; they are not enforced as typed schemas.
+`catalog.json` stores a broad `default_schema` plus optional named `record_schemas`, so a catalog
+can document expected metadata and naming behavior without adding domain-specific framework code.
 
 ## Current Limitations
 
@@ -184,7 +186,7 @@ path toward external references, directory-like stores, and future transform tar
 - non-file record types are only partially modelled so far; readers, managers, and richer URI
   handling are still future work
 - derived metadata extraction is intentionally small and currently focused on optional netCDF summaries
-- there are no typed per-record schemas, readers, or manager bindings yet
+- reader and manager bindings are not implemented yet
 - richer readers, managers, and import workflows are future work
 
 ## Roadmap
@@ -193,7 +195,7 @@ The current direction is:
 
 - today: spec-driven file catalog with metadata, naming, and search
 - next: generalise from managed files to catalogued artefacts with clearer record typing and locator handling
-- later: typed schemas, reader hooks, manager bindings, and scan or import workflows
+- later: reader hooks, manager bindings, and scan or import workflows
 
 See [docs/architecture.md](docs/architecture.md),
 [docs/design-note-artifact-locators.md](docs/design-note-artifact-locators.md),

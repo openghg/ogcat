@@ -49,13 +49,15 @@ def test_add_file_supports_flux_style_templates_when_requested(tmp_path: Path) -
         root,
         CatalogSpec(
             catalog_name="fluxes",
-            directory_template=(
-                "{species|UNKNOWN_SPECIES}/{domain|GLOBAL}/{product|unknown}/"
-                "{version|unversioned}/{flux_type|misc}"
-            ),
-            filename_template=(
-                "{product}_{version}_{species}_{domain}_{flux_type}_{year_month_or_original_stem}"
-                "{original_suffix}"
+            default_schema=RecordSchema(
+                directory_template=(
+                    "{species|UNKNOWN_SPECIES}/{domain|GLOBAL}/{product|unknown}/"
+                    "{version|unversioned}/{flux_type|misc}"
+                ),
+                filename_template=(
+                    "{product}_{version}_{species}_{domain}_{flux_type}_{year_month_or_original_stem}"
+                    "{original_suffix}"
+                ),
             ),
         ),
     )
@@ -249,7 +251,9 @@ def test_add_file_does_not_truncate_fractional_year_metadata_for_naming(tmp_path
         root,
         CatalogSpec(
             catalog_name="fluxes",
-            filename_template="{year_month_or_original_stem}{original_suffix}",
+            default_schema=RecordSchema(
+                filename_template="{year_month_or_original_stem}{original_suffix}",
+            ),
         ),
     )
 
@@ -305,13 +309,15 @@ def test_add_file_appends_numeric_suffix_on_collision(tmp_path: Path) -> None:
         root,
         CatalogSpec(
             catalog_name="fluxes",
-            directory_template=(
-                "{species|UNKNOWN_SPECIES}/{domain|GLOBAL}/{product|unknown}/"
-                "{version|unversioned}/{flux_type|misc}"
-            ),
-            filename_template=(
-                "{product}_{version}_{species}_{domain}_{flux_type}_{year_month_or_original_stem}"
-                "{original_suffix}"
+            default_schema=RecordSchema(
+                directory_template=(
+                    "{species|UNKNOWN_SPECIES}/{domain|GLOBAL}/{product|unknown}/"
+                    "{version|unversioned}/{flux_type|misc}"
+                ),
+                filename_template=(
+                    "{product}_{version}_{species}_{domain}_{flux_type}_{year_month_or_original_stem}"
+                    "{original_suffix}"
+                ),
             ),
         ),
     )
@@ -345,8 +351,10 @@ def test_add_file_collision_suffixing_preserves_full_extension(tmp_path: Path) -
         root,
         CatalogSpec(
             catalog_name="archives",
-            directory_template="{year_added}",
-            filename_template="bundle{original_suffix}",
+            default_schema=RecordSchema(
+                directory_template="{year_added}",
+                filename_template="bundle{original_suffix}",
+            ),
         ),
     )
 

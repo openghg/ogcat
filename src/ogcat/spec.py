@@ -81,60 +81,31 @@ class CatalogSpec:
     db_backend: str = "tinydb"
     db_path: str = "db.json"
     files_root: str = "files"
-    directory_template: str = DEFAULT_DIRECTORY_TEMPLATE
-    filename_template: str = DEFAULT_FILENAME_TEMPLATE
     default_operation: Literal["copy", "move"] = "copy"
     field_resolution_order: list[str] = field(
         default_factory=lambda: ["top_level", "user_metadata", "derived_metadata"]
     )
-    metadata_fields: list[MetadataFieldDescription] = field(default_factory=list)
-    default_schema: RecordSchema | None = None
+    default_schema: RecordSchema = field(default_factory=lambda: _default_record_schema())
     record_schemas: dict[str, RecordSchema] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        """Keep legacy top-level defaults aligned with the explicit default schema."""
+        """Fill required defaults on the broad fallback schema."""
         self.record_schemas = dict(self.record_schemas)
-        if self.default_schema is None:
-            self.default_schema = RecordSchema(
-                directory_template=self.directory_template,
-                filename_template=self.filename_template,
-                metadata_fields=list(self.metadata_fields),
-            )
-            return
-
         if self.default_schema.directory_template is None:
-            self.default_schema.directory_template = self.directory_template
-        else:
-            self.directory_template = self.default_schema.directory_template
-
+            self.default_schema.directory_template = DEFAULT_DIRECTORY_TEMPLATE
         if self.default_schema.filename_template is None:
-            self.default_schema.filename_template = self.filename_template
-        else:
-            self.filename_template = self.default_schema.filename_template
-
-        if self.default_schema.metadata_fields:
-            self.metadata_fields = list(self.default_schema.metadata_fields)
-        else:
-            self.default_schema.metadata_fields = list(self.metadata_fields)
+            self.default_schema.filename_template = DEFAULT_FILENAME_TEMPLATE
 
     def to_dict(self) -> dict[str, object]:
         """Convert the spec to a serialisable dictionary."""
-        default_schema = self.default_schema or RecordSchema(
-            directory_template=self.directory_template,
-            filename_template=self.filename_template,
-            metadata_fields=list(self.metadata_fields),
-        )
         return {
             "catalog_name": self.catalog_name,
             "db_backend": self.db_backend,
             "db_path": self.db_path,
             "files_root": self.files_root,
-            "directory_template": self.directory_template,
-            "filename_template": self.filename_template,
             "default_operation": self.default_operation,
             "field_resolution_order": list(self.field_resolution_order),
-            "metadata_fields": [field_description.to_dict() for field_description in self.metadata_fields],
-            "default_schema": default_schema.to_dict(),
+            "default_schema": self.default_schema.to_dict(),
             "record_schemas": {
                 record_type: schema.to_dict() for record_type, schema in self.record_schemas.items()
             },
@@ -143,30 +114,14 @@ class CatalogSpec:
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> CatalogSpec:
         """Build a spec from a dictionary."""
-        metadata_fields = [
-            _coerce_metadata_field_description(item)
-            for item in _coerce_object_list(data.get("metadata_fields"), field_name="metadata_fields")
-        ]
         default_schema = _coerce_record_schema(data.get("default_schema"), field_name="default_schema")
         record_schemas = _coerce_record_schema_mapping(data.get("record_schemas"))
-
-        directory_template = str(data.get("directory_template", DEFAULT_DIRECTORY_TEMPLATE))
-        filename_template = str(data.get("filename_template", DEFAULT_FILENAME_TEMPLATE))
-        if default_schema is not None:
-            if "directory_template" not in data and default_schema.directory_template is not None:
-                directory_template = default_schema.directory_template
-            if "filename_template" not in data and default_schema.filename_template is not None:
-                filename_template = default_schema.filename_template
-            if "metadata_fields" not in data:
-                metadata_fields = list(default_schema.metadata_fields)
 
         return cls(
             catalog_name=str(data["catalog_name"]),
             db_backend=str(data.get("db_backend", "tinydb")),
             db_path=str(data.get("db_path", "db.json")),
             files_root=str(data.get("files_root", "files")),
-            directory_template=directory_template,
-            filename_template=filename_template,
             default_operation=data.get("default_operation", "copy"),  # type: ignore[arg-type]
             field_resolution_order=[
                 str(item)
@@ -176,8 +131,7 @@ class CatalogSpec:
                 )
             ]
             or ["top_level", "user_metadata", "derived_metadata"],
-            metadata_fields=metadata_fields,
-            default_schema=default_schema,
+            default_schema=default_schema or _default_record_schema(),
             record_schemas=record_schemas,
         )
 
@@ -190,16 +144,11 @@ class CatalogSpec:
         Raises:
             KeyError: If a non-default record type has no schema.
         """
-        default_schema = self.default_schema or RecordSchema(
-            directory_template=self.directory_template,
-            filename_template=self.filename_template,
-            metadata_fields=list(self.metadata_fields),
-        )
         if record_type is None:
-            return default_schema
+            return self.default_schema
         if record_type not in self.record_schemas:
             raise KeyError(f"Unknown record schema: {record_type}")
-        return self.record_schemas[record_type].with_fallbacks(default_schema)
+        return self.record_schemas[record_type].with_fallbacks(self.default_schema)
 
     def list_record_schemas(self) -> list[str]:
         """Return available named record schema names."""
@@ -223,6 +172,15 @@ def _coerce_metadata_field_description(value: object) -> MetadataFieldDescriptio
     if not isinstance(value, dict):
         raise TypeError("metadata_fields entries must be dictionaries")
     return MetadataFieldDescription.from_dict(value)  # type: ignore[arg-type]
+
+
+def _default_record_schema() -> RecordSchema:
+    """Return the broad default schema used for generic ingest."""
+    return RecordSchema(
+        description="Generic fallback schema for heterogeneous files.",
+        directory_template=DEFAULT_DIRECTORY_TEMPLATE,
+        filename_template=DEFAULT_FILENAME_TEMPLATE,
+    )
 
 
 def _coerce_record_schema(value: object, *, field_name: str) -> RecordSchema | None:

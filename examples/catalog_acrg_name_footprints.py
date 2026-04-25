@@ -49,7 +49,7 @@ from pathlib import Path
 
 from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn, TimeElapsedColumn
 
-from ogcat import ArtifactLocator, Catalog, CatalogSpec, MetadataFieldDescription
+from ogcat import ArtifactLocator, Catalog, CatalogSpec, MetadataFieldDescription, RecordSchema
 
 FOOTPRINT_FILE_RE = re.compile(
     r"^(?P<site>[A-Za-z0-9]+)[-_](?P<inlet>\d{1,4}m)agl"
@@ -256,7 +256,7 @@ def build_catalog(
     else:
         spec = CatalogSpec(
             catalog_name=catalog_name,
-            metadata_fields=_metadata_fields(),
+            default_schema=RecordSchema(metadata_fields=_metadata_fields()),
         )
         catalog = Catalog.create(catalog_root, spec)
 
