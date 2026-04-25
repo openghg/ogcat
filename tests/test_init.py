@@ -134,6 +134,34 @@ def test_catalog_spec_normalises_constructor_record_schema_keys() -> None:
     assert spec.get_schema("1").directory_template == "{year_added}/{original_stem}"
 
 
+def test_catalog_spec_accepts_default_schema_dict_at_constructor_boundary() -> None:
+    spec = CatalogSpec(
+        catalog_name="files",
+        default_schema={
+            "metadata_fields": [
+                {
+                    "name": "title",
+                    "description": "Short title.",
+                    "required": True,
+                }
+            ]
+        },  # type: ignore[arg-type]
+    )
+
+    assert spec.default_schema.directory_template == "{year_added}/{original_stem}"
+    assert spec.default_schema.metadata_fields[0].name == "title"
+    assert spec.default_schema.metadata_fields[0].required is True
+
+
+def test_catalog_spec_rejects_invalid_default_schema_at_constructor_boundary() -> None:
+    try:
+        CatalogSpec(catalog_name="files", default_schema="not-a-schema")  # type: ignore[arg-type]
+    except TypeError as exc:
+        assert "default_schema must be a dictionary" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("Expected TypeError for invalid default_schema")
+
+
 def test_record_schema_null_description_loads_as_empty_string() -> None:
     schema = RecordSchema.from_dict({"description": None, "metadata_fields": []})
 

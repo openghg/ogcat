@@ -91,7 +91,10 @@ class CatalogSpec:
     def __post_init__(self) -> None:
         """Fill required defaults on the broad fallback schema."""
         self.record_schemas = _coerce_record_schema_mapping(self.record_schemas)
-        self.default_schema = self.default_schema.with_fallbacks(_default_record_schema())
+        default_schema = _coerce_record_schema(self.default_schema, field_name="default_schema")
+        self.default_schema = (default_schema or _default_record_schema()).with_fallbacks(
+            _default_record_schema()
+        )
 
     def to_dict(self) -> dict[str, object]:
         """Convert the spec to a serialisable dictionary."""
