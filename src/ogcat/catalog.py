@@ -173,6 +173,8 @@ class Catalog:
             time_added=time_added,
         )
         if transaction is not None:
+            if transaction.repository is not self.repository:
+                raise ValueError("Transaction is bound to a different catalog repository.")
             return transaction.insert_staged_record(record)
         with self.transaction() as unit_of_work:
             persisted = unit_of_work.insert_staged_record(record)

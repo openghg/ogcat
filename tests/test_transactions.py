@@ -74,6 +74,43 @@ def test_commit_prevents_registered_rollback_actions_from_running(tmp_path: Path
     assert transaction.rollback_errors == []
 
 
+def test_transaction_rejects_rollback_registration_after_commit(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="artifacts"))
+
+    with catalog.transaction() as transaction:
+        transaction.commit()
+
+        with pytest.raises(RuntimeError, match="Cannot register rollback action after commit"):
+            transaction.register_rollback(lambda: None, description="too late")
+
+
+def test_transaction_rejects_record_staging_after_commit(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="artifacts"))
+
+    with catalog.transaction() as transaction:
+        transaction.commit()
+
+        with pytest.raises(RuntimeError, match="Cannot stage record after commit"):
+            transaction.insert_staged_record(_artifact_record())
+
+
+def test_add_artifact_rejects_transaction_from_another_catalog(tmp_path: Path) -> None:
+    first = Catalog.create(tmp_path / "first", CatalogSpec(catalog_name="first"))
+    second = Catalog.create(tmp_path / "second", CatalogSpec(catalog_name="second"))
+
+    with first.transaction() as transaction, pytest.raises(ValueError, match="different catalog repository"):
+        second.add_artifact(
+            record_type="external_reference",
+            locator=ArtifactLocator(kind="uri", value="s3://bucket/example.zarr"),
+            transaction=transaction,
+        )
+
+    assert first.repository.all() == []
+    assert second.repository.all() == []
+
+
 def test_rollback_action_failure_is_recorded_and_original_exception_remains_visible(
     tmp_path: Path,
 ) -> None:

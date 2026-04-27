@@ -106,6 +106,8 @@ class UnitOfWork:
         Returns:
             The registered rollback action.
         """
+        if self.state is OperationState.COMMITTED:
+            raise RuntimeError("Cannot register rollback action after commit.")
         if callable(action) and not hasattr(action, "undo"):
             rollback_action: RollbackAction = CallableRollbackAction(
                 description=description or getattr(action, "__name__", "rollback action"),
@@ -120,6 +122,8 @@ class UnitOfWork:
 
     def insert_staged_record(self, record: CatalogRecord) -> CatalogRecord:
         """Insert a staged record and delete it if the unit of work rolls back."""
+        if self.state is OperationState.COMMITTED:
+            raise RuntimeError("Cannot stage record after commit.")
         persisted = self.repository.insert(record)
         if persisted.id is None:
             raise RuntimeError("Repository returned a persisted record without an id.")
