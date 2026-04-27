@@ -1,7 +1,9 @@
 """Public package interface for ogcat."""
 
 from ogcat.catalog import Catalog
+from ogcat.hooks import HookManager, HookWarning, OperationContext
 from ogcat.models import ArtifactLocator, CatalogRecord, MetadataFieldDescription
+from ogcat.plugins import PluginRegistry
 from ogcat.spec import CatalogSpec, RecordSchema
 from ogcat.transactions import OperationState, RollbackFailure, UnitOfWork
 from ogcat.validation import (
@@ -18,8 +20,12 @@ __all__ = [
     "Catalog",
     "CatalogRecord",
     "CatalogSpec",
+    "HookManager",
+    "HookWarning",
     "MetadataFieldDescription",
     "OperationState",
+    "OperationContext",
+    "PluginRegistry",
     "RollbackFailure",
     "RecordSchema",
     "UnitOfWork",
