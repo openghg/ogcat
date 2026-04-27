@@ -82,9 +82,8 @@ class Catalog:
         source = Path(path).expanduser().resolve()
         metadata_input = {} if metadata is None else metadata
         schema = self._select_schema(record_type, require_known=record_type is not None)
-        if not isinstance(metadata_input, dict):
-            self._validate_metadata(schema=schema, metadata=metadata_input, record_type=record_type)
-        metadata = dict(metadata_input)
+        schema_name = self._schema_name(record_type)
+        metadata = _coerce_metadata_input(metadata_input, schema=schema, schema_name=schema_name)
         resolved_record_type = "managed_file" if record_type is None else record_type
         directory_template = _require_template(schema.directory_template, field_name="directory_template")
         filename_template = _require_template(schema.filename_template, field_name="filename_template")
@@ -224,9 +223,8 @@ class Catalog:
         metadata_input = {} if metadata is None else metadata
         derived_metadata = {} if derived_metadata is None else dict(derived_metadata)
         schema = self._select_schema(record_type, require_known=False)
-        if not isinstance(metadata_input, dict):
-            self._validate_metadata(schema=schema, metadata=metadata_input, record_type=record_type)
-        metadata = dict(metadata_input)
+        schema_name = self._schema_name(record_type)
+        metadata = _coerce_metadata_input(metadata_input, schema=schema, schema_name=schema_name)
         if transaction is not None:
             if transaction.repository is not self.repository:
                 raise ValueError("Transaction is bound to a different catalog repository.")
@@ -500,7 +498,7 @@ class Catalog:
             return persisted
         except Exception as exc:
             self.hook_manager.on_error(hook_context, exc)
-            if transaction.state is not OperationState.COMMITTED:
+            if commit and transaction.state is not OperationState.COMMITTED:
                 transaction.rollback(original_exception=exc)
                 self.hook_manager.on_rollback(hook_context, exc)
             raise
@@ -537,10 +535,14 @@ class Catalog:
         record_type: str | None,
     ) -> ValidationReport:
         """Return validation report for the selected schema."""
-        schema_name = (
-            record_type if record_type is not None and record_type in self.spec.record_schemas else "default"
-        )
+        schema_name = self._schema_name(record_type)
         return validate_metadata(metadata, schema, schema_name=schema_name)
+
+    def _schema_name(self, record_type: str | None) -> str:
+        """Return the validation schema name for a record type."""
+        if record_type is not None and record_type in self.spec.record_schemas:
+            return record_type
+        return "default"
 
     def _has_metadata_fields(self) -> bool:
         """Return whether any default or named schema describes metadata fields."""
@@ -584,6 +586,19 @@ def _metadata_with_hook_warnings(context: OperationContext) -> MetadataDict:
         warnings_metadata: list[JsonValue] = [warning.to_metadata() for warning in context.warnings]
         metadata["hook_warnings"] = warnings_metadata
     return metadata
+
+
+def _coerce_metadata_input(
+    metadata: object,
+    *,
+    schema: RecordSchema,
+    schema_name: str,
+) -> MetadataDict:
+    """Copy user metadata after preserving existing non-dictionary errors."""
+    if isinstance(metadata, dict):
+        return dict(metadata)
+    validate_metadata(metadata, schema, schema_name=schema_name).raise_for_errors()
+    raise TypeError(f"Metadata for schema {schema_name} must be a dictionary, got {type(metadata).__name__}")
 
 
 def _require_template(value: str | None, *, field_name: str) -> str:

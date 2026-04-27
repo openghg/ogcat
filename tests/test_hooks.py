@@ -14,6 +14,7 @@ from ogcat import (
     RecordSchema,
 )
 from ogcat.hooks import OperationContext
+from ogcat.transactions import OperationState
 from ogcat.validation import ValidationReport
 
 
@@ -195,3 +196,59 @@ def test_add_artifact_uses_hook_context_and_persists_metadata_mutations(tmp_path
     assert calls == ["add_artifact", "external_reference"]
     assert record.user_metadata["title"] == "External data"
     assert record.derived_metadata["locator_kind"] == "uri"
+
+
+def test_after_commit_hook_failure_does_not_fail_add_file(tmp_path: Path) -> None:
+    class FailingAfterCommitHook:
+        def after_commit(self, context: OperationContext) -> None:
+            raise RuntimeError("post-commit notification failed")
+
+    registry = PluginRegistry([FailingAfterCommitHook()])
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"), plugins=registry)
+    source = tmp_path / "committed.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    record = catalog.add_file(source)
+
+    assert record.id is not None
+    assert catalog.get(record.id) == record
+    assert Path(record.stored_abspath or "").exists()
+
+
+def test_after_commit_hook_failure_does_not_fail_add_artifact(tmp_path: Path) -> None:
+    class FailingAfterCommitHook:
+        def after_commit(self, context: OperationContext) -> None:
+            raise RuntimeError("post-commit notification failed")
+
+    registry = PluginRegistry([FailingAfterCommitHook()])
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"), plugins=registry)
+
+    record = catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/data.zarr"),
+    )
+
+    assert record.id is not None
+    assert catalog.get(record.id) == record
+
+
+def test_add_artifact_does_not_auto_rollback_caller_owned_transaction(tmp_path: Path) -> None:
+    class FailingAfterWriteHook:
+        def after_write_artifact(self, context: OperationContext) -> None:
+            raise RuntimeError("external transaction hook failure")
+
+    registry = PluginRegistry([FailingAfterWriteHook()])
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"), plugins=registry)
+
+    with catalog.transaction() as transaction:
+        with pytest.raises(RuntimeError, match="external transaction hook failure"):
+            catalog.add_artifact(
+                record_type="external_reference",
+                locator=ArtifactLocator(kind="uri", value="s3://bucket/data.zarr"),
+                transaction=transaction,
+            )
+
+        assert transaction.state is OperationState.STAGED
+        assert len(catalog.repository.all()) == 1
+        transaction.rollback()
+        assert catalog.repository.all() == []

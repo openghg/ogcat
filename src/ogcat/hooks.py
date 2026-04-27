@@ -257,10 +257,19 @@ class HookManager:
                 hook.before_commit(context)
 
     def after_commit(self, context: OperationContext) -> None:
-        """Dispatch ``after_commit`` hooks."""
+        """Dispatch ``after_commit`` hooks without failing committed work."""
         for hook in self._hooks:
             if isinstance(hook, AfterCommitHook):
-                hook.after_commit(context)
+                try:
+                    hook.after_commit(context)
+                except Exception as exc:
+                    context.add_warning(
+                        HookWarning(
+                            hook_name=type(hook).__name__,
+                            message=f"after_commit hook failed: {type(exc).__name__}: {exc}",
+                            code="hook.after_commit_failed",
+                        )
+                    )
 
     def on_error(self, context: OperationContext, error: BaseException) -> None:
         """Dispatch error hooks, preserving the original operation failure."""
