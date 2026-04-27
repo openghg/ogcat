@@ -129,7 +129,10 @@ def validate_schema(schema: RecordSchema, *, schema_name: str = "default") -> Va
                 path=(f"record_schemas.{schema_name}.metadata_fields.{field_index}.type.{type_index}"),
                 message=(f"Unsupported metadata type label for schema {schema_name}: {type_label}"),
                 code="schema.unsupported_type",
-                hint="Use one of: bool, date, datetime, dict, float, int, list[str], str.",
+                hint=(
+                    "Use one of: bool/boolean, date, datetime, dict/object, float/number, "
+                    "int/integer, list[str]/list[string], str/string."
+                ),
             )
     return report
 

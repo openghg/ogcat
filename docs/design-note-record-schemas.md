@@ -22,9 +22,10 @@ artifact records can still use arbitrary record types; they fall back to the
 default schema unless a matching named schema is present.
 
 Validation remains lightweight and schema-driven. Required metadata fields are
-checked when a record is added, and callers can use `ogcat.validate_metadata()`
-or `ogcat.validate_record()` to get structured validation reports for CLI output,
-tests, or plugin code.
+checked when a record is added. If a schema supplies `value_types`, those values
+are also validated on add and can reject records with incompatible metadata.
+Callers can use `ogcat.validate_metadata()` or `ogcat.validate_record()` to get
+structured validation reports for CLI output, tests, or plugin code.
 
 Unknown metadata is allowed by default so broad catalogs can stay free-form:
 
