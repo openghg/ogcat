@@ -109,24 +109,31 @@ class ValidationReport:
         raise ValueError(_summarize_errors(errors))
 
 
-def validate_schema(schema: RecordSchema, *, schema_name: str = "default") -> ValidationReport:
+def validate_schema(
+    schema: RecordSchema,
+    *,
+    schema_name: str = "default",
+    base_path: str | None = None,
+) -> ValidationReport:
     """Validate a record schema's validation hints.
 
     Args:
         schema: Schema to validate.
         schema_name: Name used in issue paths and messages.
+        base_path: Optional issue path prefix for the schema.
 
     Returns:
         Structured validation report.
     """
     report = ValidationReport()
+    schema_path = base_path or f"record_schemas.{schema_name}"
     for field_index, field_description in enumerate(schema.metadata_fields):
         for type_index, type_label in enumerate(field_description.value_types):
             normalized = _normalize_type_label(type_label)
             if normalized in _TYPE_ADAPTERS:
                 continue
             report.add(
-                path=(f"record_schemas.{schema_name}.metadata_fields.{field_index}.type.{type_index}"),
+                path=(f"{schema_path}.metadata_fields.{field_index}.type.{type_index}"),
                 message=(f"Unsupported metadata type label for schema {schema_name}: {type_label}"),
                 code="schema.unsupported_type",
                 hint=(
@@ -140,9 +147,15 @@ def validate_schema(schema: RecordSchema, *, schema_name: str = "default") -> Va
 def validate_spec(spec: CatalogSpec) -> ValidationReport:
     """Validate schema validation hints across a catalog spec."""
     report = ValidationReport()
-    report.extend(validate_schema(spec.default_schema, schema_name="default"))
+    report.extend(validate_schema(spec.default_schema, schema_name="default", base_path="default_schema"))
     for schema_name, schema in spec.record_schemas.items():
-        report.extend(validate_schema(schema, schema_name=schema_name))
+        report.extend(
+            validate_schema(
+                schema,
+                schema_name=schema_name,
+                base_path=f"record_schemas.{schema_name}",
+            )
+        )
     return report
 
 

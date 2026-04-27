@@ -164,6 +164,15 @@ def test_validate_schema_reports_unsupported_type_labels() -> None:
 def test_validate_spec_reports_unsupported_type_labels() -> None:
     spec = CatalogSpec(
         catalog_name="files",
+        default_schema=RecordSchema(
+            metadata_fields=[
+                MetadataFieldDescription(
+                    name="title",
+                    description="Short title.",
+                    value_types=["slug"],
+                )
+            ]
+        ),
         record_schemas={
             "flux": RecordSchema(
                 metadata_fields=[
@@ -180,7 +189,11 @@ def test_validate_spec_reports_unsupported_type_labels() -> None:
     report = validate_spec(spec)
 
     assert not report.ok
-    assert report.errors[0].code == "schema.unsupported_type"
+    assert [issue.path for issue in report.errors] == [
+        "default_schema.metadata_fields.0.type.0",
+        "record_schemas.flux.metadata_fields.0.type.0",
+    ]
+    assert {issue.code for issue in report.errors} == {"schema.unsupported_type"}
 
 
 def test_validate_record_uses_named_schema_when_available() -> None:
