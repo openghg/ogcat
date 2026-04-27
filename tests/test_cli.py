@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -10,6 +11,11 @@ from ogcat.cli import app
 from ogcat.models import ArtifactLocator, CatalogRecord
 
 runner = CliRunner()
+ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+def strip_ansi(text: str) -> str:
+    return ANSI_RE.sub("", text)
 
 
 def _record_id(record: CatalogRecord) -> str:
@@ -66,7 +72,7 @@ def test_search_json_output(tmp_path: Path) -> None:
     )
 
     assert result.exit_code == 0
-    payload = json.loads(result.stdout)
+    payload = json.loads(strip_ansi(result.stdout))
     assert [item["id"] for item in payload] == [_record_id(record)]
     assert payload[0]["user_metadata"]["species"] == "CO2"
 
@@ -90,11 +96,12 @@ def test_search_limit_caps_human_output(tmp_path: Path) -> None:
     )
 
     assert result.exit_code == 0
-    assert "3 result(s)" in result.stdout
-    assert "Showing 2 of 3 matches. Use --limit N, --all, or --json for more." in result.stdout
-    assert records[0].id in result.stdout
-    assert records[1].id in result.stdout
-    assert "record-2" not in result.stdout
+    stdout = strip_ansi(result.stdout)
+    assert "3 result(s)" in stdout
+    assert "Showing 2 of 3 matches. Use --limit N, --all, or --json for more." in stdout
+    assert records[0].id in stdout
+    assert records[1].id in stdout
+    assert "record-2" not in stdout
 
 
 def test_search_all_disables_default_cap(tmp_path: Path) -> None:
@@ -116,9 +123,10 @@ def test_search_all_disables_default_cap(tmp_path: Path) -> None:
     )
 
     assert result.exit_code == 0
-    assert "51 result(s)" in result.stdout
-    assert "Showing 50 of 51 matches" not in result.stdout
-    assert "record-50" in result.stdout
+    stdout = strip_ansi(result.stdout)
+    assert "51 result(s)" in stdout
+    assert "Showing 50 of 51 matches" not in stdout
+    assert "record-50" in stdout
 
 
 def test_search_default_cap_limits_human_output(tmp_path: Path) -> None:
@@ -137,10 +145,11 @@ def test_search_default_cap_limits_human_output(tmp_path: Path) -> None:
     result = runner.invoke(app, ["search", "--catalog", str(catalog.root), "--where", "species=CO2"])
 
     assert result.exit_code == 0
-    assert "51 result(s)" in result.stdout
-    assert "Showing 50 of 51 matches. Use --limit N, --all, or --json for more." in result.stdout
-    assert "record-49" in result.stdout
-    assert "record-50" not in result.stdout
+    stdout = strip_ansi(result.stdout)
+    assert "51 result(s)" in stdout
+    assert "Showing 50 of 51 matches. Use --limit N, --all, or --json for more." in stdout
+    assert "record-49" in stdout
+    assert "record-50" not in stdout
 
 
 def test_search_fields_selects_human_output_columns(tmp_path: Path) -> None:
@@ -153,15 +162,16 @@ def test_search_fields_selects_human_output_columns(tmp_path: Path) -> None:
     )
 
     assert result.exit_code == 0
-    assert "id" in result.stdout
-    assert "species" in result.stdout
-    assert "path" in result.stdout
-    assert _record_id(record) in result.stdout
-    assert "CO2" in result.stdout
-    assert "anthropogenic" in result.stdout
-    assert "files" in result.stdout
-    assert "product" not in result.stdout
-    assert "CTE-HR" not in result.stdout
+    stdout = strip_ansi(result.stdout)
+    assert "id" in stdout
+    assert "species" in stdout
+    assert "path" in stdout
+    assert _record_id(record) in stdout
+    assert "CO2" in stdout
+    assert "anthropogenic" in stdout
+    assert "files" in stdout
+    assert "product" not in stdout
+    assert "CTE-HR" not in stdout
 
 
 def test_search_fields_supports_dotted_paths_and_locator_uri(tmp_path: Path) -> None:
@@ -186,10 +196,11 @@ def test_search_fields_supports_dotted_paths_and_locator_uri(tmp_path: Path) -> 
     )
 
     assert result.exit_code == 0
-    assert "user_metadata.domain" in result.stdout
-    assert "locator.uri" in result.stdout
-    assert "EUROPE" in result.stdout
-    assert "s3://bucket/example.zarr" in result.stdout
+    stdout = strip_ansi(result.stdout)
+    assert "user_metadata.domain" in stdout
+    assert "locator.uri" in stdout
+    assert "EUROPE" in stdout
+    assert "s3://bucket/example.zarr" in stdout
 
 
 def test_search_json_ignores_fields_and_display_cap(tmp_path: Path) -> None:
@@ -222,7 +233,7 @@ def test_search_json_ignores_fields_and_display_cap(tmp_path: Path) -> None:
     )
 
     assert result.exit_code == 0
-    payload = json.loads(result.stdout)
+    payload = json.loads(strip_ansi(result.stdout))
     assert len(payload) == 51
     assert set(payload[0]) >= {"id", "locator", "user_metadata"}
     assert payload[0]["user_metadata"]["species"] == "CO2"
@@ -237,7 +248,7 @@ def test_search_rejects_limit_with_all(tmp_path: Path) -> None:
     )
 
     assert result.exit_code != 0
-    assert "Use either --all or --limit, not both." in result.output
+    assert "Use either --all or --limit, not both." in strip_ansi(result.output)
 
 
 def test_show_json_output(tmp_path: Path) -> None:
@@ -247,7 +258,7 @@ def test_show_json_output(tmp_path: Path) -> None:
     result = runner.invoke(app, ["show", _record_id(record), "--catalog", str(catalog.root), "--json"])
 
     assert result.exit_code == 0
-    payload = json.loads(result.stdout)
+    payload = json.loads(strip_ansi(result.stdout))
     assert payload["id"] == _record_id(record)
     assert payload["record_type"] == "managed_file"
     assert payload["locator"]["kind"] == "path"
@@ -260,9 +271,10 @@ def test_info_human_output(tmp_path: Path) -> None:
     result = runner.invoke(app, ["info", "--catalog", str(catalog.root)])
 
     assert result.exit_code == 0
-    assert "catalog info" in result.stdout
-    assert "fluxes" in result.stdout
-    assert "record count" in result.stdout
+    stdout = strip_ansi(result.stdout)
+    assert "catalog info" in stdout
+    assert "fluxes" in stdout
+    assert "record count" in stdout
 
 
 def test_info_json_output(tmp_path: Path) -> None:
@@ -271,7 +283,7 @@ def test_info_json_output(tmp_path: Path) -> None:
     result = runner.invoke(app, ["info", "--catalog", str(catalog.root), "--json"])
 
     assert result.exit_code == 0
-    payload = json.loads(result.stdout)
+    payload = json.loads(strip_ansi(result.stdout))
     assert payload["catalog_name"] == "fluxes"
     assert payload["record_count"] == 1
     assert payload["has_metadata_fields"] is True
@@ -283,9 +295,10 @@ def test_fields_human_output(tmp_path: Path) -> None:
     result = runner.invoke(app, ["fields", "--catalog", str(catalog.root)])
 
     assert result.exit_code == 0
-    assert "metadata fields" in result.stdout
-    assert "species" in result.stdout
-    assert "Gas species name used for grouping" in result.stdout
+    stdout = strip_ansi(result.stdout)
+    assert "metadata fields" in stdout
+    assert "species" in stdout
+    assert "Gas species name used for grouping" in stdout
 
 
 def test_fields_json_output(tmp_path: Path) -> None:
@@ -294,7 +307,7 @@ def test_fields_json_output(tmp_path: Path) -> None:
     result = runner.invoke(app, ["fields", "--catalog", str(catalog.root), "--json"])
 
     assert result.exit_code == 0
-    payload = json.loads(result.stdout)
+    payload = json.loads(strip_ansi(result.stdout))
     assert payload[0]["name"] == "species"
     assert payload[0]["required"] is True
 
@@ -305,7 +318,7 @@ def test_fields_human_output_handles_missing_field_descriptions(tmp_path: Path) 
     result = runner.invoke(app, ["fields", "--catalog", str(catalog.root)])
 
     assert result.exit_code == 0
-    assert "No metadata fields are defined in this catalog." in result.stdout
+    assert "No metadata fields are defined in this catalog." in strip_ansi(result.stdout)
 
 
 def test_add_accepts_multiple_metadata_items_after_single_meta_flag(tmp_path: Path) -> None:
@@ -362,14 +375,14 @@ def test_show_missing_record_returns_helpful_error(tmp_path: Path) -> None:
     result = runner.invoke(app, ["show", "missing", "--catalog", str(catalog.root)])
 
     assert result.exit_code == 1
-    assert "Error: Record not found: missing" in result.stderr
+    assert "Error: Record not found: missing" in strip_ansi(result.stderr)
 
 
 def test_missing_catalog_configuration_returns_helpful_error() -> None:
     result = runner.invoke(app, ["info"])
 
     assert result.exit_code != 0
-    assert "Provide --catalog or set OGCAT_CATALOG." in result.stderr
+    assert "Provide --catalog or set OGCAT_CATALOG." in strip_ansi(result.stderr)
 
 
 def test_search_paths_skips_non_path_backed_records(tmp_path: Path) -> None:
@@ -389,7 +402,7 @@ def test_search_paths_skips_non_path_backed_records(tmp_path: Path) -> None:
     )
 
     assert result.exit_code == 0
-    lines = [line for line in result.stdout.splitlines() if line.strip()]
+    lines = [line for line in strip_ansi(result.stdout).splitlines() if line.strip()]
     assert len(lines) == 1
     assert lines[0].endswith("source.nc")
 
@@ -405,5 +418,6 @@ def test_search_human_output_uses_empty_path_for_non_path_backed_records(tmp_pat
     result = runner.invoke(app, ["search", "--catalog", str(catalog.root), "--where", "species=CO2"])
 
     assert result.exit_code == 0
-    assert "Remote artifact" in result.stdout
-    assert "None" not in result.stdout
+    stdout = strip_ansi(result.stdout)
+    assert "Remote artifact" in stdout
+    assert "None" not in stdout
