@@ -502,13 +502,29 @@ def _open_or_create_catalog(catalog_root: Path, *, catalog_name: str, append: bo
         if not append and catalog.describe()["record_count"] != 0:
             raise ValueError("Catalog already exists and is not empty. Use --append to add records.")
         return catalog
-    spec = CatalogSpec(
-        catalog_name=catalog_name,
-        directory_template=DEFAULT_DIRECTORY_TEMPLATE,
-        filename_template=DEFAULT_FILENAME_TEMPLATE,
-        metadata_fields=metadata_fields(),
-    )
+    spec = _catalog_spec(catalog_name)
     return Catalog.create(catalog_root, spec)
+
+
+def _catalog_spec(catalog_name: str) -> CatalogSpec:
+    """Build a catalog spec while tolerating older ogcat template-less specs."""
+    try:
+        return CatalogSpec(
+            catalog_name=catalog_name,
+            directory_template=DEFAULT_DIRECTORY_TEMPLATE,
+            filename_template=DEFAULT_FILENAME_TEMPLATE,
+            metadata_fields=metadata_fields(),
+        )
+    except TypeError as exc:
+        if "unexpected keyword argument" not in str(exc):
+            raise
+
+    try:
+        return CatalogSpec(catalog_name=catalog_name, metadata_fields=metadata_fields())
+    except TypeError as exc:
+        if "unexpected keyword argument" not in str(exc):
+            raise
+    return CatalogSpec(catalog_name=catalog_name)
 
 
 def _relative_flux_path(path: Path, *, source_root: Path) -> Path:

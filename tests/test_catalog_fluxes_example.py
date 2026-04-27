@@ -23,6 +23,7 @@ build_symlink_view = catalog_fluxes.build_symlink_view
 derive_metadata = catalog_fluxes.derive_metadata
 discover_paths_from_listing = catalog_fluxes.discover_paths_from_listing
 parse_flux_metadata = catalog_fluxes.parse_flux_metadata
+catalog_spec = catalog_fluxes._catalog_spec
 
 
 def test_discover_paths_from_listing_skips_directory_entries(tmp_path: Path) -> None:
@@ -123,6 +124,20 @@ def test_archive_metadata_records_zip_members(tmp_path: Path) -> None:
         "members_sample": ["nested/a.nc", "nested/b.nc"],
         "total_uncompressed_size": 3,
     }
+
+
+def test_catalog_spec_tolerates_template_less_catalog_spec(monkeypatch: pytest.MonkeyPatch) -> None:
+    class TemplateLessCatalogSpec:
+        def __init__(self, catalog_name: str, metadata_fields: object | None = None) -> None:
+            self.catalog_name = catalog_name
+            self.metadata_fields = metadata_fields
+
+    monkeypatch.setattr(catalog_fluxes, "CatalogSpec", TemplateLessCatalogSpec)
+
+    spec = catalog_spec("fluxes")
+
+    assert spec.catalog_name == "fluxes"
+    assert spec.metadata_fields is not None
 
 
 def test_derive_metadata_records_enrichment_errors(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
