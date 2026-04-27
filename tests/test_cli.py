@@ -71,6 +71,175 @@ def test_search_json_output(tmp_path: Path) -> None:
     assert payload[0]["user_metadata"]["species"] == "CO2"
 
 
+def test_search_limit_caps_human_output(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
+    records = catalog.add_artifacts(
+        [
+            {
+                "record_type": "external_reference",
+                "locator": ArtifactLocator(kind="uri", value=f"s3://bucket/record-{index}.zarr"),
+                "metadata": {"species": "CO2", "title": f"record-{index}"},
+            }
+            for index in range(3)
+        ]
+    )
+
+    result = runner.invoke(
+        app,
+        ["search", "--catalog", str(catalog.root), "--where", "species=CO2", "--limit", "2"],
+    )
+
+    assert result.exit_code == 0
+    assert "3 result(s)" in result.stdout
+    assert "Showing 2 of 3 matches. Use --limit N, --all, or --json for more." in result.stdout
+    assert records[0].id in result.stdout
+    assert records[1].id in result.stdout
+    assert "record-2" not in result.stdout
+
+
+def test_search_all_disables_default_cap(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
+    catalog.add_artifacts(
+        [
+            {
+                "record_type": "external_reference",
+                "locator": ArtifactLocator(kind="uri", value=f"s3://bucket/record-{index}.zarr"),
+                "metadata": {"species": "CO2", "title": f"record-{index}"},
+            }
+            for index in range(51)
+        ]
+    )
+
+    result = runner.invoke(
+        app,
+        ["search", "--catalog", str(catalog.root), "--where", "species=CO2", "--all"],
+    )
+
+    assert result.exit_code == 0
+    assert "51 result(s)" in result.stdout
+    assert "Showing 50 of 51 matches" not in result.stdout
+    assert "record-50" in result.stdout
+
+
+def test_search_default_cap_limits_human_output(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
+    catalog.add_artifacts(
+        [
+            {
+                "record_type": "external_reference",
+                "locator": ArtifactLocator(kind="uri", value=f"s3://bucket/record-{index}.zarr"),
+                "metadata": {"species": "CO2", "title": f"record-{index}"},
+            }
+            for index in range(51)
+        ]
+    )
+
+    result = runner.invoke(app, ["search", "--catalog", str(catalog.root), "--where", "species=CO2"])
+
+    assert result.exit_code == 0
+    assert "51 result(s)" in result.stdout
+    assert "Showing 50 of 51 matches. Use --limit N, --all, or --json for more." in result.stdout
+    assert "record-49" in result.stdout
+    assert "record-50" not in result.stdout
+
+
+def test_search_fields_selects_human_output_columns(tmp_path: Path) -> None:
+    catalog = _create_catalog(tmp_path)
+    record = catalog.search()[0]
+
+    result = runner.invoke(
+        app,
+        ["search", "--catalog", str(catalog.root), "--where", "species=CO2", "--fields", "id,species,path"],
+    )
+
+    assert result.exit_code == 0
+    assert "id" in result.stdout
+    assert "species" in result.stdout
+    assert "path" in result.stdout
+    assert _record_id(record) in result.stdout
+    assert "CO2" in result.stdout
+    assert "anthropogenic" in result.stdout
+    assert "files" in result.stdout
+    assert "product" not in result.stdout
+    assert "CTE-HR" not in result.stdout
+
+
+def test_search_fields_supports_dotted_paths_and_locator_uri(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
+    catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/example.zarr"),
+        metadata={"species": "CO2", "domain": "EUROPE"},
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "search",
+            "--catalog",
+            str(catalog.root),
+            "--where",
+            "species=CO2",
+            "--fields",
+            "id,user_metadata.domain,locator.uri",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "user_metadata.domain" in result.stdout
+    assert "locator.uri" in result.stdout
+    assert "EUROPE" in result.stdout
+    assert "s3://bucket/example.zarr" in result.stdout
+
+
+def test_search_json_ignores_fields_and_display_cap(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
+    catalog.add_artifacts(
+        [
+            {
+                "record_type": "external_reference",
+                "locator": ArtifactLocator(kind="uri", value=f"s3://bucket/record-{index}.zarr"),
+                "metadata": {"species": "CO2", "title": f"record-{index}"},
+            }
+            for index in range(51)
+        ]
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "search",
+            "--catalog",
+            str(catalog.root),
+            "--where",
+            "species=CO2",
+            "--fields",
+            "id,,species",
+            "--limit",
+            "2",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert len(payload) == 51
+    assert set(payload[0]) >= {"id", "locator", "user_metadata"}
+    assert payload[0]["user_metadata"]["species"] == "CO2"
+
+
+def test_search_rejects_limit_with_all(tmp_path: Path) -> None:
+    catalog = _create_catalog(tmp_path)
+
+    result = runner.invoke(
+        app,
+        ["search", "--catalog", str(catalog.root), "--where", "species=CO2", "--limit", "1", "--all"],
+    )
+
+    assert result.exit_code != 0
+    assert "Use either --all or --limit, not both." in result.output
+
+
 def test_show_json_output(tmp_path: Path) -> None:
     catalog = _create_catalog(tmp_path)
     record = catalog.search()[0]

@@ -12,6 +12,8 @@ from rich.console import Console
 from rich.table import Table
 
 from ogcat.catalog import Catalog
+from ogcat.models import CatalogRecord
+from ogcat.search import flatten_lookup
 from ogcat.spec import CatalogSpec
 
 app = typer.Typer(
@@ -20,6 +22,8 @@ app = typer.Typer(
 )
 console = Console()
 error_console = Console(stderr=True)
+DEFAULT_SEARCH_LIMIT = 50
+DEFAULT_SEARCH_FIELDS = ["id", "title", "product", "species", "path"]
 
 
 def _fail(message: str, *, code: int = 1) -> NoReturn:
@@ -105,6 +109,52 @@ def _parse_key_value_options(items: list[str]) -> dict[str, str]:
     return parsed
 
 
+def _parse_fields_option(fields: str | None) -> list[str] | None:
+    """Parse a comma-separated display field list."""
+    if fields is None:
+        return None
+    parsed = [field.strip() for field in fields.split(",")]
+    if any(not field for field in parsed):
+        raise typer.BadParameter("--fields must be a comma-separated list of field names.")
+    return parsed
+
+
+def _resolve_display_field(
+    record: CatalogRecord,
+    field: str,
+    *,
+    resolution_order: list[str],
+) -> Any:
+    """Resolve a display field without changing search semantics."""
+    if field == "path":
+        return record.path()
+    if field == "locator.uri":
+        return record.locator.value if record.locator.kind == "uri" else None
+    return flatten_lookup(record, field, resolution_order=resolution_order)
+
+
+def _format_display_value(value: Any) -> str:
+    """Format a display value for table output."""
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, sort_keys=True)
+    return str(value)
+
+
+def _displayed_results(
+    results: list[CatalogRecord],
+    *,
+    limit: int | None,
+    all_results: bool,
+    json_mode: bool,
+) -> list[CatalogRecord]:
+    """Apply display-only result capping."""
+    if json_mode or all_results or limit is None:
+        return results
+    return results[:limit]
+
+
 @app.command()
 def init(
     root: Annotated[Path, typer.Argument(help="Catalog root directory.")],
@@ -180,7 +230,10 @@ def search(
     ] = False,
     json_mode: Annotated[
         bool,
-        typer.Option("--json", help="Print matching records as JSON."),
+        typer.Option(
+            "--json",
+            help="Print full matching records as JSON. Ignores --fields and default display cap.",
+        ),
     ] = False,
     ids_only: Annotated[
         bool,
@@ -190,9 +243,33 @@ def search(
         bool,
         typer.Option("--paths", help="Print only matching stored paths."),
     ] = False,
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", min=0, help="Cap displayed results. Does not affect --json output."),
+    ] = None,
+    all_results: Annotated[
+        bool,
+        typer.Option("--all", help="Show all results, disabling the default display cap."),
+    ] = False,
+    fields: Annotated[
+        str | None,
+        typer.Option(
+            "--fields",
+            help=(
+                "Comma-separated table fields. Supports flattened names and dotted paths. "
+                "Ignored with --json, --ids, and --paths."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Search records in a catalog."""
     _validate_output_flags(json_mode=json_mode, ids_only=ids_only, paths_only=paths_only)
+    if all_results and limit is not None:
+        raise typer.BadParameter("Use either --all or --limit, not both.")
+    display_limit = limit if limit is not None else DEFAULT_SEARCH_LIMIT
+    display_fields = DEFAULT_SEARCH_FIELDS
+    if not any([json_mode, ids_only, paths_only]):
+        display_fields = _parse_fields_option(fields) or DEFAULT_SEARCH_FIELDS
     active_catalog = _open_catalog_or_fail(catalog)
     results = active_catalog.search(
         where=_parse_meta_items([] if where is None else where),
@@ -205,13 +282,20 @@ def search(
         _print_json([record.to_dict() for record in results])
         return
 
+    shown_results = _displayed_results(
+        results,
+        limit=display_limit,
+        all_results=all_results,
+        json_mode=json_mode,
+    )
+
     if ids_only:
-        for record in results:
+        for record in shown_results:
             typer.echo(record.id)
         return
 
     if paths_only:
-        for record in results:
+        for record in shown_results:
             resolved = record.path()
             if resolved is not None:
                 typer.echo(str(resolved))
@@ -222,23 +306,29 @@ def search(
         return
 
     table = Table(title="ogcat search results")
-    table.add_column("id")
-    table.add_column("title")
-    table.add_column("product")
-    table.add_column("species")
-    table.add_column("path")
+    for field in display_fields:
+        table.add_column(field, overflow="fold")
 
-    for record in results:
-        resolved_path = record.path()
+    for record in shown_results:
         table.add_row(
-            record.id,
-            str(record.user_metadata.get("title", "")),
-            str(record.user_metadata.get("product", "")),
-            str(record.user_metadata.get("species", "")),
-            "" if resolved_path is None else str(resolved_path),
+            *[
+                _format_display_value(
+                    _resolve_display_field(
+                        record,
+                        field,
+                        resolution_order=active_catalog.spec.field_resolution_order,
+                    )
+                )
+                for field in display_fields
+            ]
         )
 
     console.print(f"{len(results)} result(s)")
+    if len(shown_results) < len(results):
+        console.print(
+            f"Showing {len(shown_results)} of {len(results)} matches. "
+            "Use --limit N, --all, or --json for more."
+        )
     console.print(table)
 
 
