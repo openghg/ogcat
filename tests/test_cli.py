@@ -99,8 +99,8 @@ def test_search_limit_caps_human_output(tmp_path: Path) -> None:
     stdout = strip_ansi(result.stdout)
     assert "3 result(s)" in stdout
     assert "Showing 2 of 3 matches. Use --limit N, --all, or --json for more." in stdout
-    assert records[0].id in stdout
-    assert records[1].id in stdout
+    assert _record_id(records[0]) in stdout
+    assert _record_id(records[1]) in stdout
     assert "record-2" not in stdout
 
 
