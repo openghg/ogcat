@@ -14,6 +14,7 @@ from ogcat.naming import build_naming_context, render_storage_location
 from ogcat.repository import CatalogRepository
 from ogcat.spec import CatalogSpec, RecordSchema
 from ogcat.tinydb_repository import TinyDbCatalogRepository
+from ogcat.validation import validate_metadata
 
 
 @dataclass(slots=True)
@@ -349,19 +350,11 @@ class Catalog:
         metadata: object,
         record_type: str | None,
     ) -> None:
-        """Apply lightweight required-field validation for the selected schema."""
+        """Apply validation for the selected schema."""
         schema_name = (
             record_type if record_type is not None and record_type in self.spec.record_schemas else "default"
         )
-        if not isinstance(metadata, dict):
-            raise TypeError(
-                f"Metadata for schema {schema_name} must be a dictionary, got {type(metadata).__name__}"
-            )
-        missing = [field_name for field_name in schema.required_field_names() if field_name not in metadata]
-        if not missing:
-            return
-        joined = ", ".join(missing)
-        raise ValueError(f"Missing required metadata for schema {schema_name}: {joined}")
+        validate_metadata(metadata, schema, schema_name=schema_name).raise_for_errors()
 
     def _has_metadata_fields(self) -> bool:
         """Return whether any default or named schema describes metadata fields."""

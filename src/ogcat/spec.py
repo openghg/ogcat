@@ -21,6 +21,7 @@ class RecordSchema:
     directory_template: str | None = None
     filename_template: str | None = None
     metadata_fields: list[MetadataFieldDescription] = field(default_factory=list)
+    allow_unknown_metadata: bool = True
 
     def to_dict(self) -> dict[str, object]:
         """Convert the schema to a serialisable dictionary."""
@@ -33,6 +34,8 @@ class RecordSchema:
             payload["directory_template"] = self.directory_template
         if self.filename_template is not None:
             payload["filename_template"] = self.filename_template
+        if not self.allow_unknown_metadata:
+            payload["allow_unknown_metadata"] = False
         return payload
 
     @classmethod
@@ -51,6 +54,7 @@ class RecordSchema:
                 None if data.get("filename_template") is None else str(data["filename_template"])
             ),
             metadata_fields=metadata_fields,
+            allow_unknown_metadata=bool(data.get("allow_unknown_metadata", True)),
         )
 
     def with_fallbacks(self, fallback: RecordSchema) -> RecordSchema:
@@ -64,6 +68,7 @@ class RecordSchema:
                 fallback.filename_template if self.filename_template is None else self.filename_template
             ),
             metadata_fields=list(self.metadata_fields),
+            allow_unknown_metadata=self.allow_unknown_metadata,
         )
 
     def required_field_names(self) -> list[str]:

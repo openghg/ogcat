@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "OpenAI" }]
 dependencies = [
+  "pydantic>=2",
   "typer>=0.12",
   "rich>=13.7",
   "tinydb>=4.8",
