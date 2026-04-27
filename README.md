@@ -133,6 +133,7 @@ ogcat search --catalog ./example-catalog --regex version='^v4\.[0-9]+$'
 ogcat search --catalog ./example-catalog --where derived_metadata.netcdf.dims.time=12 --paths
 ogcat search --catalog ./example-catalog --where species=CO2 --limit 20
 ogcat search --catalog ./example-catalog --where species=CO2 --fields id,species,user_metadata.domain,path
+ogcat search --catalog ./example-catalog --where species=CO2 --fields id,species,path --format tsv
 ogcat search --catalog ./example-catalog --where species=CO2 --all
 ```
 
@@ -151,7 +152,7 @@ ogcat fields --catalog ./example-catalog
 ogcat fields --catalog ./example-catalog --json
 ```
 
-`ogcat search` supports exact equality through `--where`, substring matching through `--contains`, and regular expressions through `--regex`. Human-readable search output is capped by default; use `--limit N` to choose a cap or `--all` to show every match. Use `--fields a,b,c` to choose table columns. For automation and shell use, `--json`, `--ids`, and `--paths` provide stable machine-friendly outputs; `--json` prints full matching records and ignores `--fields` and the default display cap.
+`ogcat search` supports exact equality through `--where`, substring matching through `--contains`, and regular expressions through `--regex`. Human-readable search output is capped by default; use `--limit N` to choose a cap or `--all` to show every match. Use `--fields a,b,c` to choose displayed fields, and `--format table|plain|csv|tsv|pipe` to choose the display format. For automation and shell use, `--json`, `--ids`, and `--paths` provide stable machine-friendly outputs; `--json` prints full matching records and ignores `--fields`, `--format`, and the default display cap.
 
 ## Search Semantics
 

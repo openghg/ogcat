@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import csv
 import json
 import re
+from io import StringIO
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -203,6 +205,88 @@ def test_search_fields_supports_dotted_paths_and_locator_uri(tmp_path: Path) -> 
     assert "s3://bucket/example.zarr" in stdout
 
 
+def test_search_format_tsv_outputs_data_without_rich_table(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
+    records = catalog.add_artifacts(
+        [
+            {
+                "record_type": "external_reference",
+                "locator": ArtifactLocator(kind="uri", value=f"s3://bucket/record-{index}.zarr"),
+                "metadata": {"species": "CO2"},
+            }
+            for index in range(2)
+        ]
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "search",
+            "--catalog",
+            str(catalog.root),
+            "--where",
+            "species=CO2",
+            "--fields",
+            "id,species,locator.uri",
+            "--format",
+            "tsv",
+            "--limit",
+            "1",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert strip_ansi(result.stdout).splitlines() == [
+        "id\tspecies\tlocator.uri",
+        f"{_record_id(records[0])}\tCO2\ts3://bucket/record-0.zarr",
+    ]
+    assert "result(s)" not in strip_ansi(result.stdout)
+    assert "Showing 1 of 2 matches. Use --limit N, --all, or --json for more." in strip_ansi(result.stderr)
+
+
+def test_search_format_csv_quotes_values(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
+    record = catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/example.zarr"),
+        metadata={"species": "CO2", "title": "A value, with comma"},
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "search",
+            "--catalog",
+            str(catalog.root),
+            "--where",
+            "species=CO2",
+            "--fields",
+            "id,title",
+            "--format",
+            "csv",
+        ],
+    )
+
+    assert result.exit_code == 0
+    rows = list(csv.reader(StringIO(strip_ansi(result.stdout))))
+    assert rows == [
+        ["id", "title"],
+        [_record_id(record), "A value, with comma"],
+    ]
+
+
+def test_search_rejects_unknown_format_for_display_output(tmp_path: Path) -> None:
+    catalog = _create_catalog(tmp_path)
+
+    result = runner.invoke(
+        app,
+        ["search", "--catalog", str(catalog.root), "--where", "species=CO2", "--format", "yaml"],
+    )
+
+    assert result.exit_code != 0
+    assert "Expected one of: table, plain, csv, tsv, pipe." in strip_ansi(result.output)
+
+
 def test_search_json_ignores_fields_and_display_cap(tmp_path: Path) -> None:
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
     catalog.add_artifacts(
@@ -228,6 +312,8 @@ def test_search_json_ignores_fields_and_display_cap(tmp_path: Path) -> None:
             "id,,species",
             "--limit",
             "2",
+            "--format",
+            "not-a-format",
             "--json",
         ],
     )
