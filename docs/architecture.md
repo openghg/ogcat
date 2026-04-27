@@ -64,6 +64,17 @@ The abstraction is useful even in the current small codebase:
 
 This is not a claim that multiple backends already exist. It only means the package boundary is already in place.
 
+## Transaction Boundaries And Rollback
+
+Catalog writes use a lightweight unit-of-work helper for multi-step operations such as managed
+file ingest. With the current TinyDB backend this is a best-effort rollback mechanism based on
+compensating actions: staged records can be deleted and owned copied files can be removed if a later
+step fails. It is not a true database transaction and should not be described as ACID.
+
+Each unit of work exposes an `operation_id` so future audit logging or hooks can correlate staged
+record writes, storage activity, and cleanup. Stronger backends can map the same conceptual API to
+native transaction support later.
+
 ## Why Templates and Metadata Live in `catalog.json`
 
 The default schema, optional named record schemas, default operation, and field resolution order

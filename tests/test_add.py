@@ -430,6 +430,30 @@ def test_add_file_rolls_back_record_when_naming_fails(
     assert list((root / "files").rglob("*.nc")) == []
 
 
+def test_add_file_rolls_back_record_after_staged_insert_before_file_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "broken.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="files"))
+
+    def fail_before_file_write(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("simulated post-insert failure")
+
+    monkeypatch.setattr("ogcat.catalog.render_storage_location", fail_before_file_write)
+
+    with pytest.raises(RuntimeError, match="simulated post-insert failure"):
+        catalog.add_file(source)
+
+    assert catalog.repository.all() == []
+    assert list((root / "files").rglob("*.nc")) == []
+
+
 def test_add_file_removes_partial_target_when_copy_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -453,6 +477,56 @@ def test_add_file_removes_partial_target_when_copy_fails(
 
     assert catalog.describe()["record_count"] == 0
     assert list((root / "files").rglob("*.nc")) == []
+
+
+def test_add_file_removes_copied_target_when_record_update_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "copied.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="files"))
+
+    def fail_update(record: CatalogRecord) -> None:
+        raise OSError("simulated update failure")
+
+    monkeypatch.setattr(catalog.repository, "update", fail_update)
+
+    with pytest.raises(OSError, match="simulated update failure"):
+        catalog.add_file(source)
+
+    assert source.exists()
+    assert catalog.describe()["record_count"] == 0
+    assert list((root / "files").rglob("copied.nc")) == []
+
+
+def test_add_file_removes_copied_target_when_metadata_extraction_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "metadata.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="files"))
+
+    def fail_extract(path: Path) -> dict[str, object]:
+        raise ValueError("simulated metadata failure")
+
+    monkeypatch.setattr("ogcat.catalog.extract_derived_metadata", fail_extract)
+
+    with pytest.raises(ValueError, match="simulated metadata failure"):
+        catalog.add_file(source)
+
+    assert source.exists()
+    assert catalog.describe()["record_count"] == 0
+    assert list((root / "files").rglob("metadata.nc")) == []
 
 
 def test_add_file_does_not_delete_moved_file_when_record_update_fails(
@@ -480,6 +554,22 @@ def test_add_file_does_not_delete_moved_file_when_record_update_fails(
     assert moved_files[0].read_text(encoding="utf-8") == "dummy"
     assert not source.exists()
     assert catalog.describe()["record_count"] == 0
+
+
+def test_add_file_committed_record_shape_does_not_include_transaction_metadata(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "example.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="files"))
+
+    record = catalog.add_file(source)
+
+    assert "operation_id" not in record.to_dict()
+    assert "transaction_id" not in record.to_dict()
+    assert catalog.repository.all() == [record]
 
 
 def test_add_artifact_supports_non_path_locator_records(tmp_path: Path) -> None:

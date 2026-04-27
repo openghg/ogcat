@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import shutil
-from contextlib import suppress
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,6 +15,7 @@ from ogcat.naming import build_naming_context, render_storage_location
 from ogcat.repository import CatalogRepository
 from ogcat.spec import CatalogSpec, RecordSchema
 from ogcat.tinydb_repository import TinyDbCatalogRepository
+from ogcat.transactions import UnitOfWork
 from ogcat.validation import validate_metadata
 
 
@@ -74,11 +76,11 @@ class Catalog:
             suffixes=source.suffixes,
             time_added=timestamp,
         )
-        persisted_record = self.repository.insert(draft_record)
-        record_id = _require_record_id(persisted_record)
 
-        target: Path | None = None
-        try:
+        with self.transaction() as transaction:
+            persisted_record = transaction.insert_staged_record(draft_record)
+            record_id = _require_record_id(persisted_record)
+
             context = build_naming_context(
                 record_id=record_id,
                 original_path=source,
@@ -95,6 +97,10 @@ class Catalog:
             target.parent.mkdir(parents=True, exist_ok=True)
 
             if chosen_operation == "copy":
+                transaction.register_rollback(
+                    lambda path=target: path.unlink(missing_ok=True),
+                    description=f"remove copied file {target}",
+                )
                 shutil.copy2(source, target)
                 storage_mode = "copy"
             else:
@@ -123,14 +129,8 @@ class Catalog:
                 time_added=timestamp,
             )
             self.repository.update(record)
+            transaction.commit()
             return record
-        except Exception:
-            if chosen_operation == "copy" and target is not None:
-                with suppress(Exception):
-                    target.unlink()
-            with suppress(Exception):
-                self.repository.delete(record_id)
-            raise
 
     def add_artifact(
         self,
@@ -145,12 +145,14 @@ class Catalog:
         derived_metadata: MetadataDict | None = None,
         naming_metadata: MetadataDict | None = None,
         time_added: str | None = None,
+        transaction: UnitOfWork | None = None,
     ) -> CatalogRecord:
         """Add an artifact record without performing any file operation.
 
         This is the minimal general record API. `add_file()` remains the managed
         ingest convenience wrapper that prepares a path-backed locator and then
-        delegates here.
+        delegates here. Pass a catalog transaction to stage the record as part
+        of a larger best-effort unit of work.
         """
         schema = self._select_schema(record_type, require_known=False)
         self._validate_metadata(
@@ -170,7 +172,23 @@ class Catalog:
             naming_metadata=naming_metadata,
             time_added=time_added,
         )
-        return self.repository.insert(record)
+        if transaction is not None:
+            return transaction.insert_staged_record(record)
+        with self.transaction() as unit_of_work:
+            persisted = unit_of_work.insert_staged_record(record)
+            unit_of_work.commit()
+            return persisted
+
+    @contextmanager
+    def transaction(self) -> Iterator[UnitOfWork]:
+        """Create a best-effort unit of work for composed catalog operations.
+
+        The current TinyDB backend uses staged writes and compensating rollback
+        actions. This context manager does not provide true database
+        transactions or ACID semantics.
+        """
+        with UnitOfWork(self.repository) as transaction:
+            yield transaction
 
     def add_artifacts(
         self,
