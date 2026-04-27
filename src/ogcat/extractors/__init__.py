@@ -42,7 +42,7 @@ def extract_derived_metadata(path: str | Path, *, include_errors: bool = False) 
     """Run all matching extractors and collect their derived metadata."""
     source = Path(path)
     derived: MetadataDict = {}
-    errors: dict[str, str] = {}
+    errors: MetadataDict = {}
 
     for extractor in _EXTRACTORS:
         if not extractor.can_extract(source):

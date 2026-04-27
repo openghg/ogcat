@@ -681,9 +681,7 @@ def _infer_dates(name: str) -> MetadataDict:
         return metadata
 
     years = [
-        int(token)
-        for token in re.split(r"[^A-Za-z0-9]+", name)
-        if re.fullmatch(r"(?:19|20)\d{2}", token)
+        int(token) for token in re.split(r"[^A-Za-z0-9]+", name) if re.fullmatch(r"(?:19|20)\d{2}", token)
     ]
     if len(years) == 1:
         metadata["year"] = years[0]

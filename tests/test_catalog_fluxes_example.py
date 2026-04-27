@@ -57,10 +57,7 @@ def test_discover_paths_from_listing_skips_directory_entries(tmp_path: Path) -> 
 
 
 def test_parse_flux_metadata_for_europe_edgar_sector() -> None:
-    path = Path(
-        "/group/chem/acrg/ES/fluxes/EUROPE/CO2/edgarv8/agric/"
-        "EUROPE-co2-edgarv8-agric-2012.nc"
-    )
+    path = Path("/group/chem/acrg/ES/fluxes/EUROPE/CO2/edgarv8/agric/EUROPE-co2-edgarv8-agric-2012.nc")
 
     metadata = parse_flux_metadata(
         path,
@@ -128,9 +125,7 @@ def test_archive_metadata_records_zip_members(tmp_path: Path) -> None:
     }
 
 
-def test_derive_metadata_records_enrichment_errors(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_derive_metadata_records_enrichment_errors(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     source = tmp_path / "bad.nc"
     source.write_bytes(b"CDF broken")
 
