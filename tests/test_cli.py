@@ -493,6 +493,50 @@ def test_search_paths_skips_non_path_backed_records(tmp_path: Path) -> None:
     assert lines[0].endswith("source.nc")
 
 
+def test_search_ids_and_paths_are_not_capped_by_default(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
+    for index in range(51):
+        source = tmp_path / f"source-{index}.nc"
+        source.write_text("dummy", encoding="utf-8")
+        catalog.add_file(source, metadata={"species": "CO2"})
+
+    ids_result = runner.invoke(
+        app,
+        ["search", "--catalog", str(catalog.root), "--where", "species=CO2", "--ids"],
+    )
+    paths_result = runner.invoke(
+        app,
+        ["search", "--catalog", str(catalog.root), "--where", "species=CO2", "--paths"],
+    )
+
+    assert ids_result.exit_code == 0
+    assert paths_result.exit_code == 0
+    assert len([line for line in strip_ansi(ids_result.stdout).splitlines() if line.strip()]) == 51
+    assert len([line for line in strip_ansi(paths_result.stdout).splitlines() if line.strip()]) == 51
+
+
+def test_search_limit_can_cap_ids_output(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
+    catalog.add_artifacts(
+        [
+            {
+                "record_type": "external_reference",
+                "locator": ArtifactLocator(kind="uri", value=f"s3://bucket/record-{index}.zarr"),
+                "metadata": {"species": "CO2"},
+            }
+            for index in range(3)
+        ]
+    )
+
+    result = runner.invoke(
+        app,
+        ["search", "--catalog", str(catalog.root), "--where", "species=CO2", "--ids", "--limit", "2"],
+    )
+
+    assert result.exit_code == 0
+    assert strip_ansi(result.stdout).splitlines() == ["1", "2"]
+
+
 def test_search_human_output_uses_empty_path_for_non_path_backed_records(tmp_path: Path) -> None:
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
     catalog.add_artifact(

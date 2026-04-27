@@ -355,9 +355,10 @@ def search(
         _print_json([record.to_dict() for record in results])
         return
 
+    result_limit = limit if any([ids_only, paths_only]) else display_limit
     shown_results = _displayed_results(
         results,
-        limit=display_limit,
+        limit=result_limit,
         all_results=all_results,
         json_mode=json_mode,
     )
