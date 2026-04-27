@@ -14,10 +14,8 @@ ownership, or timestamps.
 from __future__ import annotations
 
 import argparse
-import grp
 import gzip
 import os
-import pwd
 import re
 import tarfile
 import zipfile
@@ -32,6 +30,16 @@ from ogcat import ArtifactLocator, Catalog, CatalogSpec, MetadataFieldDescriptio
 from ogcat.extractors import extract_derived_metadata
 from ogcat.models import JsonValue, MetadataDict
 from ogcat.naming import render_storage_location
+
+try:
+    import grp
+except ImportError:  # pragma: no cover - exercised on non-Unix platforms
+    grp = None
+
+try:
+    import pwd
+except ImportError:  # pragma: no cover - exercised on non-Unix platforms
+    pwd = None
 
 DEFAULT_SOURCE_ROOT = Path("/group/chem/acrg/ES/fluxes")
 DEFAULT_CATALOG_NAME = "acrg-fluxes"
@@ -725,6 +733,8 @@ def _utc_from_timestamp(timestamp: float) -> str:
 
 
 def _owner_name(uid: int) -> str:
+    if pwd is None:
+        return str(uid)
     try:
         return pwd.getpwuid(uid).pw_name
     except KeyError:
@@ -732,6 +742,8 @@ def _owner_name(uid: int) -> str:
 
 
 def _group_name(gid: int) -> str:
+    if grp is None:
+        return str(gid)
     try:
         return grp.getgrgid(gid).gr_name
     except KeyError:

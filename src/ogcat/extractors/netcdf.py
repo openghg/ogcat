@@ -67,11 +67,8 @@ def _candidate_engines(path: Path) -> tuple[str, ...]:
     This avoids xarray's backend guessing path for files that merely have a
     ``.nc`` suffix but are not readable netCDF payloads.
     """
-    try:
-        with path.open("rb") as stream:
-            header = stream.read(8)
-    except OSError:
-        return ()
+    with path.open("rb") as stream:
+        header = stream.read(8)
     if header.startswith(b"CDF"):
         return ("scipy", "netcdf4")
     if header.startswith(b"\x89HDF\r\n\x1a\n"):

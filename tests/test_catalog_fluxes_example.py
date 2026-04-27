@@ -3,30 +3,31 @@ from __future__ import annotations
 import importlib.util
 import sys
 import zipfile
+from datetime import UTC, datetime
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
 from ogcat import Catalog
 
 EXAMPLE_PATH = Path(__file__).resolve().parents[1] / "examples" / "catalog_fluxes.py"
-SPEC = importlib.util.spec_from_file_location("catalog_fluxes_example", EXAMPLE_PATH)
-assert SPEC is not None
-catalog_fluxes = importlib.util.module_from_spec(SPEC)
-assert SPEC.loader is not None
-sys.modules[SPEC.name] = catalog_fluxes
-SPEC.loader.exec_module(catalog_fluxes)
-
-archive_metadata = catalog_fluxes.archive_metadata
-build_catalog = catalog_fluxes.build_catalog
-build_symlink_view = catalog_fluxes.build_symlink_view
-derive_metadata = catalog_fluxes.derive_metadata
-discover_paths_from_listing = catalog_fluxes.discover_paths_from_listing
-parse_flux_metadata = catalog_fluxes.parse_flux_metadata
-catalog_spec = catalog_fluxes._catalog_spec
 
 
-def test_discover_paths_from_listing_skips_directory_entries(tmp_path: Path) -> None:
+@pytest.fixture
+def catalog_fluxes() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("catalog_fluxes_example", EXAMPLE_PATH)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_discover_paths_from_listing_skips_directory_entries(
+    catalog_fluxes: ModuleType, tmp_path: Path
+) -> None:
     listing = tmp_path / "fluxes_ls.txt"
     listing.write_text(
         "\n".join(
@@ -48,7 +49,7 @@ def test_discover_paths_from_listing_skips_directory_entries(tmp_path: Path) -> 
         encoding="utf-8",
     )
 
-    paths = [source.path.as_posix() for source in discover_paths_from_listing(listing)]
+    paths = [source.path.as_posix() for source in catalog_fluxes.discover_paths_from_listing(listing)]
 
     assert paths == [
         "/group/chem/acrg/ES/fluxes/CTE-HR-ffCO2-2021_to2022.nc",
@@ -57,10 +58,10 @@ def test_discover_paths_from_listing_skips_directory_entries(tmp_path: Path) -> 
     ]
 
 
-def test_parse_flux_metadata_for_europe_edgar_sector() -> None:
+def test_parse_flux_metadata_for_europe_edgar_sector(catalog_fluxes: ModuleType) -> None:
     path = Path("/group/chem/acrg/ES/fluxes/EUROPE/CO2/edgarv8/agric/EUROPE-co2-edgarv8-agric-2012.nc")
 
-    metadata = parse_flux_metadata(
+    metadata = catalog_fluxes.parse_flux_metadata(
         path,
         source_root=Path("/group/chem/acrg/ES/fluxes"),
         discovery_mode="listing",
@@ -76,10 +77,10 @@ def test_parse_flux_metadata_for_europe_edgar_sector() -> None:
     assert metadata["file_role"] == "netcdf"
 
 
-def test_parse_flux_metadata_for_archive_and_date_range() -> None:
+def test_parse_flux_metadata_for_archive_and_date_range(catalog_fluxes: ModuleType) -> None:
     path = Path("/group/chem/acrg/ES/fluxes/GridFEDv2024.0/GCP-GridFEDv2024.0_2012.zip")
 
-    metadata = parse_flux_metadata(
+    metadata = catalog_fluxes.parse_flux_metadata(
         path,
         source_root=Path("/group/chem/acrg/ES/fluxes"),
         discovery_mode="listing",
@@ -93,10 +94,10 @@ def test_parse_flux_metadata_for_archive_and_date_range() -> None:
     assert metadata["file_role"] == "archive"
 
 
-def test_parse_flux_metadata_for_compressed_netcdf() -> None:
+def test_parse_flux_metadata_for_compressed_netcdf(catalog_fluxes: ModuleType) -> None:
     path = Path("/group/chem/acrg/ES/fluxes/APO/JenaCarboscope/apo99XS_v2022_daily.nc.gz")
 
-    metadata = parse_flux_metadata(
+    metadata = catalog_fluxes.parse_flux_metadata(
         path,
         source_root=Path("/group/chem/acrg/ES/fluxes"),
         discovery_mode="listing",
@@ -110,13 +111,13 @@ def test_parse_flux_metadata_for_compressed_netcdf() -> None:
     assert metadata["file_role"] == "compressed_netcdf"
 
 
-def test_archive_metadata_records_zip_members(tmp_path: Path) -> None:
+def test_archive_metadata_records_zip_members(catalog_fluxes: ModuleType, tmp_path: Path) -> None:
     archive = tmp_path / "sample.zip"
     with zipfile.ZipFile(archive, "w") as zip_file:
         zip_file.writestr("nested/a.nc", "a")
         zip_file.writestr("nested/b.nc", "bb")
 
-    metadata = archive_metadata(archive)
+    metadata = catalog_fluxes.archive_metadata(archive)
 
     assert metadata == {
         "format": "zip",
@@ -126,7 +127,9 @@ def test_archive_metadata_records_zip_members(tmp_path: Path) -> None:
     }
 
 
-def test_catalog_spec_tolerates_template_less_catalog_spec(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_catalog_spec_tolerates_template_less_catalog_spec(
+    catalog_fluxes: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
     class TemplateLessCatalogSpec:
         def __init__(self, catalog_name: str, metadata_fields: object | None = None) -> None:
             self.catalog_name = catalog_name
@@ -134,13 +137,15 @@ def test_catalog_spec_tolerates_template_less_catalog_spec(monkeypatch: pytest.M
 
     monkeypatch.setattr(catalog_fluxes, "CatalogSpec", TemplateLessCatalogSpec)
 
-    spec = catalog_spec("fluxes")
+    spec = catalog_fluxes._catalog_spec("fluxes")
 
     assert spec.catalog_name == "fluxes"
     assert spec.metadata_fields is not None
 
 
-def test_derive_metadata_records_enrichment_errors(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_derive_metadata_records_enrichment_errors(
+    catalog_fluxes: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     source = tmp_path / "bad.nc"
     source.write_bytes(b"CDF broken")
 
@@ -149,13 +154,15 @@ def test_derive_metadata_records_enrichment_errors(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(catalog_fluxes, "archive_metadata", fail_archive_metadata)
 
-    metadata = derive_metadata(source, enrich=True)
+    metadata = catalog_fluxes.derive_metadata(source, enrich=True)
 
     assert metadata["filesystem"]["size_bytes"] == len(b"CDF broken")
     assert metadata["enrichment_errors"] == {"archive": "ValueError: simulated archive failure"}
 
 
-def test_build_catalog_from_listing_creates_external_reference_records(tmp_path: Path) -> None:
+def test_build_catalog_from_listing_creates_external_reference_records(
+    catalog_fluxes: ModuleType, tmp_path: Path
+) -> None:
     listing = tmp_path / "fluxes_ls.txt"
     listing.write_text(
         "\n".join(
@@ -175,7 +182,7 @@ def test_build_catalog_from_listing_creates_external_reference_records(tmp_path:
         encoding="utf-8",
     )
 
-    catalog, added_count = build_catalog(
+    catalog, added_count = catalog_fluxes.build_catalog(
         catalog_root=tmp_path / "catalog",
         source_root=None,
         listing_path=listing,
@@ -191,14 +198,16 @@ def test_build_catalog_from_listing_creates_external_reference_records(tmp_path:
     assert records[0].derived_metadata == {}
 
 
-def test_build_catalog_from_mounted_scan_adds_filesystem_metadata(tmp_path: Path) -> None:
+def test_build_catalog_from_mounted_scan_adds_filesystem_metadata(
+    catalog_fluxes: ModuleType, tmp_path: Path
+) -> None:
     source_root = tmp_path / "fluxes"
     source_dir = source_root / "EUROPE" / "CO2" / "edgarv8" / "agric"
     source_dir.mkdir(parents=True)
     source = source_dir / "EUROPE-co2-edgarv8-agric-2012.nc"
     source.write_text("not actually netcdf", encoding="utf-8")
 
-    catalog, added_count = build_catalog(
+    catalog, added_count = catalog_fluxes.build_catalog(
         catalog_root=tmp_path / "catalog",
         source_root=source_root,
         listing_path=None,
@@ -207,24 +216,25 @@ def test_build_catalog_from_mounted_scan_adds_filesystem_metadata(tmp_path: Path
     record = catalog.search()[0]
 
     assert added_count == 1
-    assert record.user_metadata["mtime_year"] == 2026 or isinstance(record.user_metadata["mtime_year"], int)
+    assert record.user_metadata["mtime_year"] == datetime.now(tz=UTC).year
     assert record.derived_metadata["filesystem"]["size_bytes"] == len("not actually netcdf")
 
 
-def test_build_symlink_view_creates_second_catalog(tmp_path: Path) -> None:
+def test_build_symlink_view_creates_second_catalog(catalog_fluxes: ModuleType, tmp_path: Path) -> None:
+    _skip_if_symlinks_are_unavailable(tmp_path)
     source_root = tmp_path / "fluxes"
     source_dir = source_root / "EUROPE" / "CO2" / "edgarv8" / "agric"
     source_dir.mkdir(parents=True)
     source = source_dir / "EUROPE-co2-edgarv8-agric-2012.nc"
     source.write_text("dummy", encoding="utf-8")
-    source_catalog, _ = build_catalog(
+    source_catalog, _ = catalog_fluxes.build_catalog(
         catalog_root=tmp_path / "source-catalog",
         source_root=source_root,
         listing_path=None,
         enrich=False,
     )
 
-    view_catalog, added_count = build_symlink_view(
+    view_catalog, added_count = catalog_fluxes.build_symlink_view(
         source_catalog_root=source_catalog.root,
         view_root=tmp_path / "view",
         view_catalog_root=tmp_path / "view-catalog",
@@ -238,3 +248,16 @@ def test_build_symlink_view_creates_second_catalog(tmp_path: Path) -> None:
     assert link_path is not None
     assert link_path.is_symlink()
     assert link_path.resolve() == source
+
+
+def _skip_if_symlinks_are_unavailable(tmp_path: Path) -> None:
+    source = tmp_path / "symlink-source"
+    target = tmp_path / "symlink-target"
+    source.write_text("probe", encoding="utf-8")
+    try:
+        target.symlink_to(source)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"symlinks are unavailable in this environment: {exc}")
+    finally:
+        if target.exists() or target.is_symlink():
+            target.unlink()
