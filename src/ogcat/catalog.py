@@ -83,7 +83,7 @@ class Catalog:
         metadata_input = {} if metadata is None else metadata
         schema = self._select_schema(record_type, require_known=record_type is not None)
         schema_name = self._schema_name(record_type)
-        metadata = _coerce_metadata_input(metadata_input, schema=schema, schema_name=schema_name)
+        metadata = _coerce_metadata_input(metadata_input, schema_name=schema_name)
         resolved_record_type = "managed_file" if record_type is None else record_type
         directory_template = _require_template(schema.directory_template, field_name="directory_template")
         filename_template = _require_template(schema.filename_template, field_name="filename_template")
@@ -111,7 +111,7 @@ class Catalog:
                 operation="add_file",
                 record_type=resolved_record_type,
                 user_metadata=metadata,
-                register_rollback=lambda action: transaction.register_rollback(action),
+                register_rollback=transaction.register_rollback,
                 source_path=source,
                 storage_mode=chosen_operation,
                 original_path=source,
@@ -119,6 +119,8 @@ class Catalog:
                 suffixes=list(source.suffixes),
             )
             try:
+                # Hooks can fill or normalise metadata before schema validation,
+                # which is the main extension point for domain-specific defaults.
                 self.hook_manager.before_validate_metadata(hook_context)
                 validation_report = self._metadata_validation_report(
                     schema=schema,
@@ -150,6 +152,8 @@ class Catalog:
                 self.hook_manager.plan_locator(hook_context)
                 target.parent.mkdir(parents=True, exist_ok=True)
 
+                # File work happens inside UnitOfWork so hook or copy failures
+                # can use the same compensating rollback path as repository writes.
                 self.hook_manager.before_write_artifact(hook_context)
                 if chosen_operation == "copy":
                     transaction.register_rollback(
@@ -189,6 +193,8 @@ class Catalog:
                 self.repository.update(record)
                 self.hook_manager.before_commit(hook_context)
                 transaction.commit()
+                # After-commit hooks are best-effort: failures warn, but cannot
+                # turn an already-persisted record into an apparent API failure.
                 self.hook_manager.after_commit(hook_context)
                 return record
             except Exception as exc:
@@ -224,7 +230,7 @@ class Catalog:
         derived_metadata = {} if derived_metadata is None else dict(derived_metadata)
         schema = self._select_schema(record_type, require_known=False)
         schema_name = self._schema_name(record_type)
-        metadata = _coerce_metadata_input(metadata_input, schema=schema, schema_name=schema_name)
+        metadata = _coerce_metadata_input(metadata_input, schema_name=schema_name)
         if transaction is not None:
             if transaction.repository is not self.repository:
                 raise ValueError("Transaction is bound to a different catalog repository.")
@@ -457,7 +463,7 @@ class Catalog:
             user_metadata=metadata,
             derived_metadata=derived_metadata,
             planned_locators=[locator],
-            register_rollback=lambda action: transaction.register_rollback(action),
+            register_rollback=transaction.register_rollback,
             source_path=locator.as_path(),
             source_descriptor=locator.value,
             storage_mode=storage_mode,
@@ -494,10 +500,14 @@ class Catalog:
             if commit:
                 self.hook_manager.before_commit(hook_context)
                 transaction.commit()
+                # See add_file(): after-commit hooks must not change success
+                # semantics once the transaction has committed.
                 self.hook_manager.after_commit(hook_context)
             return persisted
         except Exception as exc:
             self.hook_manager.on_error(hook_context, exc)
+            # Caller-supplied transactions stay caller-owned. Internal
+            # transactions commit=True and roll back here before re-raising.
             if commit and transaction.state is not OperationState.COMMITTED:
                 transaction.rollback(original_exception=exc)
                 self.hook_manager.on_rollback(hook_context, exc)
@@ -591,13 +601,11 @@ def _metadata_with_hook_warnings(context: OperationContext) -> MetadataDict:
 def _coerce_metadata_input(
     metadata: object,
     *,
-    schema: RecordSchema,
     schema_name: str,
 ) -> MetadataDict:
     """Copy user metadata after preserving existing non-dictionary errors."""
     if isinstance(metadata, dict):
         return dict(metadata)
-    validate_metadata(metadata, schema, schema_name=schema_name).raise_for_errors()
     raise TypeError(f"Metadata for schema {schema_name} must be a dictionary, got {type(metadata).__name__}")
 
 

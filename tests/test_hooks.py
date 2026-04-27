@@ -208,7 +208,8 @@ def test_after_commit_hook_failure_does_not_fail_add_file(tmp_path: Path) -> Non
     source = tmp_path / "committed.nc"
     source.write_text("dummy", encoding="utf-8")
 
-    record = catalog.add_file(source)
+    with pytest.warns(RuntimeWarning, match="post-commit notification failed"):
+        record = catalog.add_file(source)
 
     assert record.id is not None
     assert catalog.get(record.id) == record
@@ -223,10 +224,11 @@ def test_after_commit_hook_failure_does_not_fail_add_artifact(tmp_path: Path) ->
     registry = PluginRegistry([FailingAfterCommitHook()])
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"), plugins=registry)
 
-    record = catalog.add_artifact(
-        record_type="external_reference",
-        locator=ArtifactLocator(kind="uri", value="s3://bucket/data.zarr"),
-    )
+    with pytest.warns(RuntimeWarning, match="post-commit notification failed"):
+        record = catalog.add_artifact(
+            record_type="external_reference",
+            locator=ArtifactLocator(kind="uri", value="s3://bucket/data.zarr"),
+        )
 
     assert record.id is not None
     assert catalog.get(record.id) == record

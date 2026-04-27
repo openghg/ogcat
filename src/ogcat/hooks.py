@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,6 +36,19 @@ class HookWarning:
         }
 
 
+class RollbackRegistrar(Protocol):
+    """Function signature used to register rollback work with a transaction."""
+
+    def __call__(
+        self,
+        action: RollbackAction | Callable[[], None],
+        *,
+        description: str | None = None,
+    ) -> RollbackAction:
+        """Register a rollback action."""
+        ...
+
+
 @dataclass(slots=True)
 class OperationContext:
     """Mutable context passed to catalog lifecycle hooks.
@@ -47,7 +61,8 @@ class OperationContext:
         user_metadata: User-supplied metadata, mutable by hooks before validation.
         derived_metadata: Derived metadata collected during the operation.
         planned_locators: Locators planned or supplied for the operation.
-        register_rollback: Function hooks can call to participate in rollback.
+        register_rollback: Low-level rollback registrar. Hook authors should
+            normally call ``context.rollback(...)`` instead.
         source_path: Optional local source path.
         source_descriptor: Optional non-path source description.
         storage_mode: Optional storage mode, such as ``"copy"`` or ``"move"``.
@@ -63,7 +78,7 @@ class OperationContext:
     user_metadata: MetadataDict
     derived_metadata: MetadataDict = field(default_factory=dict)
     planned_locators: list[ArtifactLocator] = field(default_factory=list)
-    register_rollback: Callable[[RollbackAction | Callable[[], None]], RollbackAction] | None = None
+    register_rollback: RollbackRegistrar | None = None
     source_path: Path | None = None
     source_descriptor: str | None = None
     storage_mode: str | None = None
@@ -89,21 +104,8 @@ class OperationContext:
         if self.register_rollback is None:
             raise RuntimeError("No active rollback registration is available.")
         if callable(action) and not hasattr(action, "undo"):
-            resolved_description = description or getattr(action, "__name__", "rollback action")
-            return self.register_rollback(_DescribedRollbackAction(resolved_description, action))
-        return self.register_rollback(action)
-
-
-@dataclass(frozen=True, slots=True)
-class _DescribedRollbackAction:
-    """Rollback action wrapper used when hooks provide a plain callable."""
-
-    description: str
-    callback: Callable[[], None]
-
-    def undo(self) -> None:
-        """Run the wrapped rollback callback."""
-        self.callback()
+            return self.register_rollback(action, description=description)
+        return self.register_rollback(action, description=description)
 
 
 @runtime_checkable
@@ -263,13 +265,13 @@ class HookManager:
                 try:
                     hook.after_commit(context)
                 except Exception as exc:
-                    context.add_warning(
-                        HookWarning(
-                            hook_name=type(hook).__name__,
-                            message=f"after_commit hook failed: {type(exc).__name__}: {exc}",
-                            code="hook.after_commit_failed",
-                        )
+                    warning = HookWarning(
+                        hook_name=type(hook).__name__,
+                        message=f"after_commit hook failed: {type(exc).__name__}: {exc}",
+                        code="hook.after_commit_failed",
                     )
+                    context.add_warning(warning)
+                    warnings.warn(warning.message, RuntimeWarning, stacklevel=2)
 
     def on_error(self, context: OperationContext, error: BaseException) -> None:
         """Dispatch error hooks, preserving the original operation failure."""
@@ -304,4 +306,5 @@ __all__ = [
     "OperationContext",
     "PlanLocatorHook",
     "RollbackHook",
+    "RollbackRegistrar",
 ]
