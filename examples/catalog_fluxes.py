@@ -352,14 +352,29 @@ def derive_metadata(path: Path, *, enrich: bool) -> MetadataDict:
     if not enrich or not path.exists():
         return {}
 
-    derived: MetadataDict = {"filesystem": filesystem_metadata(path)}
-    if _is_netcdf(path):
-        extracted = extract_derived_metadata(path)
-        derived.update(extracted)
+    derived: MetadataDict = {}
+    errors: dict[str, str] = {}
+    try:
+        derived["filesystem"] = filesystem_metadata(path)
+    except Exception as exc:
+        errors["filesystem"] = f"{type(exc).__name__}: {exc}"
 
-    archive = archive_metadata(path)
-    if archive is not None:
-        derived["archive"] = archive
+    if _is_netcdf(path):
+        try:
+            extracted = extract_derived_metadata(path, include_errors=True)
+            derived.update(extracted)
+        except Exception as exc:
+            errors["netcdf"] = f"{type(exc).__name__}: {exc}"
+
+    try:
+        archive = archive_metadata(path)
+        if archive is not None:
+            derived["archive"] = archive
+    except Exception as exc:
+        errors["archive"] = f"{type(exc).__name__}: {exc}"
+
+    if errors:
+        derived["enrichment_errors"] = errors
 
     return derived
 

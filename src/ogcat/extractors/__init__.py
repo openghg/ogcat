@@ -38,21 +38,27 @@ class SuffixExtractor:
         return any(suffix in path_suffixes for suffix in self.suffixes)
 
 
-def extract_derived_metadata(path: str | Path) -> MetadataDict:
+def extract_derived_metadata(path: str | Path, *, include_errors: bool = False) -> MetadataDict:
     """Run all matching extractors and collect their derived metadata."""
     source = Path(path)
     derived: MetadataDict = {}
+    errors: dict[str, str] = {}
 
     for extractor in _EXTRACTORS:
         if not extractor.can_extract(source):
             continue
         try:
             extracted = extractor.extract(source)
-        except Exception:
+        except Exception as exc:
             # Derived metadata is best-effort and should not block file ingestion.
+            if include_errors:
+                errors[extractor.name] = f"{type(exc).__name__}: {exc}"
             continue
         if extracted is not None:
             derived[extractor.name] = extracted
+
+    if errors:
+        derived["extractor_errors"] = errors
 
     return derived
 

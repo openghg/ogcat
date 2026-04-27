@@ -5,6 +5,8 @@ import sys
 import zipfile
 from pathlib import Path
 
+import pytest
+
 from ogcat import Catalog
 
 EXAMPLE_PATH = Path(__file__).resolve().parents[1] / "examples" / "catalog_fluxes.py"
@@ -18,6 +20,7 @@ SPEC.loader.exec_module(catalog_fluxes)
 archive_metadata = catalog_fluxes.archive_metadata
 build_catalog = catalog_fluxes.build_catalog
 build_symlink_view = catalog_fluxes.build_symlink_view
+derive_metadata = catalog_fluxes.derive_metadata
 discover_paths_from_listing = catalog_fluxes.discover_paths_from_listing
 parse_flux_metadata = catalog_fluxes.parse_flux_metadata
 
@@ -123,6 +126,23 @@ def test_archive_metadata_records_zip_members(tmp_path: Path) -> None:
         "members_sample": ["nested/a.nc", "nested/b.nc"],
         "total_uncompressed_size": 3,
     }
+
+
+def test_derive_metadata_records_enrichment_errors(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source = tmp_path / "bad.nc"
+    source.write_bytes(b"CDF broken")
+
+    def fail_archive_metadata(path: Path) -> None:
+        raise ValueError("simulated archive failure")
+
+    monkeypatch.setattr(catalog_fluxes, "archive_metadata", fail_archive_metadata)
+
+    metadata = derive_metadata(source, enrich=True)
+
+    assert metadata["filesystem"]["size_bytes"] == len(b"CDF broken")
+    assert metadata["enrichment_errors"] == {"archive": "ValueError: simulated archive failure"}
 
 
 def test_build_catalog_from_listing_creates_external_reference_records(tmp_path: Path) -> None:

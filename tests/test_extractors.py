@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from ogcat import Catalog, CatalogSpec
+from ogcat import Catalog, CatalogSpec, extractors
 from ogcat.extractors import extract_derived_metadata
 
 
@@ -18,6 +18,29 @@ def test_extract_derived_metadata_skips_optional_netcdf_extractor_when_xarray_is
     monkeypatch.setitem(sys.modules, "xarray", None)
 
     assert extract_derived_metadata(source) == {}
+
+
+def test_extract_derived_metadata_can_report_extractor_errors(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source = tmp_path / "example.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    class BrokenExtractor:
+        name = "broken"
+
+        def can_extract(self, path: Path) -> bool:
+            return path.suffix == ".nc"
+
+        def extract(self, path: Path) -> None:
+            raise ValueError("simulated extractor failure")
+
+    monkeypatch.setattr(extractors, "_EXTRACTORS", (BrokenExtractor(),))
+
+    assert extract_derived_metadata(source) == {}
+    assert extract_derived_metadata(source, include_errors=True) == {
+        "extractor_errors": {"broken": "ValueError: simulated extractor failure"}
+    }
 
 
 def test_add_file_keeps_working_for_netcdf_suffix_without_xarray(
