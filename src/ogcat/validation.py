@@ -126,14 +126,8 @@ def validate_schema(schema: RecordSchema, *, schema_name: str = "default") -> Va
             if normalized in _TYPE_ADAPTERS:
                 continue
             report.add(
-                path=(
-                    f"record_schemas.{schema_name}.metadata_fields."
-                    f"{field_index}.type.{type_index}"
-                ),
-                message=(
-                    f"Unsupported metadata type label for schema {schema_name}: "
-                    f"{type_label}"
-                ),
+                path=(f"record_schemas.{schema_name}.metadata_fields.{field_index}.type.{type_index}"),
+                message=(f"Unsupported metadata type label for schema {schema_name}: {type_label}"),
                 code="schema.unsupported_type",
                 hint="Use one of: bool, date, datetime, dict, float, int, list[str], str.",
             )
@@ -172,8 +166,7 @@ def validate_metadata(
         report.add(
             path="metadata",
             message=(
-                f"Metadata for schema {schema_name} must be a dictionary, "
-                f"got {type(metadata).__name__}"
+                f"Metadata for schema {schema_name} must be a dictionary, got {type(metadata).__name__}"
             ),
             code="metadata.not_object",
         )
