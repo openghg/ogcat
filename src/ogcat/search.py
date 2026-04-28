@@ -229,6 +229,7 @@ def resolve_field(
     resolution_order: Sequence[str] | None = None,
 ) -> FieldLookup:
     """Resolve a field using dotted paths or precedence-based flattened lookup."""
+    field = _normalise_field_path(field)
     record_dict = record.to_dict()
 
     if field == "path":
@@ -281,7 +282,14 @@ def _contains(actual: Any, expected: Any, ignore_case: bool) -> bool:
         needle = needle.casefold() if ignore_case else needle
         return needle in haystack
     if isinstance(actual, Mapping):
-        return expected in actual
+        if isinstance(expected, Mapping):
+            return all(
+                key in actual and _eq(actual[key], value, ignore_case) for key, value in expected.items()
+            )
+        try:
+            return expected in actual
+        except TypeError:
+            return False
     if isinstance(actual, Sequence) and not isinstance(actual, (str, bytes, bytearray)):
         expected_items = expected if isinstance(expected, list) else [expected]
         return all(

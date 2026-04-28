@@ -151,6 +151,21 @@ def test_search_supports_list_membership_and_contains(tmp_path: Path) -> None:
     assert [r.id for r in by_title_substring] == [tagged.id]
 
 
+def test_search_contains_supports_mapping_subset_and_unhashable_values(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
+    record = catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/site.zarr"),
+        metadata={"site": {"code": "MHD", "tags": ["coastal", "baseline"]}},
+    )
+
+    by_subset = catalog.search(contains={"site": {"code": "MHD"}})
+    by_unhashable_key = catalog.search(contains={"site": ["code"]})
+
+    assert [r.id for r in by_subset] == [record.id]
+    assert by_unhashable_key == []
+
+
 def test_search_supports_exists_missing_and_heterogeneous_records(tmp_path: Path) -> None:
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
     with_site = catalog.add_artifact(
@@ -171,6 +186,20 @@ def test_search_supports_exists_missing_and_heterogeneous_records(tmp_path: Path
     assert [r.id for r in by_exists] == [with_site.id]
     assert [r.id for r in by_missing] == [without_site.id]
     assert [r.id for r in by_null_exists] == [without_site.id]
+
+
+def test_search_shortcuts_resolve_for_whole_metadata_namespaces(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
+    record = catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/site.zarr"),
+        metadata={"site": {"code": "MHD"}},
+        derived_metadata={"checksum": "abc123"},
+    )
+
+    assert [r.id for r in catalog.search(query=SearchQuery.exists("user"))] == [record.id]
+    assert [r.id for r in catalog.search(query=SearchQuery.exists("derived"))] == [record.id]
+    assert catalog.search(query=SearchQuery.missing("user")) == []
 
 
 def test_search_equality_against_list_requires_exact_list(tmp_path: Path) -> None:
