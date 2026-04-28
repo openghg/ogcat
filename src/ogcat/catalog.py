@@ -17,6 +17,7 @@ from ogcat.naming import build_naming_context, render_storage_location
 from ogcat.plugins import PluginRegistry
 from ogcat.record_set import CatalogRecordSet
 from ogcat.repository import CatalogRepository
+from ogcat.search import SearchQuery
 from ogcat.spec import CatalogSpec, RecordSchema
 from ogcat.tinydb_repository import TinyDbCatalogRepository
 from ogcat.transactions import OperationState, UnitOfWork
@@ -290,10 +291,14 @@ class Catalog:
     @overload
     def search(
         self,
+        query: SearchQuery | None = None,
         *,
         where: dict[str, object] | None = None,
-        contains: dict[str, str] | None = None,
+        contains: dict[str, object] | None = None,
         regex: dict[str, str] | None = None,
+        match: dict[str, str] | None = None,
+        exists: Sequence[str] | None = None,
+        missing: Sequence[str] | None = None,
         ignore_case: bool = False,
         as_record_set: Literal[False] = False,
     ) -> list[CatalogRecord]: ...
@@ -302,27 +307,39 @@ class Catalog:
     def search(
         self,
         *,
+        query: SearchQuery | None = None,
         where: dict[str, object] | None = None,
-        contains: dict[str, str] | None = None,
+        contains: dict[str, object] | None = None,
         regex: dict[str, str] | None = None,
+        match: dict[str, str] | None = None,
+        exists: Sequence[str] | None = None,
+        missing: Sequence[str] | None = None,
         ignore_case: bool = False,
         as_record_set: Literal[True],
     ) -> CatalogRecordSet: ...
 
     def search(
         self,
+        query: SearchQuery | None = None,
         *,
         where: dict[str, object] | None = None,
-        contains: dict[str, str] | None = None,
+        contains: dict[str, object] | None = None,
         regex: dict[str, str] | None = None,
+        match: dict[str, str] | None = None,
+        exists: Sequence[str] | None = None,
+        missing: Sequence[str] | None = None,
         ignore_case: bool = False,
         as_record_set: bool = False,
     ) -> list[CatalogRecord] | CatalogRecordSet:
-        """Search catalog records using equality, substring, and regex filters."""
+        """Search catalog records using backend-neutral query semantics."""
         results = self.repository.search(
+            query=query,
             where=where,
             contains=contains,
             regex=regex,
+            match=match,
+            exists=exists,
+            missing=missing,
             ignore_case=ignore_case,
             resolution_order=self.spec.field_resolution_order,
         )

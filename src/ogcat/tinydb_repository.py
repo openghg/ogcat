@@ -10,7 +10,7 @@ from typing import Any, cast
 from tinydb import Query, TinyDB
 
 from ogcat.models import CatalogRecord, JsonValue
-from ogcat.search import matches_record
+from ogcat.search import SearchOp, SearchQuery, SearchTerm, matches_record
 
 
 class TinyDbCatalogRepository:
@@ -76,21 +76,39 @@ class TinyDbCatalogRepository:
     def search(
         self,
         *,
+        query: SearchQuery | None = None,
         where: dict[str, object] | None = None,
-        contains: dict[str, str] | None = None,
+        contains: dict[str, object] | None = None,
         regex: dict[str, str] | None = None,
+        match: dict[str, str] | None = None,
+        exists: Sequence[str] | None = None,
+        missing: Sequence[str] | None = None,
         ignore_case: bool = False,
         resolution_order: Sequence[str] | None = None,
     ) -> list[CatalogRecord]:
         """Search records."""
-        return [
-            record
-            for record in self.all()
-            if matches_record(
-                record,
+        active_query = (query or SearchQuery.all()).and_(
+            SearchQuery.from_filters(
                 where=where,
                 contains=contains,
                 regex=regex,
+                match=match,
+                exists=exists,
+                missing=missing,
+            )
+        )
+        records = self._native_search(active_query, ignore_case=ignore_case)
+        if records is None:
+            records = self.all()
+        return [
+            record
+            for record in records
+            if matches_record(
+                record,
+                query=active_query,
+                where=None,
+                contains=None,
+                regex=None,
                 ignore_case=ignore_case,
                 resolution_order=resolution_order,
             )
@@ -106,3 +124,58 @@ class TinyDbCatalogRepository:
         if data.get("id") is None:
             data["id"] = str(document.doc_id)
         return CatalogRecord.from_dict(data)
+
+    def _native_search(self, query: SearchQuery, *, ignore_case: bool) -> list[CatalogRecord] | None:
+        """Run a TinyDB query for safely compilable search terms."""
+        native_query = self._compile_query(query, ignore_case=ignore_case)
+        if native_query is None:
+            return None
+        return [self._record_from_document(item) for item in self._db.search(native_query)]
+
+    def _compile_query(self, query: SearchQuery, *, ignore_case: bool) -> Any | None:
+        """Compile simple explicit search terms to TinyDB, or return None."""
+        if ignore_case:
+            return None
+
+        compiled_terms: list[Any] = []
+        for term in query.terms:
+            compiled = self._compile_term(term)
+            if compiled is None:
+                return None
+            compiled_terms.append(compiled)
+
+        if not compiled_terms:
+            return None
+
+        native_query = compiled_terms[0]
+        for compiled in compiled_terms[1:]:
+            native_query = native_query & compiled
+        return native_query
+
+    def _compile_term(self, term: SearchTerm) -> Any | None:
+        """Compile one simple explicit search term to TinyDB."""
+        field = term.field.stored
+        if not _is_explicit_stored_path(field):
+            return None
+
+        tinydb_field = _tinydb_field(field)
+        if term.op == SearchOp.EQ:
+            return tinydb_field == term.value
+        if term.op == SearchOp.EXISTS:
+            return tinydb_field.exists()
+        if term.op == SearchOp.MISSING:
+            return ~tinydb_field.exists()
+        return None
+
+
+def _is_explicit_stored_path(field: str) -> bool:
+    """Return whether a field path maps directly to stored TinyDB document data."""
+    return "." in field and field not in {"path", "locator.uri"}
+
+
+def _tinydb_field(field: str) -> Any:
+    """Build a dynamic TinyDB field query from a dotted path."""
+    current: Any = Query()
+    for part in field.split("."):
+        current = current[part]
+    return current

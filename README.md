@@ -102,9 +102,21 @@ regex_matches = catalog.search(regex={"version": r"^v4\.[0-9]+$"})
 Field lookup supports both flattened names and explicit dotted paths:
 
 ```python
+from ogcat import SearchQuery
+
 catalog.search(contains={"title": "anthropogenic"}, ignore_case=True)
 catalog.search(where={"user_metadata.product.family.revision": 2})
 catalog.search(where={"derived_metadata.netcdf.dims.time": 12})
+catalog.search(SearchQuery.eq("species", "CO2").contains("tags", "paris"))
+catalog.search(exists=["user.site.code"], missing=["user.platform"])
+```
+
+The CLI accepts both explicit flags and simple positional expressions:
+
+```bash
+ogcat search --catalog example-catalog species=CO2
+ogcat search --catalog example-catalog tags:paris user.site.code? --json
+ogcat search --catalog example-catalog 'locator.uri~s3://bucket/*.zarr' --match title=paris --ids
 ```
 
 Register simple hooks directly in Python:
@@ -158,9 +170,10 @@ Search records:
 
 ```bash
 ogcat search --catalog ./example-catalog --where species=CO2
+ogcat search --catalog ./example-catalog species=CO2 tags:paris
 ogcat search --catalog ./example-catalog --contains title=anthropogenic --ignore-case
 ogcat search --catalog ./example-catalog --regex version='^v4\.[0-9]+$'
-ogcat search --catalog ./example-catalog --where derived_metadata.netcdf.dims.time=12 --paths
+ogcat search --catalog ./example-catalog --where derived.netcdf.dims.time=12 --paths
 ogcat search --catalog ./example-catalog --where species=CO2 --limit 20
 ogcat search --catalog ./example-catalog --where species=CO2 --fields id,species,user_metadata.domain,path
 ogcat search --catalog ./example-catalog --where species=CO2 --fields id,species,path --format tsv
@@ -182,7 +195,7 @@ ogcat fields --catalog ./example-catalog
 ogcat fields --catalog ./example-catalog --json
 ```
 
-`ogcat search` supports exact equality through `--where`, substring matching through `--contains`, and regular expressions through `--regex`. Human-readable search output is capped by default; use `--limit N` to choose a cap or `--all` to show every match. Use `--fields a,b,c` to choose displayed fields, and `--format table|plain|csv|tsv|pipe` to choose the display format. For automation and shell use, `--json`, `--ids`, and `--paths` provide stable machine-friendly outputs; `--json` prints full matching records and ignores `--fields`, `--format`, and the default display cap.
+`ogcat search` supports compact positional filters: `field=value` for equality, `field:value` for contains/list membership, `field~pattern` for glob or substring matching, `field?` for exists, and `!field?` for missing. Compatibility flags remain available: `--where`, `--contains`, `--match`, `--regex`, `--exists`, and `--missing`. Human-readable search output is capped by default; use `--limit N` to choose a cap or `--all` to show every match. Use `--fields a,b,c` to choose displayed fields, and `--format table|plain|csv|tsv|pipe` to choose the display format. For automation and shell use, `--json`, `--ids`, and `--paths` provide stable machine-friendly outputs; `--json` prints full matching records and ignores `--fields`, `--format`, and the default display cap.
 
 ## Search Semantics
 
@@ -192,7 +205,7 @@ Unqualified field names are resolved in this order:
 2. `user_metadata`
 3. `derived_metadata`
 
-If you need to bypass flattened lookup, use an explicit dotted path such as `user_metadata.species` or `derived_metadata.netcdf.dims.time`.
+If you need to bypass flattened lookup, use an explicit dotted path such as `user_metadata.species` or `derived_metadata.netcdf.dims.time`. The shorter `user.species` and `derived.netcdf.dims.time` aliases are also accepted.
 
 Current search is intentionally small. It does not support numeric range queries or richer expressions such as `>`, `<`, `>=`, `<=`, or boolean query composition.
 
