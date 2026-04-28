@@ -107,22 +107,23 @@ class Catalog:
             """Resolve the managed-file storage path for this operation."""
             naming_context = build_naming_context(
                 record_id=context.operation_id,
+                operation_id=context.operation_id,
                 original_path=source,
                 metadata=context.user_metadata,
                 date_added=timestamp[:10],
             )
-            target, rel_path, resolved_filename = render_storage_location(
+            target, rel_path, _resolved_filename = render_storage_location(
                 files_root=files_root,
                 directory_template=directory_template,
                 filename_template=filename_template,
                 context=naming_context,
             )
-            naming_metadata["resolved_filename"] = resolved_filename
             return ArtifactLocator.path(target, relative_path=rel_path)
 
         def write_local_file(context: OperationContext, locator: ArtifactLocator) -> None:
             """Copy or move the source file to the canonical path locator."""
             target = _path_from_locator(locator)
+            naming_metadata["resolved_filename"] = target.name
             target.parent.mkdir(parents=True, exist_ok=True)
             if chosen_operation == "copy":
                 context.rollback(

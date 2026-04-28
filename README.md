@@ -110,7 +110,7 @@ catalog.search(where={"derived_metadata.netcdf.dims.time": 12})
 Register simple hooks directly in Python:
 
 ```python
-from ogcat import PluginRegistry
+from ogcat import Catalog, CatalogSpec, PluginRegistry
 from ogcat.hooks import OperationContext
 
 
@@ -120,6 +120,7 @@ class FilenameTitlePlugin:
             context.user_metadata.setdefault("title", context.source_path.stem)
 
 
+spec = CatalogSpec(catalog_name="files")
 plugins = PluginRegistry([FilenameTitlePlugin()])
 catalog = Catalog.create("example-catalog", spec, plugins=plugins)
 ```

@@ -117,6 +117,7 @@ def ensure_unique_path(path: Path) -> Path:
 def build_naming_context(
     *,
     record_id: str,
+    operation_id: str | None = None,
     original_path: Path,
     metadata: Mapping[str, object],
     date_added: str,
@@ -127,6 +128,8 @@ def build_naming_context(
     original_stem, original_suffix = _split_name_and_suffixes(source_name)
 
     context["id"] = record_id
+    context["uuid"] = operation_id or record_id
+    context["operation_id"] = operation_id or record_id
     context["date_added"] = date_added
     context["year_added"] = date_added[:4]
     context["original_filename"] = source_name
