@@ -128,10 +128,10 @@ catalog = Catalog.create("example-catalog", spec, plugins=plugins)
 See [docs/design-note-hooks-plugins.md](docs/design-note-hooks-plugins.md) for hook lifecycle,
 rollback, and transaction examples.
 
-In this hook model, `add_artifact()` records an artifact locator but does not write artifact data.
-Pass an `OperationSource` and artifact writer to `add_artifact()` when a plugin or helper should
-materialise data before the record is written. `add_file()` is the bundled local-file operation that
-uses the same writer path to copy or move data before writing the record.
+In this hook model, `add_artifact()` records an artifact locator but does not write artifact data by
+default. Pass an `OperationSource` and artifact writer to `add_artifact()` when a plugin or helper
+should materialise data before the record is written. `add_file()` is the bundled local-file
+operation that uses the same writer path to copy or move data before writing the record.
 See `ogcat.writers` for small helper wrappers around in-memory data, path-backed transforms, and zip
 extraction examples.
 

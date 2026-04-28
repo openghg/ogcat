@@ -845,6 +845,18 @@ def test_add_artifact_rejects_non_callable_artifact_writer(tmp_path: Path) -> No
         )
 
 
+def test_add_artifact_rejects_invalid_source(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="artifacts"))
+
+    with pytest.raises(TypeError, match="source must be an OperationSource, got str"):
+        catalog.add_artifact(
+            record_type="external_reference",
+            locator=ArtifactLocator.path("/tmp/data/first.nc"),
+            source="not a source",  # type: ignore[arg-type]
+        )
+
+
 def test_add_artifacts_rejects_non_callable_artifact_writer(tmp_path: Path) -> None:
     class InvalidWriter:
         write = "not callable"

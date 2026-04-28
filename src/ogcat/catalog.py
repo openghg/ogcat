@@ -180,6 +180,7 @@ class Catalog:
         schema = self._select_schema(record_type, require_known=False)
         schema_name = self._schema_name(record_type)
         metadata = _coerce_metadata_input(metadata_input, schema_name=schema_name)
+        validated_source = _optional_operation_source(source)
         validated_artifact_writer = _validate_artifact_writer(artifact_writer)
         if transaction is not None:
             if transaction.repository is not self.repository:
@@ -197,7 +198,7 @@ class Catalog:
                 derived_metadata=derived_metadata,
                 naming_metadata=naming_metadata,
                 time_added=time_added,
-                source=source,
+                source=validated_source,
                 artifact_writer=validated_artifact_writer,
                 schema=schema,
             )
@@ -215,7 +216,7 @@ class Catalog:
                 derived_metadata=derived_metadata,
                 naming_metadata=naming_metadata,
                 time_added=time_added,
-                source=source,
+                source=validated_source,
                 artifact_writer=validated_artifact_writer,
                 schema=schema,
             )
