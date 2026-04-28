@@ -15,7 +15,7 @@ from rich.table import Table
 
 from ogcat.catalog import Catalog
 from ogcat.models import CatalogRecord
-from ogcat.search import flatten_lookup
+from ogcat.search import SearchQuery, flatten_lookup
 from ogcat.spec import CatalogSpec
 
 app = typer.Typer(
@@ -110,6 +110,35 @@ def _parse_key_value_options(items: list[str]) -> dict[str, str]:
         key, value = item.split("=", 1)
         parsed[key] = value
     return parsed
+
+
+def _parse_search_expression(item: str) -> SearchQuery:
+    """Parse one simple positional search expression."""
+    if "~=" in item:
+        key, value = item.split("~=", 1)
+        if not key:
+            raise typer.BadParameter(f"Expected FIELD~=VALUE: {item}")
+        return SearchQuery.contains(key, value)
+    if "~" in item:
+        key, value = item.split("~", 1)
+        if not key:
+            raise typer.BadParameter(f"Expected FIELD~PATTERN: {item}")
+        return SearchQuery.matches(key, value)
+    if "=" in item:
+        parsed = _parse_meta_item(item)
+        if len(parsed) != 1:
+            raise typer.BadParameter(f"Expected one search expression: {item}")
+        field, value = next(iter(parsed.items()))
+        return SearchQuery.equals(field, value)
+    raise typer.BadParameter(f"Expected FIELD=VALUE, FIELD~=VALUE, or FIELD~PATTERN: {item}")
+
+
+def _parse_search_expressions(items: list[str]) -> SearchQuery:
+    """Parse positional search expressions and combine them with AND semantics."""
+    query = SearchQuery.all()
+    for item in items:
+        query = query.and_(_parse_search_expression(item))
+    return query
 
 
 def _parse_fields_option(fields: str | None) -> list[str] | None:
@@ -271,8 +300,11 @@ def add_command(
     console.print(f"Added {record.id}: {record.stored_abspath}")
 
 
-@app.command()
+@app.command(
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": False},
+)
 def search(
+    ctx: typer.Context,
     catalog: Annotated[Path | None, typer.Option("--catalog", help="Catalog root.")] = None,
     where: Annotated[
         list[str] | None,
@@ -285,6 +317,18 @@ def search(
     regex: Annotated[
         list[str] | None,
         typer.Option("--regex", help="Regex filter KEY=VALUE. Repeatable."),
+    ] = None,
+    match: Annotated[
+        list[str] | None,
+        typer.Option("--match", help="Glob or substring filter KEY=VALUE. Repeatable."),
+    ] = None,
+    exists: Annotated[
+        list[str] | None,
+        typer.Option("--exists", help="Require FIELD to be present. Repeatable."),
+    ] = None,
+    missing: Annotated[
+        list[str] | None,
+        typer.Option("--missing", help="Require FIELD to be absent. Repeatable."),
     ] = None,
     ignore_case: Annotated[
         bool,
@@ -344,10 +388,16 @@ def search(
         display_fields = _parse_fields_option(fields) or DEFAULT_SEARCH_FIELDS
         parsed_output_format = _parse_search_output_format(output_format)
     active_catalog = _open_catalog_or_fail(catalog)
-    results = active_catalog.search(
+    query = SearchQuery.from_filters(
         where=_parse_meta_items([] if where is None else where),
         contains=_parse_key_value_options([] if contains is None else contains),
         regex=_parse_key_value_options([] if regex is None else regex),
+        match=_parse_key_value_options([] if match is None else match),
+        exists=[] if exists is None else exists,
+        missing=[] if missing is None else missing,
+    ).and_(_parse_search_expressions(list(ctx.args)))
+    results = active_catalog.search(
+        query=query,
         ignore_case=ignore_case,
     )
 

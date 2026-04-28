@@ -102,9 +102,21 @@ regex_matches = catalog.search(regex={"version": r"^v4\.[0-9]+$"})
 Field lookup supports both flattened names and explicit dotted paths:
 
 ```python
+from ogcat import SearchQuery
+
 catalog.search(contains={"title": "anthropogenic"}, ignore_case=True)
 catalog.search(where={"user_metadata.product.family.revision": 2})
 catalog.search(where={"derived_metadata.netcdf.dims.time": 12})
+catalog.search(query=SearchQuery.contains("tags", "paris"))
+catalog.search(exists=["metadata.site.code"], missing=["metadata.platform"])
+```
+
+The CLI accepts both explicit flags and simple positional expressions:
+
+```bash
+ogcat search --catalog example-catalog species=CO2
+ogcat search --catalog example-catalog tags~=paris --exists metadata.site.code --json
+ogcat search --catalog example-catalog 'locator.uri~s3://bucket/*.zarr' --match title=paris --ids
 ```
 
 Register simple hooks directly in Python:

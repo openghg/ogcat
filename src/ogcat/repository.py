@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from typing import Protocol
 
 from ogcat.models import CatalogRecord
+from ogcat.search import SearchQuery
 
 
 class CatalogRepository(Protocol):
@@ -34,9 +35,13 @@ class CatalogRepository(Protocol):
     def search(
         self,
         *,
+        query: SearchQuery | None = None,
         where: dict[str, object] | None = None,
-        contains: dict[str, str] | None = None,
+        contains: dict[str, object] | None = None,
         regex: dict[str, str] | None = None,
+        match: dict[str, str] | None = None,
+        exists: Sequence[str] | None = None,
+        missing: Sequence[str] | None = None,
         ignore_case: bool = False,
         resolution_order: Sequence[str] | None = None,
     ) -> list[CatalogRecord]:

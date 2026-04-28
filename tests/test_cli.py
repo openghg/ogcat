@@ -79,6 +79,84 @@ def test_search_json_output(tmp_path: Path) -> None:
     assert payload[0]["user_metadata"]["species"] == "CO2"
 
 
+def test_search_accepts_positional_key_value_filters(tmp_path: Path) -> None:
+    catalog = _create_catalog(tmp_path)
+    record = catalog.search()[0]
+
+    result = runner.invoke(
+        app,
+        ["search", "--catalog", str(catalog.root), "species=CO2", "--ids"],
+    )
+
+    assert result.exit_code == 0
+    assert strip_ansi(result.stdout).splitlines() == [_record_id(record)]
+
+
+def test_search_cli_supports_nested_list_and_missing_filters(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
+    paris = catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/paris.zarr"),
+        metadata={"tags": ["paris", "obspack"], "site": {"code": "MHD"}, "title": "Paris ObsPack"},
+    )
+    catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/baseline.zarr"),
+        metadata={"tags": ["baseline"], "title": "Baseline"},
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "search",
+            "--catalog",
+            str(catalog.root),
+            "tags~=paris",
+            "--exists",
+            "metadata.site.code",
+            "--missing",
+            "metadata.platform",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(strip_ansi(result.stdout))
+    assert [item["id"] for item in payload] == [_record_id(paris)]
+    assert payload[0]["user_metadata"]["site"]["code"] == "MHD"
+
+
+def test_search_cli_match_filter_supports_locator_uri(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
+    record = catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/example.zarr"),
+        metadata={"title": "ObsPack Paris product"},
+    )
+    catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/other.zarr"),
+        metadata={"title": "Other product"},
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "search",
+            "--catalog",
+            str(catalog.root),
+            "--match",
+            "locator.uri=s3://bucket/*.zarr",
+            "title~paris",
+            "--ignore-case",
+            "--ids",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert strip_ansi(result.stdout).splitlines() == [_record_id(record)]
+
+
 def test_search_limit_caps_human_output(tmp_path: Path) -> None:
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
     records = catalog.add_artifacts(

@@ -10,7 +10,7 @@ from typing import Any, cast
 from tinydb import Query, TinyDB
 
 from ogcat.models import CatalogRecord, JsonValue
-from ogcat.search import matches_record
+from ogcat.search import SearchQuery, matches_record
 
 
 class TinyDbCatalogRepository:
@@ -76,9 +76,13 @@ class TinyDbCatalogRepository:
     def search(
         self,
         *,
+        query: SearchQuery | None = None,
         where: dict[str, object] | None = None,
-        contains: dict[str, str] | None = None,
+        contains: dict[str, object] | None = None,
         regex: dict[str, str] | None = None,
+        match: dict[str, str] | None = None,
+        exists: Sequence[str] | None = None,
+        missing: Sequence[str] | None = None,
         ignore_case: bool = False,
         resolution_order: Sequence[str] | None = None,
     ) -> list[CatalogRecord]:
@@ -88,9 +92,13 @@ class TinyDbCatalogRepository:
             for record in self.all()
             if matches_record(
                 record,
+                query=query,
                 where=where,
                 contains=contains,
                 regex=regex,
+                match=match,
+                exists=exists,
+                missing=missing,
                 ignore_case=ignore_case,
                 resolution_order=resolution_order,
             )
