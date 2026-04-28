@@ -291,6 +291,26 @@ def test_add_file_does_not_truncate_fractional_year_metadata_for_naming(tmp_path
     assert _stored_path(record).name == "floatyear.nc"
 
 
+@pytest.mark.parametrize("field_name", ["id", "uuid", "operation_id"])
+def test_add_file_rejects_metadata_that_clobbers_reserved_template_fields(
+    tmp_path: Path,
+    field_name: str,
+) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "reserved.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="files"))
+
+    with pytest.raises(ValueError, match=f"Metadata cannot use reserved template field\\(s\\): {field_name}"):
+        catalog.add_file(source, metadata={field_name: "user-value"})
+
+    assert catalog.repository.all() == []
+    assert list((root / "files").rglob("reserved.nc")) == []
+
+
 def test_add_file_preserves_dotted_stems_and_simple_suffixes(tmp_path: Path) -> None:
     source_dir = tmp_path / "source"
     source_dir.mkdir()
