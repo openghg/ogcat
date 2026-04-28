@@ -50,7 +50,7 @@ def test_record_set_to_dataframe_raises_without_pandas(tmp_path: Path, monkeypat
     results = catalog.search(as_record_set=True)
 
     def _raise_import_error(name: str) -> object:
-        raise ImportError(name)
+        raise ImportError(f"No module named {name!r}")
 
     monkeypatch.setattr(record_set_module, "import_module", _raise_import_error)
 

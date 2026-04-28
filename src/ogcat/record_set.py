@@ -99,7 +99,12 @@ class CatalogRecordSet(Sequence[CatalogRecord]):
         ]
 
     def display_rows(self, fields: Sequence[str], *, limit: int | None = None) -> list[list[str]]:
-        """Return CLI-style display rows for the selected fields."""
+        """Return CLI-style display rows for the selected fields.
+
+        Args:
+            fields: Field names to resolve for each row.
+            limit: Maximum number of records to format. Formats all records when omitted.
+        """
         records = self._records if limit is None else self._records[:limit]
         return [
             [
