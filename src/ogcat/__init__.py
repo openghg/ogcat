@@ -4,7 +4,7 @@ from ogcat.catalog import Catalog
 from ogcat.hooks import HookManager, HookWarning, OperationContext
 from ogcat.models import ArtifactLocator, CatalogRecord, MetadataFieldDescription
 from ogcat.plugins import PluginRegistry
-from ogcat.search import SearchCriterion, SearchQuery
+from ogcat.search import FieldPath, SearchOp, SearchQuery, SearchTerm
 from ogcat.spec import CatalogSpec, RecordSchema
 from ogcat.transactions import OperationState, RollbackFailure, UnitOfWork
 from ogcat.validation import (
@@ -29,8 +29,10 @@ __all__ = [
     "PluginRegistry",
     "RollbackFailure",
     "RecordSchema",
-    "SearchCriterion",
+    "FieldPath",
+    "SearchOp",
     "SearchQuery",
+    "SearchTerm",
     "UnitOfWork",
     "ValidationIssue",
     "ValidationReport",

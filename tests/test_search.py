@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from ogcat import ArtifactLocator, Catalog, CatalogSpec, SearchQuery
+from ogcat import ArtifactLocator, Catalog, CatalogSpec, SearchOp, SearchQuery
 
 
 def test_search_supports_flattened_lookup_and_ignore_case(tmp_path: Path) -> None:
@@ -106,7 +106,7 @@ def test_search_supports_dotted_lookup_into_nested_dicts(tmp_path: Path) -> None
     assert by_missing_nested_path == []
 
 
-def test_search_query_supports_nested_metadata_and_metadata_alias(tmp_path: Path) -> None:
+def test_search_query_supports_nested_user_and_derived_shortcuts(tmp_path: Path) -> None:
     source = tmp_path / "nested-alias.202401.nc"
     source.write_text("dummy", encoding="utf-8")
 
@@ -115,12 +115,18 @@ def test_search_query_supports_nested_metadata_and_metadata_alias(tmp_path: Path
         source,
         metadata={"site": {"code": "MHD", "country": "IE"}, "species": "co2"},
     )
+    record.derived_metadata["netcdf"] = {"dims": {"time": 12}}
+    catalog.repository.update(record)
 
-    query = SearchQuery.equals("metadata.site.code", "MHD").and_(
-        SearchQuery.matches("user_metadata.species", "co*")
+    query = (
+        SearchQuery.eq("user.site.code", "MHD")
+        .match("user.species", "co*")
+        .eq("derived.netcdf.dims.time", 12)
     )
 
-    assert [r.id for r in catalog.search(query=query)] == [record.id]
+    assert [r.id for r in catalog.search(query)] == [record.id]
+    assert query.terms[0].field.stored == "user_metadata.site.code"
+    assert query.terms[0].op == SearchOp.EQ
 
 
 def test_search_supports_list_membership_and_contains(tmp_path: Path) -> None:
@@ -158,13 +164,25 @@ def test_search_supports_exists_missing_and_heterogeneous_records(tmp_path: Path
         metadata={"species": "ch4", "platform": None},
     )
 
-    by_exists = catalog.search(exists=["metadata.site.code"])
-    by_missing = catalog.search(missing=["metadata.site.code"])
-    by_null_exists = catalog.search(exists=["metadata.platform"])
+    by_exists = catalog.search(exists=["user.site.code"])
+    by_missing = catalog.search(missing=["user.site.code"])
+    by_null_exists = catalog.search(exists=["user.platform"])
 
     assert [r.id for r in by_exists] == [with_site.id]
     assert [r.id for r in by_missing] == [without_site.id]
     assert [r.id for r in by_null_exists] == [without_site.id]
+
+
+def test_search_equality_against_list_requires_exact_list(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
+    tagged = catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/tagged.zarr"),
+        metadata={"tags": ["paris", "obspack"]},
+    )
+
+    assert catalog.search(where={"tags": "paris"}) == []
+    assert [r.id for r in catalog.search(where={"tags": ["paris", "obspack"]})] == [tagged.id]
 
 
 def test_search_query_supports_locator_uri_and_string_match(tmp_path: Path) -> None:

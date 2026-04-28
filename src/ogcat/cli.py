@@ -112,25 +112,48 @@ def _parse_key_value_options(items: list[str]) -> dict[str, str]:
     return parsed
 
 
+def _parse_search_value(raw_value: str) -> Any:
+    """Parse a search expression value as JSON when possible."""
+    try:
+        return json.loads(raw_value)
+    except json.JSONDecodeError:
+        return raw_value
+
+
 def _parse_search_expression(item: str) -> SearchQuery:
     """Parse one simple positional search expression."""
+    if item.startswith("!") and item.endswith("?"):
+        field = item[1:-1]
+        if not field:
+            raise typer.BadParameter(f"Expected !FIELD?: {item}")
+        return SearchQuery.missing(field)
+    if item.endswith("?"):
+        field = item[:-1]
+        if not field:
+            raise typer.BadParameter(f"Expected FIELD?: {item}")
+        return SearchQuery.exists(field)
     if "~=" in item:
         key, value = item.split("~=", 1)
         if not key:
             raise typer.BadParameter(f"Expected FIELD~=VALUE: {item}")
-        return SearchQuery.contains(key, value)
+        return SearchQuery.contains(key, _parse_search_value(value))
     if "~" in item:
         key, value = item.split("~", 1)
         if not key:
             raise typer.BadParameter(f"Expected FIELD~PATTERN: {item}")
         return SearchQuery.matches(key, value)
+    if ":" in item:
+        key, value = item.split(":", 1)
+        if not key:
+            raise typer.BadParameter(f"Expected FIELD:VALUE: {item}")
+        return SearchQuery.contains(key, _parse_search_value(value))
     if "=" in item:
         parsed = _parse_meta_item(item)
         if len(parsed) != 1:
             raise typer.BadParameter(f"Expected one search expression: {item}")
         field, value = next(iter(parsed.items()))
         return SearchQuery.equals(field, value)
-    raise typer.BadParameter(f"Expected FIELD=VALUE, FIELD~=VALUE, or FIELD~PATTERN: {item}")
+    raise typer.BadParameter(f"Expected FIELD=VALUE, FIELD:VALUE, FIELD~PATTERN, FIELD?, or !FIELD?: {item}")
 
 
 def _parse_search_expressions(items: list[str]) -> SearchQuery:

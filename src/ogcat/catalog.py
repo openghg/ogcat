@@ -302,8 +302,8 @@ class Catalog:
 
     def search(
         self,
-        *,
         query: SearchQuery | None = None,
+        *,
         where: dict[str, object] | None = None,
         contains: dict[str, object] | None = None,
         regex: dict[str, str] | None = None,

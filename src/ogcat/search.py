@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from fnmatch import fnmatchcase
 from typing import Any
 
@@ -37,54 +38,120 @@ class FieldLookup:
 
 
 @dataclass(frozen=True, slots=True)
-class SearchCriterion:
+class FieldPath:
+    """Backend-neutral field path used by search terms."""
+
+    raw: str
+
+    def __post_init__(self) -> None:
+        """Validate field paths at construction time."""
+        if not self.raw:
+            raise ValueError("Search field path cannot be empty.")
+
+    @property
+    def stored(self) -> str:
+        """Return this field path normalised to the stored record shape."""
+        if self.raw == "user":
+            return "user_metadata"
+        if self.raw.startswith("user."):
+            return f"user_metadata.{self.raw.removeprefix('user.')}"
+        if self.raw == "derived":
+            return "derived_metadata"
+        if self.raw.startswith("derived."):
+            return f"derived_metadata.{self.raw.removeprefix('derived.')}"
+        return self.raw
+
+
+class SearchOp(StrEnum):
+    """Portable search operators."""
+
+    EQ = "eq"
+    CONTAINS = "contains"
+    MATCH = "match"
+    EXISTS = "exists"
+    MISSING = "missing"
+    REGEX = "regex"
+
+
+@dataclass(frozen=True, slots=True)
+class SearchTerm:
     """One backend-neutral search predicate."""
 
-    field: str
-    operator: str
+    field: FieldPath
+    op: SearchOp
     value: Any = None
+
+    @classmethod
+    def build(cls, field: str | FieldPath, op: SearchOp | str, value: Any = None) -> SearchTerm:
+        """Build a search term from user-facing field and operator inputs."""
+        field_path = field if isinstance(field, FieldPath) else FieldPath(field)
+        search_op = op if isinstance(op, SearchOp) else SearchOp(op)
+        return cls(field=field_path, op=search_op, value=value)
+
+
+class _SearchQueryTermBuilder:
+    """Descriptor that works as both a constructor and chainable query method."""
+
+    def __init__(self, op: SearchOp) -> None:
+        self._op = op
+
+    def __get__(self, query: SearchQuery | None, owner: type[SearchQuery]) -> Any:
+        """Return a function that appends this descriptor's operator."""
+
+        def build(field: str, value: Any = None) -> SearchQuery:
+            base_query = owner.all() if query is None else query
+            return base_query.and_(owner((SearchTerm.build(field=field, op=self._op, value=value),)))
+
+        return build
 
 
 @dataclass(frozen=True, slots=True)
 class SearchQuery:
     """Backend-neutral catalog record search query."""
 
-    criteria: tuple[SearchCriterion, ...] = ()
+    terms: tuple[SearchTerm, ...] = ()
+
+    def __init__(
+        self,
+        terms: Sequence[SearchTerm] = (),
+        *,
+        criteria: Sequence[SearchTerm] | None = None,
+    ) -> None:
+        """Create a search query from backend-neutral search terms.
+
+        Args:
+            terms: Search terms combined with AND semantics.
+            criteria: Backwards-compatible alias for terms.
+        """
+        if criteria is not None:
+            terms = criteria
+        object.__setattr__(self, "terms", tuple(terms))
+
+    @property
+    def criteria(self) -> tuple[SearchTerm, ...]:
+        """Backwards-compatible alias for search terms."""
+        return self.terms
 
     @classmethod
     def all(cls) -> SearchQuery:
         """Return a query that matches every record."""
         return cls()
 
-    @classmethod
-    def equals(cls, field: str, value: Any) -> SearchQuery:
-        """Return a query matching records where a field equals a value."""
-        return cls((SearchCriterion(field=field, operator="eq", value=value),))
+    eq = _SearchQueryTermBuilder(SearchOp.EQ)
+    equals = _SearchQueryTermBuilder(SearchOp.EQ)
+    contains = _SearchQueryTermBuilder(SearchOp.CONTAINS)
+    match = _SearchQueryTermBuilder(SearchOp.MATCH)
+    matches = _SearchQueryTermBuilder(SearchOp.MATCH)
+    regex = _SearchQueryTermBuilder(SearchOp.REGEX)
+    exists = _SearchQueryTermBuilder(SearchOp.EXISTS)
+    missing = _SearchQueryTermBuilder(SearchOp.MISSING)
 
     @classmethod
-    def contains(cls, field: str, value: Any) -> SearchQuery:
-        """Return a query matching records where a field contains a value."""
-        return cls((SearchCriterion(field=field, operator="contains", value=value),))
-
-    @classmethod
-    def matches(cls, field: str, pattern: str) -> SearchQuery:
-        """Return a query matching records where a string field matches a pattern."""
-        return cls((SearchCriterion(field=field, operator="match", value=pattern),))
-
-    @classmethod
-    def regex(cls, field: str, pattern: str) -> SearchQuery:
-        """Return a query matching records where a string field matches a regex."""
-        return cls((SearchCriterion(field=field, operator="regex", value=pattern),))
-
-    @classmethod
-    def exists(cls, field: str) -> SearchQuery:
-        """Return a query matching records where a field exists."""
-        return cls((SearchCriterion(field=field, operator="exists"),))
-
-    @classmethod
-    def missing(cls, field: str) -> SearchQuery:
-        """Return a query matching records where a field is missing."""
-        return cls((SearchCriterion(field=field, operator="missing"),))
+    def where(cls, filters: Mapping[str, Any] | None = None, **kwargs: Any) -> SearchQuery:
+        """Build an equality query from keyword filters."""
+        combined = dict(filters or {})
+        combined.update(kwargs)
+        return cls.from_filters(where=combined)
 
     @classmethod
     def from_filters(
@@ -98,41 +165,38 @@ class SearchQuery:
         missing: Sequence[str] | None = None,
     ) -> SearchQuery:
         """Build a query from simple filter mappings."""
-        criteria: list[SearchCriterion] = []
-        criteria.extend(
-            SearchCriterion(field=field, operator="eq", value=value) for field, value in (where or {}).items()
+        terms: list[SearchTerm] = []
+        terms.extend(
+            SearchTerm.build(field=field, op=SearchOp.EQ, value=value)
+            for field, value in (where or {}).items()
         )
-        criteria.extend(
-            SearchCriterion(field=field, operator="contains", value=value)
+        terms.extend(
+            SearchTerm.build(field=field, op=SearchOp.CONTAINS, value=value)
             for field, value in (contains or {}).items()
         )
-        criteria.extend(
-            SearchCriterion(field=field, operator="match", value=value)
+        terms.extend(
+            SearchTerm.build(field=field, op=SearchOp.MATCH, value=value)
             for field, value in (match or {}).items()
         )
-        criteria.extend(
-            SearchCriterion(field=field, operator="regex", value=value)
+        terms.extend(
+            SearchTerm.build(field=field, op=SearchOp.REGEX, value=value)
             for field, value in (regex or {}).items()
         )
-        criteria.extend(SearchCriterion(field=field, operator="exists") for field in (exists or ()))
-        criteria.extend(SearchCriterion(field=field, operator="missing") for field in (missing or ()))
-        return cls(tuple(criteria))
+        terms.extend(SearchTerm.build(field=field, op=SearchOp.EXISTS) for field in (exists or ()))
+        terms.extend(SearchTerm.build(field=field, op=SearchOp.MISSING) for field in (missing or ()))
+        return cls(tuple(terms))
 
     def and_(self, *queries: SearchQuery) -> SearchQuery:
         """Return a query requiring this query and all provided queries to match."""
-        criteria = list(self.criteria)
+        terms = list(self.terms)
         for query in queries:
-            criteria.extend(query.criteria)
-        return SearchQuery(tuple(criteria))
+            terms.extend(query.terms)
+        return SearchQuery(tuple(terms))
 
 
 def _normalise_field_path(dotted_path: str) -> str:
     """Translate user-friendly aliases to stored record paths."""
-    if dotted_path == "metadata":
-        return "user_metadata"
-    if dotted_path.startswith("metadata."):
-        return f"user_metadata.{dotted_path.removeprefix('metadata.')}"
-    return dotted_path
+    return FieldPath(dotted_path).stored
 
 
 def get_dotted(mapping: Mapping[str, Any], dotted_path: str) -> Any:
@@ -240,29 +304,29 @@ def _match(actual: Any, pattern: str, ignore_case: bool) -> bool:
 
 def _matches_criterion(
     record: CatalogRecord,
-    criterion: SearchCriterion,
+    term: SearchTerm,
     *,
     ignore_case: bool,
     resolution_order: Sequence[str] | None,
 ) -> bool:
     """Return whether a record matches one criterion."""
-    resolved = resolve_field(record, criterion.field, resolution_order=resolution_order)
-    if criterion.operator == "exists":
+    resolved = resolve_field(record, term.field.stored, resolution_order=resolution_order)
+    if term.op == SearchOp.EXISTS:
         return resolved.found
-    if criterion.operator == "missing":
+    if term.op == SearchOp.MISSING:
         return not resolved.found
     if not resolved.found:
         return False
-    if criterion.operator == "eq":
-        return _eq(resolved.value, criterion.value, ignore_case)
-    if criterion.operator == "contains":
-        return _contains(resolved.value, criterion.value, ignore_case)
-    if criterion.operator == "match":
-        return _match(resolved.value, str(criterion.value), ignore_case)
-    if criterion.operator == "regex":
+    if term.op == SearchOp.EQ:
+        return _eq(resolved.value, term.value, ignore_case)
+    if term.op == SearchOp.CONTAINS:
+        return _contains(resolved.value, term.value, ignore_case)
+    if term.op == SearchOp.MATCH:
+        return _match(resolved.value, str(term.value), ignore_case)
+    if term.op == SearchOp.REGEX:
         flags = re.IGNORECASE if ignore_case else 0
-        return re.search(str(criterion.value), _stringify(resolved.value), flags=flags) is not None
-    raise ValueError(f"Unsupported search operator: {criterion.operator}")
+        return re.search(str(term.value), _stringify(resolved.value), flags=flags) is not None
+    raise ValueError(f"Unsupported search operator: {term.op}")
 
 
 def matches_record(
@@ -288,10 +352,10 @@ def matches_record(
         missing=missing,
     )
     active_query = (query or SearchQuery.all()).and_(filter_query)
-    for criterion in active_query.criteria:
+    for term in active_query.terms:
         if not _matches_criterion(
             record,
-            criterion,
+            term,
             ignore_case=ignore_case,
             resolution_order=resolution_order,
         ):
