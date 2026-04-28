@@ -6,6 +6,7 @@ import csv
 import json
 import os
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Annotated, Any, Literal, NoReturn
 
@@ -15,7 +16,7 @@ from rich.table import Table
 
 from ogcat.catalog import Catalog
 from ogcat.models import CatalogRecord
-from ogcat.search import flatten_lookup
+from ogcat.record_set import DEFAULT_RECORDSET_FIELDS, CatalogRecordSet
 from ogcat.spec import CatalogSpec
 
 app = typer.Typer(
@@ -25,7 +26,7 @@ app = typer.Typer(
 console = Console()
 error_console = Console(stderr=True)
 DEFAULT_SEARCH_LIMIT = 50
-DEFAULT_SEARCH_FIELDS = ["id", "title", "product", "species", "path"]
+DEFAULT_SEARCH_FIELDS: list[str] = list(DEFAULT_RECORDSET_FIELDS)
 SearchOutputFormat = Literal["table", "plain", "csv", "tsv", "pipe"]
 
 
@@ -137,52 +138,16 @@ def _parse_search_output_format(output_format: str) -> SearchOutputFormat:
     raise typer.BadParameter("Expected one of: table, plain, csv, tsv, pipe.")
 
 
-def _resolve_display_field(
-    record: CatalogRecord,
-    field: str,
-    *,
-    resolution_order: list[str],
-) -> Any:
-    """Resolve a display field without changing search semantics."""
-    if field == "path":
-        return record.path()
-    if field == "locator.uri":
-        return record.locator.value if record.locator.kind == "uri" else None
-    return flatten_lookup(record, field, resolution_order=resolution_order)
-
-
-def _format_display_value(value: Any) -> str:
-    """Format a display value for table output."""
-    if value is None:
-        return ""
-    if isinstance(value, (dict, list)):
-        return json.dumps(value, sort_keys=True)
-    return str(value)
-
-
 def _search_display_rows(
-    records: list[CatalogRecord],
+    record_set: CatalogRecordSet,
     *,
-    fields: list[str],
-    resolution_order: list[str],
+    fields: Sequence[str],
 ) -> list[list[str]]:
     """Resolve search records into display-ready string rows."""
-    return [
-        [
-            _format_display_value(
-                _resolve_display_field(
-                    record,
-                    field,
-                    resolution_order=resolution_order,
-                )
-            )
-            for field in fields
-        ]
-        for record in records
-    ]
+    return record_set.display_rows(fields)
 
 
-def _print_search_table(*, fields: list[str], rows: list[list[str]]) -> None:
+def _print_search_table(*, fields: Sequence[str], rows: list[list[str]]) -> None:
     """Print search results as a Rich table."""
     table = Table(title="ogcat search results")
     for field in fields:
@@ -194,7 +159,7 @@ def _print_search_table(*, fields: list[str], rows: list[list[str]]) -> None:
 
 def _print_delimited_search_output(
     *,
-    fields: list[str],
+    fields: Sequence[str],
     rows: list[list[str]],
     delimiter: str,
 ) -> None:
@@ -380,9 +345,8 @@ def search(
         return
 
     rows = _search_display_rows(
-        shown_results,
+        active_catalog.record_set(shown_results),
         fields=display_fields,
-        resolution_order=active_catalog.spec.field_resolution_order,
     )
 
     if parsed_output_format != "table":
