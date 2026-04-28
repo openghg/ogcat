@@ -100,6 +100,106 @@ class ExternalIndexPlugin:
 Rollback actions run in reverse registration order. They are best-effort compensating actions, not
 database transactions.
 
+## Writing Artifacts From Plugins
+
+Artifact writers materialise data before the catalog record is written. They receive the active
+`OperationContext`, an `OperationSource`, and the resolved target `ArtifactLocator`. Writers should
+create the artifact, register rollback for anything they created, and add writer-derived metadata to
+`context.derived_metadata`.
+
+`add_artifact()` remains record-only unless a writer is explicitly supplied:
+
+```python
+from pathlib import Path
+
+from ogcat import ArtifactLocator, Catalog, OperationSource
+from ogcat.hooks import OperationContext
+
+
+class TextWriter:
+    def write(
+        self,
+        context: OperationContext,
+        source: OperationSource,
+        target: ArtifactLocator,
+    ) -> None:
+        target_path = target.as_path()
+        if target_path is None:
+            raise ValueError("text writer requires a path locator")
+
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_text(str(source.metadata["text"]), encoding="utf-8")
+        context.rollback(lambda: target_path.unlink(missing_ok=True), description="remove text artifact")
+        context.derived_metadata["byte_count"] = target_path.stat().st_size
+
+
+catalog = Catalog.open("example-catalog")
+record = catalog.add_artifact(
+    record_type="generated_text",
+    locator=ArtifactLocator.path(Path("example-catalog/files/generated/example.txt")),
+    source=OperationSource(kind="text", descriptor="in-memory text", metadata={"text": "hello"}),
+    artifact_writer=TextWriter(),
+)
+```
+
+Writers are the right place for artifact creation such as copying, extracting, parsing, or
+materialising data. Record hooks still surround catalog metadata and record persistence:
+`before_record_write` and `after_record_write` should not perform data writes unless the hook object
+is intentionally being used as an artifact writer.
+
+### Unzip Writer Example
+
+An unzip-style writer can take a zip file source, write an extracted directory artifact, and record
+what it extracted:
+
+```python
+import shutil
+import zipfile
+from pathlib import Path
+
+from ogcat import ArtifactLocator, Catalog, OperationSource
+from ogcat.hooks import OperationContext
+
+
+class UnzipWriter:
+    def write(
+        self,
+        context: OperationContext,
+        source: OperationSource,
+        target: ArtifactLocator,
+    ) -> None:
+        if source.kind != "zip_file" or source.path is None:
+            raise ValueError("unzip writer requires OperationSource(kind='zip_file', path=...)")
+        target_dir = target.as_path()
+        if target_dir is None:
+            raise ValueError("unzip writer requires a path locator")
+
+        target_dir.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(source.path) as archive:
+            archive.extractall(target_dir)
+            names = sorted(archive.namelist())
+
+        context.rollback(
+            lambda: shutil.rmtree(target_dir, ignore_errors=True),
+            description=f"remove extracted directory {target_dir}",
+        )
+        context.derived_metadata["extracted_file_count"] = len(names)
+        context.derived_metadata["extracted_names"] = names
+
+
+catalog = Catalog.open("example-catalog")
+record = catalog.add_artifact(
+    record_type="zip_directory",
+    locator=ArtifactLocator.path(Path("example-catalog/files/extracted/example")),
+    source=OperationSource(
+        kind="zip_file",
+        path=Path("incoming/example.zip"),
+        descriptor="incoming/example.zip",
+    ),
+    artifact_writer=UnzipWriter(),
+)
+```
+
 ## Composed Transactions
 
 Callers can pass a `UnitOfWork` to compose multiple catalog operations. In this mode the caller owns
@@ -147,8 +247,11 @@ rollback work:
 
 - mutate `user_metadata` before validation to add defaults or normalise caller input;
 - mutate `planned_locators` during `resolve_artifact_locator`; the first locator is canonical;
+- inspect `source` during artifact writing and metadata extraction;
 - return or add `derived_metadata` during `extract_metadata`;
 - call `context.rollback(...)` after creating external side effects.
 
 The context includes the catalog root, operation id, operation type, record type, user metadata,
 derived metadata, planned locators, source information, storage mode, and rollback registration.
+`context.source_path` and `context.source_descriptor` remain compatibility shims over
+`context.source.path` and `context.source.descriptor`.
