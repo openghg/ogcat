@@ -14,6 +14,15 @@ from ogcat.validation import (
     validate_schema,
     validate_spec,
 )
+from ogcat.writers import (
+    FunctionArtifactWriter,
+    UnzipArtifactWriter,
+    memory_source,
+    memory_writer,
+    path_source,
+    path_writer,
+    source_writer,
+)
 
 __all__ = [
     "ArtifactLocator",
@@ -21,6 +30,7 @@ __all__ = [
     "Catalog",
     "CatalogRecord",
     "CatalogSpec",
+    "FunctionArtifactWriter",
     "HookManager",
     "HookWarning",
     "MetadataFieldDescription",
@@ -31,10 +41,16 @@ __all__ = [
     "RollbackFailure",
     "RecordSchema",
     "UnitOfWork",
+    "UnzipArtifactWriter",
     "ValidationIssue",
     "ValidationReport",
     "validate_metadata",
     "validate_record",
     "validate_schema",
     "validate_spec",
+    "memory_source",
+    "memory_writer",
+    "path_source",
+    "path_writer",
+    "source_writer",
 ]

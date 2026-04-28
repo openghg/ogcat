@@ -58,12 +58,14 @@ class OperationSource:
         path: Optional local source path.
         descriptor: Optional non-path source description or URI.
         metadata: Source-specific JSON-compatible metadata.
+        payload: Optional in-memory Python object for writer helpers.
     """
 
     kind: str
     path: Path | None = None
     descriptor: str | None = None
     metadata: MetadataDict = field(default_factory=dict)
+    payload: object | None = None
 
 
 class ArtifactWriter(Protocol):

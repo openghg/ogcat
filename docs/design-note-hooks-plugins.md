@@ -105,40 +105,29 @@ database transactions.
 Artifact writers materialise data before the catalog record is written. They receive the active
 `OperationContext`, an `OperationSource`, and the resolved target `ArtifactLocator`. Writers should
 create the artifact, register rollback for anything they created, and add writer-derived metadata to
-`context.derived_metadata`.
+`context.derived_metadata`. `ogcat.writers` includes small helper writers for examples and lightweight
+workflows; they are intentionally minimal wrappers, not a full pipeline system.
 
 `add_artifact()` remains record-only unless a writer is explicitly supplied:
 
 ```python
 from pathlib import Path
 
-from ogcat import ArtifactLocator, Catalog, OperationSource
-from ogcat.hooks import OperationContext
+from ogcat import ArtifactLocator, Catalog, memory_source, memory_writer
 
 
-class TextWriter:
-    def write(
-        self,
-        context: OperationContext,
-        source: OperationSource,
-        target: ArtifactLocator,
-    ) -> None:
-        target_path = target.as_path()
-        if target_path is None:
-            raise ValueError("text writer requires a path locator")
-
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        target_path.write_text(str(source.metadata["text"]), encoding="utf-8")
-        context.rollback(lambda: target_path.unlink(missing_ok=True), description="remove text artifact")
-        context.derived_metadata["byte_count"] = target_path.stat().st_size
+def write_text(data: object, target: Path) -> dict[str, object]:
+    text = str(data)
+    target.write_text(text, encoding="utf-8")
+    return {"byte_count": target.stat().st_size}
 
 
 catalog = Catalog.open("example-catalog")
 record = catalog.add_artifact(
     record_type="generated_text",
     locator=ArtifactLocator.path(Path("example-catalog/files/generated/example.txt")),
-    source=OperationSource(kind="text", descriptor="in-memory text", metadata={"text": "hello"}),
-    artifact_writer=TextWriter(),
+    source=memory_source("hello", kind="text", descriptor="in-memory text"),
+    artifact_writer=memory_writer(write_text, target_kind="file", source_kind="text"),
 )
 ```
 
@@ -151,66 +140,46 @@ is intentionally being used as an artifact writer.
 hook, writer, and commit lifecycle independently; if a later item fails, earlier successful items
 remain committed.
 
+The same wrapper pattern works for path-backed transforms:
+
+```python
+from pathlib import Path
+
+from ogcat import ArtifactLocator, Catalog, path_source, path_writer
+
+
+def transform_netcdf(source: Path, target: Path) -> dict[str, object]:
+    # For example: open with xarray, transform, and write a new NetCDF file.
+    target.write_bytes(source.read_bytes())
+    return {"transform": "copy-placeholder"}
+
+
+catalog = Catalog.open("example-catalog")
+record = catalog.add_artifact(
+    record_type="processed_flux",
+    locator=ArtifactLocator.path(Path("example-catalog/files/processed/output.nc")),
+    source=path_source("incoming/input.nc", kind="netcdf_file"),
+    artifact_writer=path_writer(transform_netcdf, target_kind="file", source_kind="netcdf_file"),
+)
+```
+
 ### Unzip Writer Example
 
 An unzip-style writer can take a zip file source, write an extracted directory artifact, and record
-what it extracted:
+what it extracted. The bundled example validates archive member paths before writing so entries such
+as `../escape.txt` cannot leave the target directory:
 
 ```python
-import shutil
-import zipfile
 from pathlib import Path
 
-from ogcat import ArtifactLocator, Catalog, OperationSource
-from ogcat.hooks import OperationContext
-
-
-class UnzipWriter:
-    def write(
-        self,
-        context: OperationContext,
-        source: OperationSource,
-        target: ArtifactLocator,
-    ) -> None:
-        if source.kind != "zip_file" or source.path is None:
-            raise ValueError("unzip writer requires OperationSource(kind='zip_file', path=...)")
-        target_dir = target.as_path()
-        if target_dir is None:
-            raise ValueError("unzip writer requires a path locator")
-
-        target_dir.mkdir(parents=True, exist_ok=True)
-        target_root = target_dir.resolve()
-        with zipfile.ZipFile(source.path) as archive:
-            names = sorted(archive.namelist())
-            for member in archive.infolist():
-                destination = (target_dir / member.filename).resolve()
-                if destination != target_root and target_root not in destination.parents:
-                    raise ValueError(f"zip member escapes target directory: {member.filename}")
-                if member.is_dir():
-                    destination.mkdir(parents=True, exist_ok=True)
-                    continue
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                with archive.open(member) as source_file, destination.open("wb") as target_file:
-                    shutil.copyfileobj(source_file, target_file)
-
-        context.rollback(
-            lambda: shutil.rmtree(target_dir, ignore_errors=True),
-            description=f"remove extracted directory {target_dir}",
-        )
-        context.derived_metadata["extracted_file_count"] = len(names)
-        context.derived_metadata["extracted_names"] = names
-
+from ogcat import ArtifactLocator, Catalog, UnzipArtifactWriter, path_source
 
 catalog = Catalog.open("example-catalog")
 record = catalog.add_artifact(
     record_type="zip_directory",
     locator=ArtifactLocator.path(Path("example-catalog/files/extracted/example")),
-    source=OperationSource(
-        kind="zip_file",
-        path=Path("incoming/example.zip"),
-        descriptor="incoming/example.zip",
-    ),
-    artifact_writer=UnzipWriter(),
+    source=path_source("incoming/example.zip", kind="zip_file"),
+    artifact_writer=UnzipArtifactWriter(),
 )
 ```
 
