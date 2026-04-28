@@ -147,6 +147,18 @@ def test_search_contains_flag_parses_json_values(tmp_path: Path) -> None:
     assert strip_ansi(mapping_result.stdout).splitlines() == [_record_id(record)]
 
 
+def test_search_rejects_empty_search_fields_cleanly(tmp_path: Path) -> None:
+    catalog = _create_catalog(tmp_path)
+
+    positional_result = runner.invoke(app, ["search", "--catalog", str(catalog.root), "=CO2"])
+    contains_result = runner.invoke(app, ["search", "--catalog", str(catalog.root), "--contains", "=CO2"])
+
+    assert positional_result.exit_code != 0
+    assert "Expected FIELD=VALUE: =CO2" in strip_ansi(positional_result.output)
+    assert contains_result.exit_code != 0
+    assert "Search option key cannot be empty: =CO2" in strip_ansi(contains_result.output)
+
+
 def test_search_cli_match_filter_supports_locator_uri(tmp_path: Path) -> None:
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
     record = catalog.add_artifact(

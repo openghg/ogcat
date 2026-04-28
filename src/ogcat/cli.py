@@ -119,6 +119,9 @@ def _parse_key_value_search_options(items: list[str]) -> dict[str, Any]:
         if "=" not in item:
             raise typer.BadParameter(f"Expected KEY=VALUE: {item}")
         key, raw_value = item.split("=", 1)
+        key = key.strip()
+        if not key:
+            raise typer.BadParameter(f"Search option key cannot be empty: {item}")
         parsed[key] = _parse_search_value(raw_value)
     return parsed
 
@@ -133,37 +136,46 @@ def _parse_search_value(raw_value: str) -> Any:
 
 def _parse_search_expression(item: str) -> SearchQuery:
     """Parse one simple positional search expression."""
-    if item.startswith("!") and item.endswith("?"):
-        field = item[1:-1]
-        if not field:
-            raise typer.BadParameter(f"Expected !FIELD?: {item}")
-        return SearchQuery.missing(field)
-    if item.endswith("?"):
-        field = item[:-1]
-        if not field:
-            raise typer.BadParameter(f"Expected FIELD?: {item}")
-        return SearchQuery.exists(field)
-    if "~=" in item:
-        key, value = item.split("~=", 1)
-        if not key:
-            raise typer.BadParameter(f"Expected FIELD~=VALUE: {item}")
-        return SearchQuery.contains(key, _parse_search_value(value))
-    if "~" in item:
-        key, value = item.split("~", 1)
-        if not key:
-            raise typer.BadParameter(f"Expected FIELD~PATTERN: {item}")
-        return SearchQuery.matches(key, value)
-    if ":" in item:
-        key, value = item.split(":", 1)
-        if not key:
-            raise typer.BadParameter(f"Expected FIELD:VALUE: {item}")
-        return SearchQuery.contains(key, _parse_search_value(value))
-    if "=" in item:
-        parsed = _parse_meta_item(item)
-        if len(parsed) != 1:
-            raise typer.BadParameter(f"Expected one search expression: {item}")
-        field, value = next(iter(parsed.items()))
-        return SearchQuery.equals(field, value)
+    try:
+        if item.startswith("!") and item.endswith("?"):
+            field = item[1:-1].strip()
+            if not field:
+                raise typer.BadParameter(f"Expected !FIELD?: {item}")
+            return SearchQuery.missing(field)
+        if item.endswith("?"):
+            field = item[:-1].strip()
+            if not field:
+                raise typer.BadParameter(f"Expected FIELD?: {item}")
+            return SearchQuery.exists(field)
+        if "~=" in item:
+            key, value = item.split("~=", 1)
+            key = key.strip()
+            if not key:
+                raise typer.BadParameter(f"Expected FIELD~=VALUE: {item}")
+            return SearchQuery.contains(key, _parse_search_value(value))
+        if "~" in item:
+            key, value = item.split("~", 1)
+            key = key.strip()
+            if not key:
+                raise typer.BadParameter(f"Expected FIELD~PATTERN: {item}")
+            return SearchQuery.matches(key, value)
+        if ":" in item:
+            key, value = item.split(":", 1)
+            key = key.strip()
+            if not key:
+                raise typer.BadParameter(f"Expected FIELD:VALUE: {item}")
+            return SearchQuery.contains(key, _parse_search_value(value))
+        if "=" in item:
+            parsed = _parse_meta_item(item)
+            if len(parsed) != 1:
+                raise typer.BadParameter(f"Expected one search expression: {item}")
+            field, value = next(iter(parsed.items()))
+            field = field.strip()
+            if not field:
+                raise typer.BadParameter(f"Expected FIELD=VALUE: {item}")
+            return SearchQuery.equals(field, value)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     raise typer.BadParameter(f"Expected FIELD=VALUE, FIELD:VALUE, FIELD~PATTERN, FIELD?, or !FIELD?: {item}")
 
 
