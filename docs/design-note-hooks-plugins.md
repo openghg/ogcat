@@ -17,11 +17,11 @@ Terminology matters:
 - an **operation** coordinates validation, locator resolution, optional artifact work, record writes,
   hooks, and rollback.
 
-`Catalog.add_artifact(...)` is record-only in this version: it records a locator for an artifact, but
-does not write artifact data. `Catalog.add_file(...)` is a bundled local-file operation: it resolves a
-path locator, copies or moves the source file, extracts generic metadata, and writes the record.
-Future data-from-memory writes should be modeled as explicit operations or artifact writers rather
-than as record-write hooks.
+`Catalog.add_artifact(...)` is record-only by default: it records a locator for an artifact, but does
+not write artifact data unless an artifact writer is explicitly supplied. `Catalog.add_file(...)` is a
+bundled local-file operation: it resolves a path locator, copies or moves the source file, extracts
+generic metadata, and writes the record. Future data-from-memory writes should be modeled as explicit
+operations or artifact writers rather than as record-write hooks.
 
 ## Direct Registration
 
@@ -146,6 +146,10 @@ Writers are the right place for artifact creation such as copying, extracting, p
 materialising data. Record hooks still surround catalog metadata and record persistence:
 `before_record_write` and `after_record_write` should not perform data writes unless the hook object
 is intentionally being used as an artifact writer.
+
+`add_artifacts()` is equivalent to calling `add_artifact()` once per item. Each item runs the normal
+hook, writer, and commit lifecycle independently; if a later item fails, earlier successful items
+remain committed.
 
 ### Unzip Writer Example
 

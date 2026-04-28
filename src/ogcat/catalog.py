@@ -180,6 +180,7 @@ class Catalog:
         schema = self._select_schema(record_type, require_known=False)
         schema_name = self._schema_name(record_type)
         metadata = _coerce_metadata_input(metadata_input, schema_name=schema_name)
+        validated_artifact_writer = _validate_artifact_writer(artifact_writer)
         if transaction is not None:
             if transaction.repository is not self.repository:
                 raise ValueError("Transaction is bound to a different catalog repository.")
@@ -197,7 +198,7 @@ class Catalog:
                 naming_metadata=naming_metadata,
                 time_added=time_added,
                 source=source,
-                artifact_writer=artifact_writer,
+                artifact_writer=validated_artifact_writer,
                 schema=schema,
             )
         with self.transaction() as unit_of_work:
@@ -215,7 +216,7 @@ class Catalog:
                 naming_metadata=naming_metadata,
                 time_added=time_added,
                 source=source,
-                artifact_writer=artifact_writer,
+                artifact_writer=validated_artifact_writer,
                 schema=schema,
             )
 
@@ -238,7 +239,8 @@ class Catalog:
 
         Each item should provide the same keyword-style fields accepted by
         `add_artifact()`. Items are added one at a time so hooks and artifact
-        writers run consistently for each record.
+        writers run consistently for each record. Earlier items remain
+        committed if a later item fails.
         """
         validated_items = [_validate_artifact_batch_item(item, index) for index, item in enumerate(artifacts)]
 
@@ -699,7 +701,7 @@ def _optional_metadata(value: object) -> MetadataDict | None:
         return None
     if isinstance(value, dict):
         return dict(value)
-    raise TypeError(f"metadata fields must be dictionaries, got {type(value).__name__}")
+    raise TypeError(f"optional metadata value must be a dictionary, got {type(value).__name__}")
 
 
 def _optional_string_list(value: object) -> list[str] | None:
@@ -722,6 +724,11 @@ def _optional_operation_source(value: object) -> OperationSource | None:
 
 def _optional_artifact_writer(value: object) -> ArtifactWriter | None:
     """Return an optional artifact writer for artifact batch forwarding."""
+    return _validate_artifact_writer(value)
+
+
+def _validate_artifact_writer(value: object) -> ArtifactWriter | None:
+    """Return an artifact writer when the optional value implements the writer protocol."""
     if value is None:
         return None
     if callable(getattr(value, "write", None)):
