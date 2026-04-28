@@ -1,0 +1,47 @@
+ogcat
+=====
+
+``ogcat`` is a lightweight artifact catalog for local files.
+
+It provides a self-describing on-disk catalog layout, a small Python API, and
+a CLI for creating catalogs, ingesting files, recording metadata, and
+searching records.
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Getting started
+
+   install
+   getting-started
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Concepts
+
+   concepts/catalog-records
+   concepts/locators-and-storage
+   concepts/metadata-and-validation
+   concepts/transactions-and-logging
+   concepts/hooks-and-plugins
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Tutorials
+
+   tutorials/local-file-catalog
+   tutorials/bibdesk-mini
+   tutorials/custom-extractor
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Reference
+
+   api/index
+   examples-data-policy
+   cli
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Development notes
+
+   architecture

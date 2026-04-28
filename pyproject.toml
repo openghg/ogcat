@@ -21,6 +21,12 @@ dev = [
   "pyright>=1.1",
   "ruff>=0.6",
 ]
+docs = [
+  "sphinx>=7.0",
+  "myst-parser>=2.0",
+  "sphinx-autodoc-typehints>=1.25",
+  "furo>=2024.0",
+]
 
 [project.scripts]
 ogcat = "ogcat.cli:app"
