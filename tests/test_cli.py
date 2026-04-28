@@ -124,6 +124,29 @@ def test_search_cli_supports_nested_list_and_missing_filters(tmp_path: Path) -> 
     assert payload[0]["user_metadata"]["site"]["code"] == "MHD"
 
 
+def test_search_contains_flag_parses_json_values(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
+    record = catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/paris.zarr"),
+        metadata={"months": [1, 2], "site": {"code": "MHD", "country": "IE"}},
+    )
+
+    numeric_result = runner.invoke(
+        app,
+        ["search", "--catalog", str(catalog.root), "--contains", "months=2", "--ids"],
+    )
+    mapping_result = runner.invoke(
+        app,
+        ["search", "--catalog", str(catalog.root), "--contains", 'site={"code":"MHD"}', "--ids"],
+    )
+
+    assert numeric_result.exit_code == 0
+    assert strip_ansi(numeric_result.stdout).splitlines() == [_record_id(record)]
+    assert mapping_result.exit_code == 0
+    assert strip_ansi(mapping_result.stdout).splitlines() == [_record_id(record)]
+
+
 def test_search_cli_match_filter_supports_locator_uri(tmp_path: Path) -> None:
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
     record = catalog.add_artifact(

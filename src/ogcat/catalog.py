@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import shutil
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -308,8 +308,8 @@ class Catalog:
         contains: dict[str, object] | None = None,
         regex: dict[str, str] | None = None,
         match: dict[str, str] | None = None,
-        exists: list[str] | None = None,
-        missing: list[str] | None = None,
+        exists: Sequence[str] | None = None,
+        missing: Sequence[str] | None = None,
         ignore_case: bool = False,
     ) -> list[CatalogRecord]:
         """Search catalog records using backend-neutral query semantics."""

@@ -112,6 +112,17 @@ def _parse_key_value_options(items: list[str]) -> dict[str, str]:
     return parsed
 
 
+def _parse_key_value_search_options(items: list[str]) -> dict[str, Any]:
+    """Parse repeated KEY=VALUE search options with JSON-aware values."""
+    parsed: dict[str, Any] = {}
+    for item in items:
+        if "=" not in item:
+            raise typer.BadParameter(f"Expected KEY=VALUE: {item}")
+        key, raw_value = item.split("=", 1)
+        parsed[key] = _parse_search_value(raw_value)
+    return parsed
+
+
 def _parse_search_value(raw_value: str) -> Any:
     """Parse a search expression value as JSON when possible."""
     try:
@@ -413,7 +424,7 @@ def search(
     active_catalog = _open_catalog_or_fail(catalog)
     query = SearchQuery.from_filters(
         where=_parse_meta_items([] if where is None else where),
-        contains=_parse_key_value_options([] if contains is None else contains),
+        contains=_parse_key_value_search_options([] if contains is None else contains),
         regex=_parse_key_value_options([] if regex is None else regex),
         match=_parse_key_value_options([] if match is None else match),
         exists=[] if exists is None else exists,
