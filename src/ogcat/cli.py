@@ -16,8 +16,8 @@ from rich.table import Table
 
 from ogcat.catalog import Catalog
 from ogcat.models import CatalogRecord
-from ogcat.search import SearchQuery, flatten_lookup
 from ogcat.record_set import DEFAULT_RECORDSET_FIELDS, CatalogRecordSet
+from ogcat.search import SearchQuery
 from ogcat.spec import CatalogSpec
 
 app = typer.Typer(

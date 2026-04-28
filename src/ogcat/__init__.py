@@ -4,8 +4,8 @@ from ogcat.catalog import Catalog
 from ogcat.hooks import ArtifactWriter, HookManager, HookWarning, OperationContext, OperationSource
 from ogcat.models import ArtifactLocator, CatalogRecord, MetadataFieldDescription
 from ogcat.plugins import PluginRegistry
-from ogcat.search import FieldPath, SearchOp, SearchQuery, SearchTerm
 from ogcat.record_set import CatalogRecordSet
+from ogcat.search import FieldPath, SearchOp, SearchQuery, SearchTerm
 from ogcat.spec import CatalogSpec, RecordSchema
 from ogcat.transactions import OperationState, RollbackFailure, UnitOfWork
 from ogcat.validation import (

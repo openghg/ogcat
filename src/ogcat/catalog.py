@@ -307,24 +307,33 @@ class Catalog:
     def search(
         self,
         *,
+        query: SearchQuery | None = None,
         where: dict[str, object] | None = None,
-        contains: dict[str, str] | None = None,
+        contains: dict[str, object] | None = None,
         regex: dict[str, str] | None = None,
+        match: dict[str, str] | None = None,
+        exists: Sequence[str] | None = None,
+        missing: Sequence[str] | None = None,
         ignore_case: bool = False,
         as_record_set: Literal[True],
     ) -> CatalogRecordSet: ...
 
     def search(
         self,
+        query: SearchQuery | None = None,
         *,
         where: dict[str, object] | None = None,
-        contains: dict[str, str] | None = None,
+        contains: dict[str, object] | None = None,
         regex: dict[str, str] | None = None,
+        match: dict[str, str] | None = None,
+        exists: Sequence[str] | None = None,
+        missing: Sequence[str] | None = None,
         ignore_case: bool = False,
         as_record_set: bool = False,
     ) -> list[CatalogRecord] | CatalogRecordSet:
-        """Search catalog records using equality, substring, and regex filters."""
+        """Search catalog records using backend-neutral query semantics."""
         results = self.repository.search(
+            query=query,
             where=where,
             contains=contains,
             regex=regex,
