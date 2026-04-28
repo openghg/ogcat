@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import shutil
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -19,6 +19,10 @@ from ogcat.spec import CatalogSpec, RecordSchema
 from ogcat.tinydb_repository import TinyDbCatalogRepository
 from ogcat.transactions import OperationState, UnitOfWork
 from ogcat.validation import ValidationReport, validate_metadata
+
+ArtifactLocatorFactory = Callable[[OperationContext], ArtifactLocator]
+ArtifactWriter = Callable[[OperationContext, ArtifactLocator], None]
+DerivedMetadataCollector = Callable[[OperationContext, ArtifactLocator], None]
 
 
 @dataclass(slots=True)
@@ -92,117 +96,76 @@ class Catalog:
             raise ValueError(f"Unsupported operation: {chosen_operation}")
 
         timestamp = _utc_timestamp()
-        date_added = timestamp[:10]
-        draft_record = self._build_artifact_record(
-            record_type=resolved_record_type,
-            locator=ArtifactLocator(kind="opaque", value=""),
-            metadata=metadata,
-            storage_mode=chosen_operation,
-            original_path=source,
-            original_filename=source.name,
-            suffixes=source.suffixes,
-            time_added=timestamp,
-        )
+        files_root = self.root / self.spec.files_root
+        naming_metadata: MetadataDict = {
+            "record_schema": "default" if record_type is None else record_type,
+            "directory_template": directory_template,
+            "filename_template": filename_template,
+        }
+
+        def resolve_local_file_locator(context: OperationContext) -> ArtifactLocator:
+            """Resolve the managed-file storage path for this operation."""
+            naming_context = build_naming_context(
+                record_id=context.operation_id,
+                original_path=source,
+                metadata=context.user_metadata,
+                date_added=timestamp[:10],
+            )
+            target, rel_path, resolved_filename = render_storage_location(
+                files_root=files_root,
+                directory_template=directory_template,
+                filename_template=filename_template,
+                context=naming_context,
+            )
+            naming_metadata["resolved_filename"] = resolved_filename
+            return ArtifactLocator.path(target, relative_path=rel_path)
+
+        def write_local_file(context: OperationContext, locator: ArtifactLocator) -> None:
+            """Copy or move the source file to the canonical path locator."""
+            target = _path_from_locator(locator)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if chosen_operation == "copy":
+                context.rollback(
+                    lambda path=target: path.unlink(missing_ok=True),
+                    description=f"remove copied file {target}",
+                )
+                shutil.copy2(source, target)
+            else:
+                context.rollback(
+                    lambda source_path=source, target_path=target: _rollback_moved_file(
+                        source_path=source_path,
+                        target_path=target_path,
+                    ),
+                    description=f"restore moved file from {target} to {source}",
+                )
+                shutil.move(str(source), str(target))
+
+        def collect_file_metadata(context: OperationContext, locator: ArtifactLocator) -> None:
+            """Collect generic derived metadata from the written file."""
+            context.derived_metadata.update(extract_derived_metadata(_path_from_locator(locator)))
 
         with self.transaction() as transaction:
-            hook_context = OperationContext(
-                catalog_root=self.root,
-                operation_id=transaction.operation_id,
-                operation="add_file",
+            return self._run_add_operation(
+                transaction=transaction,
+                commit=True,
+                operation_type="add_file",
                 record_type=resolved_record_type,
-                user_metadata=metadata,
-                register_rollback=transaction.register_rollback,
-                source_path=source,
+                schema=schema,
+                schema_record_type=record_type,
+                metadata=metadata,
                 storage_mode=chosen_operation,
                 original_path=source,
                 original_filename=source.name,
-                suffixes=list(source.suffixes),
+                suffixes=source.suffixes,
+                derived_metadata={},
+                naming_metadata=naming_metadata,
+                time_added=timestamp,
+                source_path=source,
+                source_descriptor=str(source),
+                locator_factory=resolve_local_file_locator,
+                artifact_writer=write_local_file,
+                derived_metadata_collector=collect_file_metadata,
             )
-            try:
-                # Hooks can fill or normalise metadata before schema validation,
-                # which is the main extension point for domain-specific defaults.
-                self.hook_manager.before_validate_metadata(hook_context)
-                validation_report = self._metadata_validation_report(
-                    schema=schema,
-                    metadata=hook_context.user_metadata,
-                    record_type=record_type,
-                )
-                self.hook_manager.after_validate_metadata(hook_context, validation_report)
-                validation_report.raise_for_errors()
-
-                draft_record.user_metadata = dict(hook_context.user_metadata)
-                persisted_record = transaction.insert_staged_record(draft_record)
-                record_id = _require_record_id(persisted_record)
-
-                naming_context = build_naming_context(
-                    record_id=record_id,
-                    original_path=source,
-                    metadata=hook_context.user_metadata,
-                    date_added=date_added,
-                )
-                files_root = self.root / self.spec.files_root
-                target, rel_path, resolved_filename = render_storage_location(
-                    files_root=files_root,
-                    directory_template=directory_template,
-                    filename_template=filename_template,
-                    context=naming_context,
-                )
-                locator = ArtifactLocator.path(target, relative_path=rel_path)
-                hook_context.planned_locators.append(locator)
-                self.hook_manager.plan_locator(hook_context)
-                target.parent.mkdir(parents=True, exist_ok=True)
-
-                # File work happens inside UnitOfWork so hook or copy failures
-                # can use the same compensating rollback path as repository writes.
-                self.hook_manager.before_write_artifact(hook_context)
-                if chosen_operation == "copy":
-                    transaction.register_rollback(
-                        lambda path=target: path.unlink(missing_ok=True),
-                        description=f"remove copied file {target}",
-                    )
-                    shutil.copy2(source, target)
-                    storage_mode = "copy"
-                else:
-                    shutil.move(str(source), str(target))
-                    storage_mode = "move"
-                hook_context.storage_mode = storage_mode
-                self.hook_manager.after_write_artifact(hook_context)
-
-                # NOTE: derived metadata is not used for location and filename creation
-                hook_context.derived_metadata.update(extract_derived_metadata(target))
-                self.hook_manager.extract_metadata(hook_context)
-                derived_metadata = _metadata_with_hook_warnings(hook_context)
-                record = self._build_artifact_record(
-                    record_id=record_id,
-                    record_type=resolved_record_type,
-                    locator=locator,
-                    metadata=hook_context.user_metadata,
-                    storage_mode=storage_mode,
-                    original_path=source,
-                    original_filename=source.name,
-                    suffixes=source.suffixes,
-                    derived_metadata=derived_metadata,
-                    naming_metadata={
-                        "record_schema": "default" if record_type is None else record_type,
-                        "directory_template": directory_template,
-                        "filename_template": filename_template,
-                        "resolved_filename": resolved_filename,
-                    },
-                    time_added=timestamp,
-                )
-                self.repository.update(record)
-                self.hook_manager.before_commit(hook_context)
-                transaction.commit()
-                # After-commit hooks are best-effort: failures warn, but cannot
-                # turn an already-persisted record into an apparent API failure.
-                self.hook_manager.after_commit(hook_context)
-                return record
-            except Exception as exc:
-                self.hook_manager.on_error(hook_context, exc)
-                if transaction.state is not OperationState.COMMITTED:
-                    transaction.rollback(original_exception=exc)
-                    self.hook_manager.on_rollback(hook_context, exc)
-                raise
 
     def add_artifact(
         self,
@@ -236,6 +199,7 @@ class Catalog:
                 raise ValueError("Transaction is bound to a different catalog repository.")
             return self._add_artifact_in_transaction(
                 transaction=transaction,
+                commit=False,
                 record_type=record_type,
                 locator=locator,
                 metadata=metadata,
@@ -251,6 +215,7 @@ class Catalog:
         with self.transaction() as unit_of_work:
             return self._add_artifact_in_transaction(
                 transaction=unit_of_work,
+                commit=True,
                 record_type=record_type,
                 locator=locator,
                 metadata=metadata,
@@ -262,7 +227,6 @@ class Catalog:
                 naming_metadata=naming_metadata,
                 time_added=time_added,
                 schema=schema,
-                commit=True,
             )
 
     @contextmanager
@@ -441,6 +405,7 @@ class Catalog:
         self,
         *,
         transaction: UnitOfWork,
+        commit: bool,
         record_type: str,
         locator: ArtifactLocator,
         metadata: MetadataDict,
@@ -452,20 +417,62 @@ class Catalog:
         naming_metadata: MetadataDict | None,
         time_added: str | None,
         schema: RecordSchema,
-        commit: bool = False,
     ) -> CatalogRecord:
         """Add an artifact record within an active transaction."""
+        return self._run_add_operation(
+            transaction=transaction,
+            commit=commit,
+            operation_type="add_artifact",
+            record_type=record_type,
+            schema=schema,
+            schema_record_type=record_type,
+            metadata=metadata,
+            storage_mode=storage_mode,
+            original_path=original_path,
+            original_filename=original_filename,
+            suffixes=suffixes,
+            derived_metadata=derived_metadata,
+            naming_metadata=naming_metadata,
+            time_added=time_added,
+            source_path=locator.as_path(),
+            source_descriptor=locator.value,
+            locator_factory=lambda context: locator,
+        )
+
+    def _run_add_operation(
+        self,
+        *,
+        transaction: UnitOfWork,
+        commit: bool,
+        operation_type: str,
+        record_type: str,
+        schema: RecordSchema,
+        schema_record_type: str | None,
+        metadata: MetadataDict,
+        storage_mode: str | None,
+        original_path: str | Path | None,
+        original_filename: str | None,
+        suffixes: list[str] | None,
+        derived_metadata: MetadataDict,
+        naming_metadata: MetadataDict | None,
+        time_added: str | None,
+        source_path: Path | None,
+        source_descriptor: str | None,
+        locator_factory: ArtifactLocatorFactory,
+        artifact_writer: ArtifactWriter | None = None,
+        derived_metadata_collector: DerivedMetadataCollector | None = None,
+    ) -> CatalogRecord:
+        """Run the shared add operation lifecycle for file and record-only adds."""
         hook_context = OperationContext(
             catalog_root=self.root,
             operation_id=transaction.operation_id,
-            operation="add_artifact",
+            operation_type=operation_type,
             record_type=record_type,
             user_metadata=metadata,
             derived_metadata=derived_metadata,
-            planned_locators=[locator],
             register_rollback=transaction.register_rollback,
-            source_path=locator.as_path(),
-            source_descriptor=locator.value,
+            source_path=source_path,
+            source_descriptor=source_descriptor,
             storage_mode=storage_mode,
             original_path=original_path,
             original_filename=original_filename,
@@ -476,16 +483,22 @@ class Catalog:
             validation_report = self._metadata_validation_report(
                 schema=schema,
                 metadata=hook_context.user_metadata,
-                record_type=record_type,
+                record_type=schema_record_type,
             )
             self.hook_manager.after_validate_metadata(hook_context, validation_report)
             validation_report.raise_for_errors()
-            self.hook_manager.plan_locator(hook_context)
-            self.hook_manager.before_write_artifact(hook_context)
+            hook_context.planned_locators = [locator_factory(hook_context)]
+            self.hook_manager.resolve_artifact_locator(hook_context)
+            canonical_locator = _artifact_locator_from_context(hook_context)
+            hook_context.planned_locators[0] = canonical_locator
+            if artifact_writer is not None:
+                artifact_writer(hook_context, canonical_locator)
+            if derived_metadata_collector is not None:
+                derived_metadata_collector(hook_context, canonical_locator)
             self.hook_manager.extract_metadata(hook_context)
             record = self._build_artifact_record(
                 record_type=record_type,
-                locator=locator,
+                locator=canonical_locator,
                 metadata=hook_context.user_metadata,
                 storage_mode=storage_mode,
                 original_path=original_path,
@@ -495,13 +508,14 @@ class Catalog:
                 naming_metadata=naming_metadata,
                 time_added=time_added,
             )
+            self.hook_manager.before_record_write(hook_context)
             persisted = transaction.insert_staged_record(record)
-            self.hook_manager.after_write_artifact(hook_context)
+            self.hook_manager.after_record_write(hook_context)
             if commit:
                 self.hook_manager.before_commit(hook_context)
                 transaction.commit()
-                # See add_file(): after-commit hooks must not change success
-                # semantics once the transaction has committed.
+                # After-commit hooks are best-effort: failures warn, but cannot
+                # turn an already-persisted record into an apparent API failure.
                 self.hook_manager.after_commit(hook_context)
             return persisted
         except Exception as exc:
@@ -607,6 +621,32 @@ def _coerce_metadata_input(
     if isinstance(metadata, dict):
         return dict(metadata)
     raise TypeError(f"Metadata for schema {schema_name} must be a dictionary, got {type(metadata).__name__}")
+
+
+def _artifact_locator_from_context(context: OperationContext) -> ArtifactLocator:
+    """Return the canonical locator after locator-resolution hooks run."""
+    if not context.planned_locators:
+        raise ValueError("resolve_artifact_locator hook removed the planned artifact locator.")
+    return context.planned_locators[0]
+
+
+def _path_from_locator(locator: ArtifactLocator) -> Path:
+    """Return a local path from a path-backed artifact locator."""
+    path = locator.as_path()
+    if path is None:
+        raise ValueError("Managed file operations require a path-backed artifact locator.")
+    return path
+
+
+def _rollback_moved_file(*, source_path: Path, target_path: Path) -> None:
+    """Restore a moved file when possible, otherwise remove the moved target."""
+    if not target_path.exists():
+        return
+    if not source_path.exists():
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(target_path), str(source_path))
+        return
+    target_path.unlink(missing_ok=True)
 
 
 def _require_template(value: str | None, *, field_name: str) -> str:

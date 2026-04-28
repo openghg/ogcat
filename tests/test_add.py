@@ -479,7 +479,7 @@ def test_add_file_removes_partial_target_when_copy_fails(
     assert list((root / "files").rglob("*.nc")) == []
 
 
-def test_add_file_removes_copied_target_when_record_update_fails(
+def test_add_file_removes_copied_target_when_record_write_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -491,12 +491,12 @@ def test_add_file_removes_copied_target_when_record_update_fails(
     root = tmp_path / "catalog"
     catalog = Catalog.create(root, CatalogSpec(catalog_name="files"))
 
-    def fail_update(record: CatalogRecord) -> None:
-        raise OSError("simulated update failure")
+    def fail_insert(record: CatalogRecord) -> CatalogRecord:
+        raise OSError("simulated record write failure")
 
-    monkeypatch.setattr(catalog.repository, "update", fail_update)
+    monkeypatch.setattr(catalog.repository, "insert", fail_insert)
 
-    with pytest.raises(OSError, match="simulated update failure"):
+    with pytest.raises(OSError, match="simulated record write failure"):
         catalog.add_file(source)
 
     assert source.exists()
@@ -529,7 +529,7 @@ def test_add_file_removes_copied_target_when_metadata_extraction_fails(
     assert list((root / "files").rglob("metadata.nc")) == []
 
 
-def test_add_file_does_not_delete_moved_file_when_record_update_fails(
+def test_add_file_restores_moved_file_when_record_write_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -541,18 +541,17 @@ def test_add_file_does_not_delete_moved_file_when_record_update_fails(
     root = tmp_path / "catalog"
     catalog = Catalog.create(root, CatalogSpec(catalog_name="files"))
 
-    def fail_update(record: CatalogRecord) -> None:
-        raise OSError("simulated update failure")
+    def fail_insert(record: CatalogRecord) -> CatalogRecord:
+        raise OSError("simulated record write failure")
 
-    monkeypatch.setattr(catalog.repository, "update", fail_update)
+    monkeypatch.setattr(catalog.repository, "insert", fail_insert)
 
-    with pytest.raises(OSError, match="simulated update failure"):
+    with pytest.raises(OSError, match="simulated record write failure"):
         catalog.add_file(source, operation="move")
 
-    moved_files = list((root / "files").rglob("moved.nc"))
-    assert len(moved_files) == 1
-    assert moved_files[0].read_text(encoding="utf-8") == "dummy"
-    assert not source.exists()
+    assert list((root / "files").rglob("moved.nc")) == []
+    assert source.exists()
+    assert source.read_text(encoding="utf-8") == "dummy"
     assert catalog.describe()["record_count"] == 0
 
 

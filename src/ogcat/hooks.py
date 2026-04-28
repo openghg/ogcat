@@ -53,10 +53,16 @@ class RollbackRegistrar(Protocol):
 class OperationContext:
     """Mutable context passed to catalog lifecycle hooks.
 
+    Hooks exert their effect by mutating documented fields on this object,
+    raising an exception, or registering rollback work. `user_metadata` may be
+    mutated before validation. `planned_locators` may be changed during
+    `resolve_artifact_locator`; the first locator is treated as canonical.
+    `derived_metadata` may be updated during metadata extraction.
+
     Args:
         catalog_root: Root path of the catalog.
         operation_id: Identifier shared with the transaction.
-        operation: Catalog operation name, such as ``"add_file"``.
+        operation_type: Catalog operation name, such as ``"add_file"``.
         record_type: Record type being created.
         user_metadata: User-supplied metadata, mutable by hooks before validation.
         derived_metadata: Derived metadata collected during the operation.
@@ -73,7 +79,7 @@ class OperationContext:
 
     catalog_root: Path
     operation_id: str
-    operation: str
+    operation_type: str
     record_type: str
     user_metadata: MetadataDict
     derived_metadata: MetadataDict = field(default_factory=dict)
@@ -103,8 +109,6 @@ class OperationContext:
         """Register a rollback action through the active catalog transaction."""
         if self.register_rollback is None:
             raise RuntimeError("No active rollback registration is available.")
-        if callable(action) and not hasattr(action, "undo"):
-            return self.register_rollback(action, description=description)
         return self.register_rollback(action, description=description)
 
 
@@ -127,29 +131,29 @@ class AfterValidateMetadataHook(Protocol):
 
 
 @runtime_checkable
-class PlanLocatorHook(Protocol):
-    """Hook called after a locator has been planned or supplied."""
+class ResolveArtifactLocatorHook(Protocol):
+    """Hook called after an artifact locator has been proposed."""
 
-    def plan_locator(self, context: OperationContext) -> None:
-        """Inspect or extend planned locators."""
+    def resolve_artifact_locator(self, context: OperationContext) -> None:
+        """Inspect, replace, or extend planned artifact locators."""
         ...
 
 
 @runtime_checkable
-class BeforeWriteArtifactHook(Protocol):
-    """Hook called before file or record write work."""
+class BeforeRecordWriteHook(Protocol):
+    """Hook called before writing the catalog record."""
 
-    def before_write_artifact(self, context: OperationContext) -> None:
-        """Run before the artifact is written or staged."""
+    def before_record_write(self, context: OperationContext) -> None:
+        """Run before the catalog record is written."""
         ...
 
 
 @runtime_checkable
-class AfterWriteArtifactHook(Protocol):
-    """Hook called after file or record write work."""
+class AfterRecordWriteHook(Protocol):
+    """Hook called after writing the catalog record."""
 
-    def after_write_artifact(self, context: OperationContext) -> None:
-        """Run after the artifact is written or staged."""
+    def after_record_write(self, context: OperationContext) -> None:
+        """Run after the catalog record is written."""
         ...
 
 
@@ -226,23 +230,23 @@ class HookManager:
             if isinstance(hook, AfterValidateMetadataHook):
                 hook.after_validate_metadata(context, report)
 
-    def plan_locator(self, context: OperationContext) -> None:
-        """Dispatch ``plan_locator`` hooks."""
+    def resolve_artifact_locator(self, context: OperationContext) -> None:
+        """Dispatch ``resolve_artifact_locator`` hooks."""
         for hook in self._hooks:
-            if isinstance(hook, PlanLocatorHook):
-                hook.plan_locator(context)
+            if isinstance(hook, ResolveArtifactLocatorHook):
+                hook.resolve_artifact_locator(context)
 
-    def before_write_artifact(self, context: OperationContext) -> None:
-        """Dispatch ``before_write_artifact`` hooks."""
+    def before_record_write(self, context: OperationContext) -> None:
+        """Dispatch ``before_record_write`` hooks."""
         for hook in self._hooks:
-            if isinstance(hook, BeforeWriteArtifactHook):
-                hook.before_write_artifact(context)
+            if isinstance(hook, BeforeRecordWriteHook):
+                hook.before_record_write(context)
 
-    def after_write_artifact(self, context: OperationContext) -> None:
-        """Dispatch ``after_write_artifact`` hooks."""
+    def after_record_write(self, context: OperationContext) -> None:
+        """Dispatch ``after_record_write`` hooks."""
         for hook in self._hooks:
-            if isinstance(hook, AfterWriteArtifactHook):
-                hook.after_write_artifact(context)
+            if isinstance(hook, AfterRecordWriteHook):
+                hook.after_record_write(context)
 
     def extract_metadata(self, context: OperationContext) -> None:
         """Dispatch metadata extraction hooks and merge returned metadata."""
@@ -295,16 +299,16 @@ class HookManager:
 __all__ = [
     "AfterCommitHook",
     "AfterValidateMetadataHook",
-    "AfterWriteArtifactHook",
+    "AfterRecordWriteHook",
     "BeforeCommitHook",
     "BeforeValidateMetadataHook",
-    "BeforeWriteArtifactHook",
+    "BeforeRecordWriteHook",
     "ErrorHook",
     "ExtractMetadataHook",
     "HookManager",
     "HookWarning",
     "OperationContext",
-    "PlanLocatorHook",
+    "ResolveArtifactLocatorHook",
     "RollbackHook",
     "RollbackRegistrar",
 ]

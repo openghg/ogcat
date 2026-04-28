@@ -127,6 +127,9 @@ catalog = Catalog.create("example-catalog", spec, plugins=plugins)
 See [docs/design-note-hooks-plugins.md](docs/design-note-hooks-plugins.md) for hook lifecycle,
 rollback, and transaction examples.
 
+In this hook model, `add_artifact()` records an artifact locator but does not write artifact data.
+`add_file()` is the bundled local-file operation that copies or moves data before writing the record.
+
 ## CLI
 
 Initialise a catalog:

@@ -9,6 +9,20 @@ normal transaction rollback path. `after_commit` is different: it runs after the
 has already committed, so failures are reported as Python warnings rather than changing a successful
 catalog write into an exception.
 
+Terminology matters:
+
+- a **record** is the catalog database entry;
+- an **artifact** is the data object being catalogued;
+- a **locator** describes where the artifact is or will be;
+- an **operation** coordinates validation, locator resolution, optional artifact work, record writes,
+  hooks, and rollback.
+
+`Catalog.add_artifact(...)` is record-only in this version: it records a locator for an artifact, but
+does not write artifact data. `Catalog.add_file(...)` is a bundled local-file operation: it resolves a
+path locator, copies or moves the source file, extracts generic metadata, and writes the record.
+Future data-from-memory writes should be modeled as explicit operations or artifact writers rather
+than as record-write hooks.
+
 ## Direct Registration
 
 ```python
@@ -74,7 +88,7 @@ Hooks that create external side effects should register cleanup work with `conte
 
 ```python
 class ExternalIndexPlugin:
-    def after_write_artifact(self, context: OperationContext) -> None:
+    def after_record_write(self, context: OperationContext) -> None:
         external_id = write_external_index(context.operation_id)
 
         context.rollback(
@@ -119,14 +133,22 @@ The initial hook surface is intentionally small:
 
 - `before_validate_metadata(context)`
 - `after_validate_metadata(context, report)`
-- `plan_locator(context)`
-- `before_write_artifact(context)`
-- `after_write_artifact(context)`
+- `resolve_artifact_locator(context)`
+- `before_record_write(context)`
+- `after_record_write(context)`
 - `extract_metadata(context)`
 - `before_commit(context)`
 - `after_commit(context)`
 - `on_error(context, error)`
 - `on_rollback(context, error)`
 
-The context includes the catalog root, operation id, operation name, record type, user metadata,
+Hooks exert their effect by mutating `OperationContext`, raising an exception, or registering
+rollback work:
+
+- mutate `user_metadata` before validation to add defaults or normalise caller input;
+- mutate `planned_locators` during `resolve_artifact_locator`; the first locator is canonical;
+- return or add `derived_metadata` during `extract_metadata`;
+- call `context.rollback(...)` after creating external side effects.
+
+The context includes the catalog root, operation id, operation type, record type, user metadata,
 derived metadata, planned locators, source information, storage mode, and rollback registration.
