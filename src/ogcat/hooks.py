@@ -275,7 +275,11 @@ class HookManager:
                         code="hook.after_commit_failed",
                     )
                     context.add_warning(warning)
-                    warnings.warn(warning.message, RuntimeWarning, stacklevel=2)
+                    warnings.warn(
+                        f"{warning.hook_name}: {warning.message}",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
 
     def on_error(self, context: OperationContext, error: BaseException) -> None:
         """Dispatch error hooks, preserving the original operation failure."""

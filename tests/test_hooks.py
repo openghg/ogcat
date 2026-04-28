@@ -291,6 +291,24 @@ def test_record_write_hooks_fire_for_add_file_and_add_artifact(tmp_path: Path) -
     ]
 
 
+def test_before_record_write_metadata_mutation_is_persisted(tmp_path: Path) -> None:
+    class RecordMetadataHook:
+        def before_record_write(self, context: OperationContext) -> None:
+            context.user_metadata["record_phase"] = context.operation_type
+            context.derived_metadata["record_hook"] = True
+
+    registry = PluginRegistry([RecordMetadataHook()])
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"), plugins=registry)
+
+    record = catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/data.zarr"),
+    )
+
+    assert record.user_metadata["record_phase"] == "add_artifact"
+    assert record.derived_metadata["record_hook"] is True
+
+
 def test_after_commit_hook_failure_does_not_fail_add_file(tmp_path: Path) -> None:
     class FailingAfterCommitHook:
         def after_commit(self, context: OperationContext) -> None:
@@ -301,7 +319,7 @@ def test_after_commit_hook_failure_does_not_fail_add_file(tmp_path: Path) -> Non
     source = tmp_path / "committed.nc"
     source.write_text("dummy", encoding="utf-8")
 
-    with pytest.warns(RuntimeWarning, match="post-commit notification failed"):
+    with pytest.warns(RuntimeWarning, match="FailingAfterCommitHook: .*post-commit notification failed"):
         record = catalog.add_file(source)
 
     assert record.id is not None
@@ -317,7 +335,7 @@ def test_after_commit_hook_failure_does_not_fail_add_artifact(tmp_path: Path) ->
     registry = PluginRegistry([FailingAfterCommitHook()])
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"), plugins=registry)
 
-    with pytest.warns(RuntimeWarning, match="post-commit notification failed"):
+    with pytest.warns(RuntimeWarning, match="FailingAfterCommitHook: .*post-commit notification failed"):
         record = catalog.add_artifact(
             record_type="external_reference",
             locator=ArtifactLocator(kind="uri", value="s3://bucket/data.zarr"),

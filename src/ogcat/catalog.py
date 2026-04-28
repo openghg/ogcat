@@ -497,6 +497,7 @@ class Catalog:
             if derived_metadata_collector is not None:
                 derived_metadata_collector(hook_context, canonical_locator)
             self.hook_manager.extract_metadata(hook_context)
+            self.hook_manager.before_record_write(hook_context)
             record = self._build_artifact_record(
                 record_type=record_type,
                 locator=canonical_locator,
@@ -509,7 +510,6 @@ class Catalog:
                 naming_metadata=naming_metadata,
                 time_added=time_added,
             )
-            self.hook_manager.before_record_write(hook_context)
             persisted = transaction.insert_staged_record(record)
             self.hook_manager.after_record_write(hook_context)
             if commit:
