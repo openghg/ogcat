@@ -175,9 +175,19 @@ class UnzipWriter:
             raise ValueError("unzip writer requires a path locator")
 
         target_dir.mkdir(parents=True, exist_ok=True)
+        target_root = target_dir.resolve()
         with zipfile.ZipFile(source.path) as archive:
-            archive.extractall(target_dir)
             names = sorted(archive.namelist())
+            for member in archive.infolist():
+                destination = (target_dir / member.filename).resolve()
+                if destination != target_root and target_root not in destination.parents:
+                    raise ValueError(f"zip member escapes target directory: {member.filename}")
+                if member.is_dir():
+                    destination.mkdir(parents=True, exist_ok=True)
+                    continue
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(member) as source_file, destination.open("wb") as target_file:
+                    shutil.copyfileobj(source_file, target_file)
 
         context.rollback(
             lambda: shutil.rmtree(target_dir, ignore_errors=True),

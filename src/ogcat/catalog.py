@@ -724,9 +724,9 @@ def _optional_artifact_writer(value: object) -> ArtifactWriter | None:
     """Return an optional artifact writer for artifact batch forwarding."""
     if value is None:
         return None
-    if hasattr(value, "write"):
+    if callable(getattr(value, "write", None)):
         return cast(ArtifactWriter, value)
-    raise TypeError(f"artifact_writer must provide write(), got {type(value).__name__}")
+    raise TypeError(f"artifact_writer must provide a callable write() method, got {type(value).__name__}")
 
 
 def _validate_artifact_batch_item(item: object, index: int) -> dict[str, object]:
