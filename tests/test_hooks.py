@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import shutil
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -13,7 +15,8 @@ from ogcat import (
     PluginRegistry,
     RecordSchema,
 )
-from ogcat.hooks import OperationContext
+from ogcat.hooks import OperationContext, OperationSource
+from ogcat.models import JsonValue
 from ogcat.transactions import OperationState
 from ogcat.validation import ValidationReport
 
@@ -246,6 +249,32 @@ def test_add_artifact_uses_hook_context_and_persists_metadata_mutations(tmp_path
     assert record.derived_metadata["locator_kind"] == "uri"
 
 
+def test_operation_context_source_compatibility_properties_are_mutable(tmp_path: Path) -> None:
+    source_paths: list[Path | None] = []
+    descriptors: list[str | None] = []
+
+    class SourceCompatibilityHook:
+        def before_validate_metadata(self, context: OperationContext) -> None:
+            context.source_path = tmp_path / "replacement.txt"
+            context.source_descriptor = "replacement descriptor"
+
+        def extract_metadata(self, context: OperationContext) -> dict[str, object]:
+            source_paths.append(context.source.path)
+            descriptors.append(context.source.descriptor)
+            return {}
+
+    registry = PluginRegistry([SourceCompatibilityHook()])
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"), plugins=registry)
+
+    catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/data.zarr"),
+    )
+
+    assert source_paths == [tmp_path / "replacement.txt"]
+    assert descriptors == ["replacement descriptor"]
+
+
 def test_add_artifact_persists_resolved_locator(tmp_path: Path) -> None:
     class ReplacementLocatorHook:
         def resolve_artifact_locator(self, context: OperationContext) -> None:
@@ -365,3 +394,183 @@ def test_add_artifact_does_not_auto_rollback_caller_owned_transaction(tmp_path: 
         assert len(catalog.repository.all()) == 1
         transaction.rollback()
         assert catalog.repository.all() == []
+
+
+def test_add_artifacts_runs_hooks_for_each_item(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    class BatchHook:
+        def before_validate_metadata(self, context: OperationContext) -> None:
+            calls.append(f"{context.operation_type}:{context.source_descriptor}")
+            context.user_metadata["seen_by_hook"] = context.source_descriptor or "missing"
+
+    registry = PluginRegistry([BatchHook()])
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"), plugins=registry)
+
+    records = catalog.add_artifacts(
+        [
+            {
+                "record_type": "external_reference",
+                "locator": ArtifactLocator(kind="uri", value="s3://bucket/first.zarr"),
+            },
+            {
+                "record_type": "external_reference",
+                "locator": ArtifactLocator(kind="uri", value="s3://bucket/second.zarr"),
+            },
+        ]
+    )
+
+    assert calls == [
+        "add_artifact:s3://bucket/first.zarr",
+        "add_artifact:s3://bucket/second.zarr",
+    ]
+    assert [record.user_metadata["seen_by_hook"] for record in records] == [
+        "s3://bucket/first.zarr",
+        "s3://bucket/second.zarr",
+    ]
+
+
+def test_add_artifact_is_record_only_without_writer(tmp_path: Path) -> None:
+    target = tmp_path / "artifact.txt"
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+
+    record = catalog.add_artifact(
+        record_type="generated_text",
+        locator=ArtifactLocator.path(target),
+        source=OperationSource(kind="text", descriptor="in-memory text"),
+    )
+
+    assert record.locator == ArtifactLocator.path(target)
+    assert not target.exists()
+
+
+def test_plugin_writer_receives_source_and_target_and_persists_metadata(tmp_path: Path) -> None:
+    class TextWriter:
+        def write(
+            self,
+            context: OperationContext,
+            source: OperationSource,
+            target: ArtifactLocator,
+        ) -> None:
+            target_path = target.as_path()
+            assert target_path is not None
+            assert source.kind == "text"
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.write_text(str(source.metadata["text"]), encoding="utf-8")
+            context.rollback(lambda path=target_path: path.unlink(missing_ok=True), description="remove text")
+            context.derived_metadata["writer_source_kind"] = source.kind
+            context.derived_metadata["writer_target_name"] = target_path.name
+
+    target = tmp_path / "out" / "artifact.txt"
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+
+    record = catalog.add_artifact(
+        record_type="generated_text",
+        locator=ArtifactLocator.path(target),
+        source=OperationSource(kind="text", descriptor="text payload", metadata={"text": "hello"}),
+        artifact_writer=TextWriter(),
+    )
+
+    assert target.read_text(encoding="utf-8") == "hello"
+    assert record.derived_metadata["writer_source_kind"] == "text"
+    assert record.derived_metadata["writer_target_name"] == "artifact.txt"
+
+
+def test_plugin_writer_rollback_removes_created_artifact_after_hook_failure(tmp_path: Path) -> None:
+    class TextWriter:
+        def write(
+            self,
+            context: OperationContext,
+            source: OperationSource,
+            target: ArtifactLocator,
+        ) -> None:
+            target_path = target.as_path()
+            assert target_path is not None
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.write_text("created", encoding="utf-8")
+            context.rollback(lambda path=target_path: path.unlink(missing_ok=True), description="remove text")
+
+    class FailingHook:
+        def before_record_write(self, context: OperationContext) -> None:
+            raise RuntimeError("record hook failed")
+
+    target = tmp_path / "out" / "artifact.txt"
+    registry = PluginRegistry([FailingHook()])
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"), plugins=registry)
+
+    with pytest.raises(RuntimeError, match="record hook failed"):
+        catalog.add_artifact(
+            record_type="generated_text",
+            locator=ArtifactLocator.path(target),
+            source=OperationSource(kind="text", descriptor="text payload"),
+            artifact_writer=TextWriter(),
+        )
+
+    assert not target.exists()
+    assert catalog.repository.all() == []
+
+
+def test_unzip_style_writer_persists_directory_metadata_and_rolls_back(tmp_path: Path) -> None:
+    class FailingHook:
+        def before_record_write(self, context: OperationContext) -> None:
+            if context.user_metadata.get("fail"):
+                raise RuntimeError("fail after unzip")
+
+    class UnzipWriter:
+        def write(
+            self,
+            context: OperationContext,
+            source: OperationSource,
+            target: ArtifactLocator,
+        ) -> None:
+            if source.path is None:
+                raise ValueError("zip source path is required")
+            target_path = target.as_path()
+            if target_path is None:
+                raise ValueError("zip target path is required")
+
+            target_path.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(source.path) as archive:
+                archive.extractall(target_path)
+                names = sorted(archive.namelist())
+
+            context.rollback(
+                lambda path=target_path: shutil.rmtree(path, ignore_errors=True),
+                description=f"remove extracted directory {target_path}",
+            )
+            context.derived_metadata["file_count"] = len(names)
+            extracted_names: list[JsonValue] = list(names)
+            context.derived_metadata["extracted_names"] = extracted_names
+
+    archive_path = tmp_path / "source.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("a.txt", "alpha")
+        archive.writestr("nested/b.txt", "bravo")
+
+    registry = PluginRegistry([FailingHook()])
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"), plugins=registry)
+    writer = UnzipWriter()
+    extracted = tmp_path / "extracted"
+
+    record = catalog.add_artifact(
+        record_type="zip_directory",
+        locator=ArtifactLocator.path(extracted),
+        source=OperationSource(kind="zip_file", path=archive_path, descriptor=str(archive_path)),
+        artifact_writer=writer,
+    )
+
+    assert (extracted / "a.txt").read_text(encoding="utf-8") == "alpha"
+    assert record.derived_metadata["file_count"] == 2
+    assert record.derived_metadata["extracted_names"] == ["a.txt", "nested/b.txt"]
+
+    failing_target = tmp_path / "failing-extracted"
+    with pytest.raises(RuntimeError, match="fail after unzip"):
+        catalog.add_artifact(
+            record_type="zip_directory",
+            locator=ArtifactLocator.path(failing_target),
+            metadata={"fail": True},
+            source=OperationSource(kind="zip_file", path=archive_path, descriptor=str(archive_path)),
+            artifact_writer=writer,
+        )
+
+    assert not failing_target.exists()
