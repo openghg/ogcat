@@ -4,7 +4,7 @@ Parses a small BibTeX fixture and stores each entry as an ogcat record with a
 ``paper`` record type.  Demonstrates named record schemas and ``add_artifact``
 for records without a managed local file.
 
-Run from the repository root after installing ogcat::
+Run from the repository root after installing ogcat:
 
     python examples/bibdesk_mini/scripts/run.py
 """

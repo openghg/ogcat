@@ -3,7 +3,7 @@
 Creates a small ogcat catalog, adds three generated files with metadata,
 demonstrates basic search, and removes the temporary directory when done.
 
-Run from the repository root after installing ogcat::
+Run from the repository root after installing ogcat:
 
     python examples/local_file_catalog/scripts/run.py
 """

@@ -7,7 +7,7 @@ Demonstrates two ogcat hooks:
 - ``ChecksumExtractor``: computes a SHA-256 checksum of the ingested file and
   stores it in ``derived_metadata["sha256"]``.
 
-Run from the repository root after installing ogcat::
+Run from the repository root after installing ogcat:
 
     python examples/custom_extractor/scripts/run.py
 """
