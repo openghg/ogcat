@@ -38,23 +38,28 @@ class NetcdfExtractor(SuffixExtractor):
             return None
 
         last_error: Exception | None = None
-        for engine in engines:
-            try:
-                with warnings.catch_warnings():
-                    warnings.filterwarnings(
-                        "ignore",
-                        category=RuntimeWarning,
-                        module=r"xarray\.backends\.api",
-                    )
-                    with xarray.open_dataset(path, decode_cf=False, engine=engine) as dataset:
-                        return {
-                            "dims": {name: int(size) for name, size in dataset.sizes.items()},
-                            "data_vars": sorted(dataset.data_vars.keys()),
-                            "coords": sorted(dataset.coords.keys()),
-                            "attrs": _select_attrs(dataset.attrs),
-                        }
-            except Exception as exc:
-                last_error = exc
+
+        # try to open with chunks first to avoid eager loading
+        for chunks in ({}, None):
+            for engine in engines:
+                try:
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings(
+                            "ignore",
+                            category=RuntimeWarning,
+                            module=r"xarray\.backends\.api",
+                        )
+                        with xarray.open_dataset(
+                            path, decode_cf=False, chunks=chunks, engine=engine
+                        ) as dataset:
+                            return {
+                                "dims": {name: int(size) for name, size in dataset.sizes.items()},
+                                "data_vars": sorted(dataset.data_vars.keys()),
+                                "coords": sorted(dataset.coords.keys()),
+                                "attrs": _select_attrs(dataset.attrs),
+                            }
+                except Exception as exc:
+                    last_error = exc
 
         if last_error is not None:
             raise last_error
