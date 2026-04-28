@@ -825,3 +825,102 @@ def test_add_artifacts_rejects_id_fields_in_batch_input(tmp_path: Path, id_key: 
         assert "artifact batch item 0" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("Expected id rejection for batch input")
+
+
+def test_add_artifact_rejects_non_callable_artifact_writer(tmp_path: Path) -> None:
+    class InvalidWriter:
+        write = "not callable"
+
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="artifacts"))
+
+    with pytest.raises(
+        TypeError,
+        match=r"artifact_writer must provide a callable write\(\) method, got InvalidWriter",
+    ):
+        catalog.add_artifact(
+            record_type="external_reference",
+            locator=ArtifactLocator.path("/tmp/data/first.nc"),
+            artifact_writer=InvalidWriter(),  # type: ignore[arg-type]
+        )
+
+
+def test_add_artifact_rejects_invalid_source(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="artifacts"))
+
+    with pytest.raises(TypeError, match="source must be an OperationSource, got str"):
+        catalog.add_artifact(
+            record_type="external_reference",
+            locator=ArtifactLocator.path("/tmp/data/first.nc"),
+            source="not a source",  # type: ignore[arg-type]
+        )
+
+
+def test_add_artifacts_rejects_non_callable_artifact_writer(tmp_path: Path) -> None:
+    class InvalidWriter:
+        write = "not callable"
+
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="artifacts"))
+
+    with pytest.raises(
+        TypeError,
+        match=(
+            r"artifact batch item 0: artifact_writer must provide a callable write\(\) method, "
+            "got InvalidWriter"
+        ),
+    ):
+        catalog.add_artifacts(
+            [
+                {
+                    "record_type": "external_reference",
+                    "locator": ArtifactLocator.path("/tmp/data/first.nc"),
+                    "artifact_writer": InvalidWriter(),
+                },
+            ]
+        )
+
+
+def test_add_artifacts_keeps_earlier_commits_when_later_item_fails(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(
+        root,
+        CatalogSpec(
+            catalog_name="artifacts",
+            record_schemas={
+                "external_reference": RecordSchema(
+                    metadata_fields=[
+                        MetadataFieldDescription(
+                            name="title",
+                            description="Short title.",
+                            required=True,
+                        )
+                    ]
+                )
+            },
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="artifact batch item 1: Missing required metadata for schema external_reference: title",
+    ):
+        catalog.add_artifacts(
+            [
+                {
+                    "record_type": "external_reference",
+                    "locator": ArtifactLocator.path("/tmp/data/first.nc"),
+                    "metadata": {"title": "First"},
+                },
+                {
+                    "record_type": "external_reference",
+                    "locator": ArtifactLocator.path("/tmp/data/second.nc"),
+                    "metadata": {},
+                },
+            ]
+        )
+
+    records = catalog.repository.all()
+    assert len(records) == 1
+    assert records[0].user_metadata["title"] == "First"

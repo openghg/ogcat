@@ -1,0 +1,137 @@
+from __future__ import annotations
+
+import zipfile
+from pathlib import Path
+
+import pytest
+
+from ogcat import (
+    ArtifactLocator,
+    Catalog,
+    CatalogSpec,
+    OperationSource,
+    PluginRegistry,
+    UnzipArtifactWriter,
+    memory_source,
+    memory_writer,
+    path_source,
+    path_writer,
+    source_writer,
+)
+from ogcat.hooks import OperationContext
+from ogcat.models import MetadataDict
+
+
+def test_memory_writer_writes_file_and_persists_metadata(tmp_path: Path) -> None:
+    def write_text(data: object, target: Path) -> MetadataDict:
+        text = str(data)
+        target.write_text(text, encoding="utf-8")
+        return {"byte_count": target.stat().st_size}
+
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+    target = tmp_path / "outputs" / "generated.txt"
+
+    record = catalog.add_artifact(
+        record_type="generated_text",
+        locator=ArtifactLocator.path(target),
+        source=memory_source("hello", kind="text", descriptor="inline text"),
+        artifact_writer=memory_writer(write_text, target_kind="file", source_kind="text"),
+    )
+
+    assert target.read_text(encoding="utf-8") == "hello"
+    assert record.derived_metadata["byte_count"] == 5
+
+
+def test_path_writer_writes_directory_and_rolls_back_on_hook_failure(tmp_path: Path) -> None:
+    def copy_tree(source: Path, target: Path) -> MetadataDict:
+        (target / "copied.txt").write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+        return {"copied": True}
+
+    class FailingHook:
+        def before_record_write(self, context: OperationContext) -> None:
+            raise RuntimeError("stop after write")
+
+    source = tmp_path / "source.txt"
+    source.write_text("payload", encoding="utf-8")
+    target = tmp_path / "directory-target"
+    registry = PluginRegistry([FailingHook()])
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"), plugins=registry)
+
+    with pytest.raises(RuntimeError, match="stop after write"):
+        catalog.add_artifact(
+            record_type="processed_directory",
+            locator=ArtifactLocator.path(target),
+            source=path_source(source, kind="local_text"),
+            artifact_writer=path_writer(copy_tree, target_kind="directory", source_kind="local_text"),
+        )
+
+    assert not target.exists()
+    assert catalog.repository.all() == []
+
+
+def test_source_writer_receives_full_operation_source(tmp_path: Path) -> None:
+    def write_source(source: OperationSource, target: Path) -> MetadataDict:
+        assert source.path is None
+        assert source.payload == {"value": 3}
+        target.write_text(str(source.metadata["label"]), encoding="utf-8")
+        return {"source_kind": source.kind}
+
+    target = tmp_path / "source-writer.txt"
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+
+    record = catalog.add_artifact(
+        record_type="generated_text",
+        locator=ArtifactLocator.path(target),
+        source=memory_source(
+            {"value": 3},
+            kind="structured",
+            descriptor="structured payload",
+            metadata={"label": "example"},
+        ),
+        artifact_writer=source_writer(write_source, target_kind="file", source_kind="structured"),
+    )
+
+    assert target.read_text(encoding="utf-8") == "example"
+    assert record.derived_metadata["source_kind"] == "structured"
+
+
+def test_unzip_artifact_writer_extracts_metadata(tmp_path: Path) -> None:
+    archive_path = tmp_path / "source.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("a.txt", "alpha")
+        archive.writestr("nested/b.txt", "bravo")
+
+    target = tmp_path / "unzipped"
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+
+    record = catalog.add_artifact(
+        record_type="zip_directory",
+        locator=ArtifactLocator.path(target),
+        source=path_source(archive_path, kind="zip_file"),
+        artifact_writer=UnzipArtifactWriter(),
+    )
+
+    assert (target / "a.txt").read_text(encoding="utf-8") == "alpha"
+    assert (target / "nested" / "b.txt").read_text(encoding="utf-8") == "bravo"
+    assert record.derived_metadata["extracted_file_count"] == 2
+    assert record.derived_metadata["extracted_names"] == ["a.txt", "nested/b.txt"]
+
+
+def test_unzip_artifact_writer_rejects_path_traversal(tmp_path: Path) -> None:
+    archive_path = tmp_path / "unsafe.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("../escape.txt", "nope")
+
+    target = tmp_path / "unzipped"
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+
+    with pytest.raises(ValueError, match="zip member escapes target directory"):
+        catalog.add_artifact(
+            record_type="zip_directory",
+            locator=ArtifactLocator.path(target),
+            source=path_source(archive_path, kind="zip_file"),
+            artifact_writer=UnzipArtifactWriter(),
+        )
+
+    assert not target.exists()
+    assert not (tmp_path / "escape.txt").exists()
