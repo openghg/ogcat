@@ -10,6 +10,20 @@ from typing import Any
 _TEMPLATE_PATTERN = re.compile(r"\{([^{}]+)\}")
 _SLUG_SEPARATOR_PATTERN = re.compile(r"[\s_]+")
 _COMPRESSED_SUFFIXES = {".gz", ".bz2", ".xz", ".zip", ".zst"}
+_RESERVED_TEMPLATE_FIELDS = frozenset(
+    {
+        "date_added",
+        "id",
+        "operation_id",
+        "original_filename",
+        "original_stem",
+        "original_suffix",
+        "title_slug",
+        "uuid",
+        "year_added",
+        "year_month_or_original_stem",
+    }
+)
 
 
 def _normalise_segment(value: str) -> str:
@@ -117,16 +131,24 @@ def ensure_unique_path(path: Path) -> Path:
 def build_naming_context(
     *,
     record_id: str,
+    operation_id: str | None = None,
     original_path: Path,
     metadata: Mapping[str, object],
     date_added: str,
 ) -> dict[str, object]:
     """Build a simple naming context for template rendering."""
+    clashing_fields = sorted(field for field in metadata if field in _RESERVED_TEMPLATE_FIELDS)
+    if clashing_fields:
+        joined = ", ".join(clashing_fields)
+        raise ValueError(f"Metadata cannot use reserved template field(s): {joined}")
+
     context: dict[str, object] = {**metadata}
     source_name = original_path.name
     original_stem, original_suffix = _split_name_and_suffixes(source_name)
 
     context["id"] = record_id
+    context["uuid"] = operation_id or record_id
+    context["operation_id"] = operation_id or record_id
     context["date_added"] = date_added
     context["year_added"] = date_added[:4]
     context["original_filename"] = source_name

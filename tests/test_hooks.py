@@ -1,0 +1,367 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from ogcat import (
+    ArtifactLocator,
+    Catalog,
+    CatalogSpec,
+    HookWarning,
+    MetadataFieldDescription,
+    PluginRegistry,
+    RecordSchema,
+)
+from ogcat.hooks import OperationContext
+from ogcat.transactions import OperationState
+from ogcat.validation import ValidationReport
+
+
+def test_direct_registration_invokes_hook(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    class Hook:
+        def before_validate_metadata(self, context: OperationContext) -> None:
+            calls.append(context.operation_type)
+
+    registry = PluginRegistry()
+    registry.register(Hook())
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"), plugins=registry)
+    source = tmp_path / "example.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    catalog.add_file(source)
+
+    assert calls == ["add_file"]
+
+
+def test_hooks_run_in_registration_order(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    class OrderedHook:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def before_validate_metadata(self, context: OperationContext) -> None:
+            calls.append(f"{self.name}:before_validate_metadata")
+
+        def resolve_artifact_locator(self, context: OperationContext) -> None:
+            calls.append(f"{self.name}:resolve_artifact_locator")
+
+        def before_record_write(self, context: OperationContext) -> None:
+            calls.append(f"{self.name}:before_record_write")
+
+        def before_commit(self, context: OperationContext) -> None:
+            calls.append(f"{self.name}:before_commit")
+
+    registry = PluginRegistry([OrderedHook("first"), OrderedHook("second")])
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"), plugins=registry)
+    source = tmp_path / "ordered.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    catalog.add_file(source)
+
+    assert calls == [
+        "first:before_validate_metadata",
+        "second:before_validate_metadata",
+        "first:resolve_artifact_locator",
+        "second:resolve_artifact_locator",
+        "first:before_record_write",
+        "second:before_record_write",
+        "first:before_commit",
+        "second:before_commit",
+    ]
+
+
+def test_before_validate_hook_can_mutate_metadata_for_validation_and_naming(tmp_path: Path) -> None:
+    class FilenameMetadataHook:
+        def before_validate_metadata(self, context: OperationContext) -> None:
+            assert context.source_path is not None
+            context.user_metadata["title"] = context.source_path.stem
+
+    registry = PluginRegistry([FilenameMetadataHook()])
+    catalog = Catalog.create(
+        tmp_path / "catalog",
+        CatalogSpec(
+            catalog_name="files",
+            default_schema=RecordSchema(
+                filename_template="{title}{original_suffix}",
+                metadata_fields=[
+                    MetadataFieldDescription(
+                        name="title",
+                        description="Title derived from filename.",
+                        required=True,
+                    )
+                ],
+            ),
+        ),
+        plugins=registry,
+    )
+    source = tmp_path / "from-hook.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    record = catalog.add_file(source)
+
+    assert record.user_metadata["title"] == "from-hook"
+    assert Path(record.stored_abspath or "").name == "from-hook.nc"
+
+
+def test_resolve_artifact_locator_replacement_controls_add_file_target(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    replacement = root / "files" / "custom" / "replacement.nc"
+
+    class ReplacementLocatorHook:
+        def resolve_artifact_locator(self, context: OperationContext) -> None:
+            context.planned_locators[0] = ArtifactLocator.path(
+                replacement,
+                relative_path="files/custom/replacement.nc",
+            )
+
+    registry = PluginRegistry([ReplacementLocatorHook()])
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="files"), plugins=registry)
+    source = tmp_path / "replace-me.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    record = catalog.add_file(source)
+
+    assert Path(record.stored_abspath or "") == replacement
+    assert replacement.read_text(encoding="utf-8") == "dummy"
+
+
+def test_resolve_artifact_locator_removal_fails_clearly(tmp_path: Path) -> None:
+    class RemovingLocatorHook:
+        def resolve_artifact_locator(self, context: OperationContext) -> None:
+            context.planned_locators.clear()
+
+    registry = PluginRegistry([RemovingLocatorHook()])
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="files"), plugins=registry)
+    source = tmp_path / "missing-locator.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="removed the planned artifact locator"):
+        catalog.add_file(source)
+
+    assert catalog.repository.all() == []
+    assert not list((root / "files").rglob("missing-locator.nc"))
+
+
+def test_hook_failure_rolls_back_staged_record_and_copied_file(tmp_path: Path) -> None:
+    rollback_calls: list[str] = []
+
+    class FailingHook:
+        def before_record_write(self, context: OperationContext) -> None:
+            context.rollback(lambda: rollback_calls.append("external"), description="external cleanup")
+            raise RuntimeError("simulated hook failure")
+
+    registry = PluginRegistry([FailingHook()])
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="files"), plugins=registry)
+    source = tmp_path / "failure.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="simulated hook failure"):
+        catalog.add_file(source)
+
+    assert rollback_calls == ["external"]
+    assert catalog.repository.all() == []
+    assert list((root / "files").rglob("failure.nc")) == []
+    assert source.exists()
+
+
+def test_metadata_extraction_hook_can_warn_without_failing(tmp_path: Path) -> None:
+    class WarningExtractorHook:
+        def extract_metadata(self, context: OperationContext) -> dict[str, object]:
+            context.add_warning(
+                HookWarning(
+                    hook_name="filename",
+                    message="filename metadata was incomplete",
+                    code="filename.incomplete",
+                )
+            )
+            return {"filename_stem": context.source_path.stem if context.source_path is not None else None}
+
+    registry = PluginRegistry([WarningExtractorHook()])
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"), plugins=registry)
+    source = tmp_path / "warning.txt"
+    source.write_text("dummy", encoding="utf-8")
+
+    record = catalog.add_file(source)
+
+    assert record.derived_metadata["filename_stem"] == "warning"
+    assert record.derived_metadata["hook_warnings"] == [
+        {
+            "hook_name": "filename",
+            "message": "filename metadata was incomplete",
+            "code": "filename.incomplete",
+        }
+    ]
+
+
+def test_add_artifact_uses_hook_context_and_persists_metadata_mutations(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    class ArtifactHook:
+        def before_validate_metadata(self, context: OperationContext) -> None:
+            context.user_metadata["title"] = "External data"
+            calls.append(context.operation_type)
+
+        def after_validate_metadata(self, context: OperationContext, report: ValidationReport) -> None:
+            assert report.ok
+            calls.append(context.record_type)
+
+        def resolve_artifact_locator(self, context: OperationContext) -> None:
+            assert context.planned_locators == [ArtifactLocator(kind="uri", value="s3://bucket/data.zarr")]
+            calls.append(context.planned_locators[0].kind)
+
+        def extract_metadata(self, context: OperationContext) -> dict[str, object]:
+            return {"locator_kind": context.planned_locators[0].kind}
+
+    registry = PluginRegistry([ArtifactHook()])
+    catalog = Catalog.create(
+        tmp_path / "catalog",
+        CatalogSpec(
+            catalog_name="artifacts",
+            default_schema=RecordSchema(
+                metadata_fields=[
+                    MetadataFieldDescription(
+                        name="title",
+                        description="Title supplied by hook.",
+                        required=True,
+                    )
+                ]
+            ),
+        ),
+        plugins=registry,
+    )
+
+    record = catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/data.zarr"),
+    )
+
+    assert calls == ["add_artifact", "external_reference", "uri"]
+    assert record.user_metadata["title"] == "External data"
+    assert record.derived_metadata["locator_kind"] == "uri"
+
+
+def test_add_artifact_persists_resolved_locator(tmp_path: Path) -> None:
+    class ReplacementLocatorHook:
+        def resolve_artifact_locator(self, context: OperationContext) -> None:
+            context.planned_locators[0] = ArtifactLocator(kind="uri", value="s3://bucket/replacement.zarr")
+
+    registry = PluginRegistry([ReplacementLocatorHook()])
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"), plugins=registry)
+
+    record = catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/original.zarr"),
+    )
+
+    assert record.locator == ArtifactLocator(kind="uri", value="s3://bucket/replacement.zarr")
+
+
+def test_record_write_hooks_fire_for_add_file_and_add_artifact(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    class RecordWriteHook:
+        def before_record_write(self, context: OperationContext) -> None:
+            calls.append(f"before:{context.operation_type}")
+
+        def after_record_write(self, context: OperationContext) -> None:
+            calls.append(f"after:{context.operation_type}")
+
+    registry = PluginRegistry([RecordWriteHook()])
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"), plugins=registry)
+    source = tmp_path / "record-write.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    catalog.add_file(source)
+    catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/data.zarr"),
+    )
+
+    assert calls == [
+        "before:add_file",
+        "after:add_file",
+        "before:add_artifact",
+        "after:add_artifact",
+    ]
+
+
+def test_before_record_write_metadata_mutation_is_persisted(tmp_path: Path) -> None:
+    class RecordMetadataHook:
+        def before_record_write(self, context: OperationContext) -> None:
+            context.user_metadata["record_phase"] = context.operation_type
+            context.derived_metadata["record_hook"] = True
+
+    registry = PluginRegistry([RecordMetadataHook()])
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"), plugins=registry)
+
+    record = catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/data.zarr"),
+    )
+
+    assert record.user_metadata["record_phase"] == "add_artifact"
+    assert record.derived_metadata["record_hook"] is True
+
+
+def test_after_commit_hook_failure_does_not_fail_add_file(tmp_path: Path) -> None:
+    class FailingAfterCommitHook:
+        def after_commit(self, context: OperationContext) -> None:
+            raise RuntimeError("post-commit notification failed")
+
+    registry = PluginRegistry([FailingAfterCommitHook()])
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"), plugins=registry)
+    source = tmp_path / "committed.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    with pytest.warns(RuntimeWarning, match="FailingAfterCommitHook: .*post-commit notification failed"):
+        record = catalog.add_file(source)
+
+    assert record.id is not None
+    assert catalog.get(record.id) == record
+    assert Path(record.stored_abspath or "").exists()
+
+
+def test_after_commit_hook_failure_does_not_fail_add_artifact(tmp_path: Path) -> None:
+    class FailingAfterCommitHook:
+        def after_commit(self, context: OperationContext) -> None:
+            raise RuntimeError("post-commit notification failed")
+
+    registry = PluginRegistry([FailingAfterCommitHook()])
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"), plugins=registry)
+
+    with pytest.warns(RuntimeWarning, match="FailingAfterCommitHook: .*post-commit notification failed"):
+        record = catalog.add_artifact(
+            record_type="external_reference",
+            locator=ArtifactLocator(kind="uri", value="s3://bucket/data.zarr"),
+        )
+
+    assert record.id is not None
+    assert catalog.get(record.id) == record
+
+
+def test_add_artifact_does_not_auto_rollback_caller_owned_transaction(tmp_path: Path) -> None:
+    class FailingAfterWriteHook:
+        def after_record_write(self, context: OperationContext) -> None:
+            raise RuntimeError("external transaction hook failure")
+
+    registry = PluginRegistry([FailingAfterWriteHook()])
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"), plugins=registry)
+
+    with catalog.transaction() as transaction:
+        with pytest.raises(RuntimeError, match="external transaction hook failure"):
+            catalog.add_artifact(
+                record_type="external_reference",
+                locator=ArtifactLocator(kind="uri", value="s3://bucket/data.zarr"),
+                transaction=transaction,
+            )
+
+        assert transaction.state is OperationState.STAGED
+        assert len(catalog.repository.all()) == 1
+        transaction.rollback()
+        assert catalog.repository.all() == []

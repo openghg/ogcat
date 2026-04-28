@@ -1,0 +1,318 @@
+"""Lifecycle hook protocols and context objects for catalog operations."""
+
+from __future__ import annotations
+
+import warnings
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Protocol, runtime_checkable
+
+from ogcat.models import ArtifactLocator, MetadataDict
+from ogcat.transactions import RollbackAction
+from ogcat.validation import ValidationReport
+
+
+@dataclass(slots=True)
+class HookWarning:
+    """A non-fatal hook warning.
+
+    Args:
+        hook_name: Name of the hook or plugin reporting the warning.
+        message: Human-readable warning message.
+        code: Stable machine-readable warning code.
+    """
+
+    hook_name: str
+    message: str
+    code: str = "hook.warning"
+
+    def to_metadata(self) -> MetadataDict:
+        """Convert the warning to JSON-compatible metadata."""
+        return {
+            "hook_name": self.hook_name,
+            "message": self.message,
+            "code": self.code,
+        }
+
+
+class RollbackRegistrar(Protocol):
+    """Function signature used to register rollback work with a transaction."""
+
+    def __call__(
+        self,
+        action: RollbackAction | Callable[[], None],
+        *,
+        description: str | None = None,
+    ) -> RollbackAction:
+        """Register a rollback action."""
+        ...
+
+
+@dataclass(slots=True)
+class OperationContext:
+    """Mutable context passed to catalog lifecycle hooks.
+
+    Hooks exert their effect by mutating documented fields on this object,
+    raising an exception, or registering rollback work. `user_metadata` may be
+    mutated before validation. `planned_locators` may be changed during
+    `resolve_artifact_locator`; the first locator is treated as canonical.
+    `derived_metadata` may be updated during metadata extraction.
+
+    Args:
+        catalog_root: Root path of the catalog.
+        operation_id: Identifier shared with the transaction.
+        operation_type: Catalog operation name, such as ``"add_file"``.
+        record_type: Record type being created.
+        user_metadata: User-supplied metadata, mutable by hooks before validation.
+        derived_metadata: Derived metadata collected during the operation.
+        planned_locators: Locators planned or supplied for the operation.
+        register_rollback: Low-level rollback registrar. Hook authors should
+            normally call ``context.rollback(...)`` instead.
+        source_path: Optional local source path.
+        source_descriptor: Optional non-path source description.
+        storage_mode: Optional storage mode, such as ``"copy"`` or ``"move"``.
+        original_path: Optional original path or URI.
+        original_filename: Optional original filename.
+        suffixes: Source suffixes associated with the artifact.
+    """
+
+    catalog_root: Path
+    operation_id: str
+    operation_type: str
+    record_type: str
+    user_metadata: MetadataDict
+    derived_metadata: MetadataDict = field(default_factory=dict)
+    planned_locators: list[ArtifactLocator] = field(default_factory=list)
+    register_rollback: RollbackRegistrar | None = None
+    source_path: Path | None = None
+    source_descriptor: str | None = None
+    storage_mode: str | None = None
+    original_path: str | Path | None = None
+    original_filename: str | None = None
+    suffixes: list[str] = field(default_factory=list)
+    warnings: list[HookWarning] = field(default_factory=list)
+
+    def add_warning(self, warning: HookWarning | str, *, hook_name: str = "hook") -> None:
+        """Record a non-fatal warning for this operation."""
+        if isinstance(warning, HookWarning):
+            self.warnings.append(warning)
+            return
+        self.warnings.append(HookWarning(hook_name=hook_name, message=warning))
+
+    def rollback(
+        self,
+        action: RollbackAction | Callable[[], None],
+        *,
+        description: str | None = None,
+    ) -> RollbackAction:
+        """Register a rollback action through the active catalog transaction."""
+        if self.register_rollback is None:
+            raise RuntimeError("No active rollback registration is available.")
+        return self.register_rollback(action, description=description)
+
+
+@runtime_checkable
+class BeforeValidateMetadataHook(Protocol):
+    """Hook called before schema metadata validation."""
+
+    def before_validate_metadata(self, context: OperationContext) -> None:
+        """Inspect or mutate metadata before validation."""
+        ...
+
+
+@runtime_checkable
+class AfterValidateMetadataHook(Protocol):
+    """Hook called after schema metadata validation."""
+
+    def after_validate_metadata(self, context: OperationContext, report: ValidationReport) -> None:
+        """Inspect validation results."""
+        ...
+
+
+@runtime_checkable
+class ResolveArtifactLocatorHook(Protocol):
+    """Hook called after an artifact locator has been proposed."""
+
+    def resolve_artifact_locator(self, context: OperationContext) -> None:
+        """Inspect, replace, or extend planned artifact locators."""
+        ...
+
+
+@runtime_checkable
+class BeforeRecordWriteHook(Protocol):
+    """Hook called before writing the catalog record."""
+
+    def before_record_write(self, context: OperationContext) -> None:
+        """Run before the catalog record is written."""
+        ...
+
+
+@runtime_checkable
+class AfterRecordWriteHook(Protocol):
+    """Hook called after writing the catalog record."""
+
+    def after_record_write(self, context: OperationContext) -> None:
+        """Run after the catalog record is written."""
+        ...
+
+
+@runtime_checkable
+class ExtractMetadataHook(Protocol):
+    """Hook called during derived metadata extraction."""
+
+    def extract_metadata(self, context: OperationContext) -> MetadataDict | None:
+        """Return derived metadata to merge into the operation context."""
+        ...
+
+
+@runtime_checkable
+class BeforeCommitHook(Protocol):
+    """Hook called before committing the catalog transaction."""
+
+    def before_commit(self, context: OperationContext) -> None:
+        """Run before transaction commit."""
+        ...
+
+
+@runtime_checkable
+class AfterCommitHook(Protocol):
+    """Hook called after committing the catalog transaction."""
+
+    def after_commit(self, context: OperationContext) -> None:
+        """Run after transaction commit."""
+        ...
+
+
+@runtime_checkable
+class RollbackHook(Protocol):
+    """Hook called when an operation fails and rolls back."""
+
+    def on_rollback(self, context: OperationContext, error: BaseException) -> None:
+        """Run after rollback has been requested for a failed operation."""
+        ...
+
+
+@runtime_checkable
+class ErrorHook(Protocol):
+    """Hook called when an operation fails."""
+
+    def on_error(self, context: OperationContext, error: BaseException) -> None:
+        """Run when an operation fails."""
+        ...
+
+
+class HookManager:
+    """Deterministic dispatcher for registered catalog hooks."""
+
+    def __init__(self, hooks: Iterable[object] = ()) -> None:
+        self._hooks = list(hooks)
+
+    @property
+    def hooks(self) -> tuple[object, ...]:
+        """Registered hooks in dispatch order."""
+        return tuple(self._hooks)
+
+    def register(self, hook: object) -> object:
+        """Register a hook object and return it for decorator-style usage."""
+        self._hooks.append(hook)
+        return hook
+
+    def before_validate_metadata(self, context: OperationContext) -> None:
+        """Dispatch ``before_validate_metadata`` hooks."""
+        for hook in self._hooks:
+            if isinstance(hook, BeforeValidateMetadataHook):
+                hook.before_validate_metadata(context)
+
+    def after_validate_metadata(self, context: OperationContext, report: ValidationReport) -> None:
+        """Dispatch ``after_validate_metadata`` hooks."""
+        for hook in self._hooks:
+            if isinstance(hook, AfterValidateMetadataHook):
+                hook.after_validate_metadata(context, report)
+
+    def resolve_artifact_locator(self, context: OperationContext) -> None:
+        """Dispatch ``resolve_artifact_locator`` hooks."""
+        for hook in self._hooks:
+            if isinstance(hook, ResolveArtifactLocatorHook):
+                hook.resolve_artifact_locator(context)
+
+    def before_record_write(self, context: OperationContext) -> None:
+        """Dispatch ``before_record_write`` hooks."""
+        for hook in self._hooks:
+            if isinstance(hook, BeforeRecordWriteHook):
+                hook.before_record_write(context)
+
+    def after_record_write(self, context: OperationContext) -> None:
+        """Dispatch ``after_record_write`` hooks."""
+        for hook in self._hooks:
+            if isinstance(hook, AfterRecordWriteHook):
+                hook.after_record_write(context)
+
+    def extract_metadata(self, context: OperationContext) -> None:
+        """Dispatch metadata extraction hooks and merge returned metadata."""
+        for hook in self._hooks:
+            if isinstance(hook, ExtractMetadataHook):
+                extracted = hook.extract_metadata(context)
+                if extracted is not None:
+                    context.derived_metadata.update(extracted)
+
+    def before_commit(self, context: OperationContext) -> None:
+        """Dispatch ``before_commit`` hooks."""
+        for hook in self._hooks:
+            if isinstance(hook, BeforeCommitHook):
+                hook.before_commit(context)
+
+    def after_commit(self, context: OperationContext) -> None:
+        """Dispatch ``after_commit`` hooks without failing committed work."""
+        for hook in self._hooks:
+            if isinstance(hook, AfterCommitHook):
+                try:
+                    hook.after_commit(context)
+                except Exception as exc:
+                    warning = HookWarning(
+                        hook_name=type(hook).__name__,
+                        message=f"after_commit hook failed: {type(exc).__name__}: {exc}",
+                        code="hook.after_commit_failed",
+                    )
+                    context.add_warning(warning)
+                    warnings.warn(
+                        f"{warning.hook_name}: {warning.message}",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+
+    def on_error(self, context: OperationContext, error: BaseException) -> None:
+        """Dispatch error hooks, preserving the original operation failure."""
+        for hook in self._hooks:
+            if isinstance(hook, ErrorHook):
+                try:
+                    hook.on_error(context, error)
+                except Exception as exc:
+                    error.add_note(f"error hook failed: {type(exc).__name__}: {exc}")
+
+    def on_rollback(self, context: OperationContext, error: BaseException) -> None:
+        """Dispatch rollback hooks, preserving the original operation failure."""
+        for hook in self._hooks:
+            if isinstance(hook, RollbackHook):
+                try:
+                    hook.on_rollback(context, error)
+                except Exception as exc:
+                    error.add_note(f"rollback hook failed: {type(exc).__name__}: {exc}")
+
+
+__all__ = [
+    "AfterCommitHook",
+    "AfterValidateMetadataHook",
+    "AfterRecordWriteHook",
+    "BeforeCommitHook",
+    "BeforeValidateMetadataHook",
+    "BeforeRecordWriteHook",
+    "ErrorHook",
+    "ExtractMetadataHook",
+    "HookManager",
+    "HookWarning",
+    "OperationContext",
+    "ResolveArtifactLocatorHook",
+    "RollbackHook",
+    "RollbackRegistrar",
+]

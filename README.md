@@ -37,6 +37,8 @@ adding files by copy or move, listing metadata field descriptions, and locating 
   can grow beyond copied or moved local files without changing the basic catalog shape.
 - Naming and templates: file placement under `files/` is driven by simple directory and filename templates evaluated from record id, source filename parts, timestamps, and user metadata.
 - Derived metadata extractors: optional extractors can add lightweight summaries after ingest. The current implementation includes a netCDF extractor when `xarray` is installed.
+- Hooks and plugins: projects can register Python hook objects to add domain-specific metadata,
+  validation, rollback, and lifecycle behavior without adding that logic to `ogcat` core.
 - Search and CLI: search supports exact equality, substring contains, and regex matching, with flattened field lookup and dotted-path access for nested metadata. The CLI exposes the same search model and adds shell-oriented output modes.
 
 ## Catalog Layout
@@ -104,6 +106,30 @@ catalog.search(contains={"title": "anthropogenic"}, ignore_case=True)
 catalog.search(where={"user_metadata.product.family.revision": 2})
 catalog.search(where={"derived_metadata.netcdf.dims.time": 12})
 ```
+
+Register simple hooks directly in Python:
+
+```python
+from ogcat import Catalog, CatalogSpec, PluginRegistry
+from ogcat.hooks import OperationContext
+
+
+class FilenameTitlePlugin:
+    def before_validate_metadata(self, context: OperationContext) -> None:
+        if context.source_path is not None:
+            context.user_metadata.setdefault("title", context.source_path.stem)
+
+
+spec = CatalogSpec(catalog_name="files")
+plugins = PluginRegistry([FilenameTitlePlugin()])
+catalog = Catalog.create("example-catalog", spec, plugins=plugins)
+```
+
+See [docs/design-note-hooks-plugins.md](docs/design-note-hooks-plugins.md) for hook lifecycle,
+rollback, and transaction examples.
+
+In this hook model, `add_artifact()` records an artifact locator but does not write artifact data.
+`add_file()` is the bundled local-file operation that copies or moves data before writing the record.
 
 ## CLI
 
@@ -203,4 +229,5 @@ The current direction is:
 
 See [docs/architecture.md](docs/architecture.md),
 [docs/design-note-artifact-locators.md](docs/design-note-artifact-locators.md),
+[docs/design-note-hooks-plugins.md](docs/design-note-hooks-plugins.md),
 and [docs/roadmap.md](docs/roadmap.md) for more detail.

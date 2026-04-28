@@ -42,8 +42,9 @@ break in record shape.
 
 ## New API Surface
 
-`Catalog.add_file(...)` is now a convenience wrapper around a more general
-`Catalog.add_artifact(...)` method.
+`Catalog.add_file(...)` and `Catalog.add_artifact(...)` now share the same internal add-operation
+lifecycle. `add_file(...)` is the local-file specialisation: it resolves a path locator, copies or
+moves the source file, extracts generic metadata, and writes a record.
 
 `add_artifact(...)` does not perform file operations. It registers a record with an explicit
 `record_type` and `locator`. That keeps the current managed-file path simple while creating a small

@@ -57,19 +57,19 @@ def test_search_prefers_top_level_fields_when_names_are_ambiguous(tmp_path: Path
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
     record = catalog.add_file(
         source,
-        metadata={"catalog": "user-catalog", "id": "user-id", "title": "Ambiguous record"},
+        metadata={"catalog": "user-catalog", "time_added": "user-time", "title": "Ambiguous record"},
     )
     record.derived_metadata["catalog"] = "derived-catalog"
-    record.derived_metadata["id"] = "derived-id"
+    record.derived_metadata["time_added"] = "derived-time"
     catalog.repository.update(record)
 
     by_catalog = catalog.search(where={"catalog": "fluxes"})
-    by_record_id = catalog.search(where={"id": record.id})
+    by_time_added = catalog.search(where={"time_added": record.time_added})
 
     assert [r.id for r in by_catalog] == [record.id]
-    assert [r.id for r in by_record_id] == [record.id]
+    assert [r.id for r in by_time_added] == [record.id]
     assert catalog.search(where={"catalog": "user-catalog"}) == []
-    assert catalog.search(where={"id": "user-id"}) == []
+    assert catalog.search(where={"time_added": "user-time"}) == []
 
 
 def test_search_prefers_user_metadata_before_derived_metadata(tmp_path: Path) -> None:
