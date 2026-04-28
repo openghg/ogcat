@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 import shutil
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal, overload
 
 from ogcat.extractors import extract_derived_metadata
 from ogcat.hooks import HookManager, OperationContext
 from ogcat.models import ArtifactLocator, CatalogRecord, JsonValue, MetadataDict
 from ogcat.naming import build_naming_context, render_storage_location
 from ogcat.plugins import PluginRegistry
+from ogcat.record_set import CatalogRecordSet
 from ogcat.repository import CatalogRepository
 from ogcat.spec import CatalogSpec, RecordSchema
 from ogcat.tinydb_repository import TinyDbCatalogRepository
@@ -299,6 +301,7 @@ class Catalog:
             )
         return self.repository.insert_many(records)
 
+    @overload
     def search(
         self,
         *,
@@ -306,15 +309,44 @@ class Catalog:
         contains: dict[str, str] | None = None,
         regex: dict[str, str] | None = None,
         ignore_case: bool = False,
-    ) -> list[CatalogRecord]:
+        as_record_set: Literal[False] = False,
+    ) -> list[CatalogRecord]: ...
+
+    @overload
+    def search(
+        self,
+        *,
+        where: dict[str, object] | None = None,
+        contains: dict[str, str] | None = None,
+        regex: dict[str, str] | None = None,
+        ignore_case: bool = False,
+        as_record_set: Literal[True],
+    ) -> CatalogRecordSet: ...
+
+    def search(
+        self,
+        *,
+        where: dict[str, object] | None = None,
+        contains: dict[str, str] | None = None,
+        regex: dict[str, str] | None = None,
+        ignore_case: bool = False,
+        as_record_set: bool = False,
+    ) -> list[CatalogRecord] | CatalogRecordSet:
         """Search catalog records using equality, substring, and regex filters."""
-        return self.repository.search(
+        results = self.repository.search(
             where=where,
             contains=contains,
             regex=regex,
             ignore_case=ignore_case,
             resolution_order=self.spec.field_resolution_order,
         )
+        if as_record_set:
+            return self.record_set(results)
+        return results
+
+    def record_set(self, records: Sequence[CatalogRecord]) -> CatalogRecordSet:
+        """Wrap records in a sequence-like container using catalog field resolution order."""
+        return CatalogRecordSet(records, resolution_order=self.spec.field_resolution_order)
 
     def describe(self) -> dict[str, object]:
         """Return a simple serialisable summary of the catalog."""
