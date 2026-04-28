@@ -50,6 +50,38 @@ class RollbackRegistrar(Protocol):
 
 
 @dataclass(slots=True)
+class OperationSource:
+    """Description of the artifact source for a catalog operation.
+
+    Args:
+        kind: Short source kind, such as ``"local_file"`` or ``"external"``.
+        path: Optional local source path.
+        descriptor: Optional non-path source description or URI.
+        metadata: Source-specific JSON-compatible metadata.
+        payload: Optional in-memory Python object for writer helpers.
+    """
+
+    kind: str
+    path: Path | None = None
+    descriptor: str | None = None
+    metadata: MetadataDict = field(default_factory=dict)
+    payload: object | None = None
+
+
+class ArtifactWriter(Protocol):
+    """Plugin-facing writer that materialises artifact data before record write."""
+
+    def write(
+        self,
+        context: OperationContext,
+        source: OperationSource,
+        target: ArtifactLocator,
+    ) -> None:
+        """Write artifact data from source to target."""
+        ...
+
+
+@dataclass(slots=True)
 class OperationContext:
     """Mutable context passed to catalog lifecycle hooks.
 
@@ -69,8 +101,7 @@ class OperationContext:
         planned_locators: Locators planned or supplied for the operation.
         register_rollback: Low-level rollback registrar. Hook authors should
             normally call ``context.rollback(...)`` instead.
-        source_path: Optional local source path.
-        source_descriptor: Optional non-path source description.
+        source: Artifact source description for this operation.
         storage_mode: Optional storage mode, such as ``"copy"`` or ``"move"``.
         original_path: Optional original path or URI.
         original_filename: Optional original filename.
@@ -85,13 +116,32 @@ class OperationContext:
     derived_metadata: MetadataDict = field(default_factory=dict)
     planned_locators: list[ArtifactLocator] = field(default_factory=list)
     register_rollback: RollbackRegistrar | None = None
-    source_path: Path | None = None
-    source_descriptor: str | None = None
+    source: OperationSource = field(default_factory=lambda: OperationSource(kind="unknown"))
     storage_mode: str | None = None
     original_path: str | Path | None = None
     original_filename: str | None = None
     suffixes: list[str] = field(default_factory=list)
     warnings: list[HookWarning] = field(default_factory=list)
+
+    @property
+    def source_path(self) -> Path | None:
+        """Optional local source path, kept for compatibility with existing hooks."""
+        return self.source.path
+
+    @source_path.setter
+    def source_path(self, value: Path | None) -> None:
+        """Set the optional local source path on the operation source."""
+        self.source.path = value
+
+    @property
+    def source_descriptor(self) -> str | None:
+        """Optional source description, kept for compatibility with existing hooks."""
+        return self.source.descriptor
+
+    @source_descriptor.setter
+    def source_descriptor(self, value: str | None) -> None:
+        """Set the optional source description on the operation source."""
+        self.source.descriptor = value
 
     def add_warning(self, warning: HookWarning | str, *, hook_name: str = "hook") -> None:
         """Record a non-fatal warning for this operation."""
@@ -304,6 +354,7 @@ __all__ = [
     "AfterCommitHook",
     "AfterValidateMetadataHook",
     "AfterRecordWriteHook",
+    "ArtifactWriter",
     "BeforeCommitHook",
     "BeforeValidateMetadataHook",
     "BeforeRecordWriteHook",
@@ -312,6 +363,7 @@ __all__ = [
     "HookManager",
     "HookWarning",
     "OperationContext",
+    "OperationSource",
     "ResolveArtifactLocatorHook",
     "RollbackHook",
     "RollbackRegistrar",

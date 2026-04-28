@@ -8,9 +8,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 from ogcat.extractors import extract_derived_metadata
-from ogcat.hooks import HookManager, OperationContext
+from ogcat.hooks import ArtifactWriter, HookManager, OperationContext, OperationSource
 from ogcat.models import ArtifactLocator, CatalogRecord, JsonValue, MetadataDict
 from ogcat.naming import build_naming_context, render_storage_location
 from ogcat.plugins import PluginRegistry
@@ -21,7 +22,6 @@ from ogcat.transactions import OperationState, UnitOfWork
 from ogcat.validation import ValidationReport, validate_metadata
 
 ArtifactLocatorFactory = Callable[[OperationContext], ArtifactLocator]
-ArtifactWriter = Callable[[OperationContext, ArtifactLocator], None]
 DerivedMetadataCollector = Callable[[OperationContext, ArtifactLocator], None]
 
 
@@ -120,31 +120,15 @@ class Catalog:
             )
             return ArtifactLocator.path(target, relative_path=rel_path)
 
-        def write_local_file(context: OperationContext, locator: ArtifactLocator) -> None:
-            """Copy or move the source file to the canonical path locator."""
-            target = _path_from_locator(locator)
-            naming_metadata["resolved_filename"] = target.name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if chosen_operation == "copy":
-                context.rollback(
-                    lambda path=target: path.unlink(missing_ok=True),
-                    description=f"remove copied file {target}",
-                )
-                shutil.copy2(source, target)
-            else:
-                context.rollback(
-                    lambda source_path=source, target_path=target: _rollback_moved_file(
-                        source_path=source_path,
-                        target_path=target_path,
-                    ),
-                    description=f"restore moved file from {target} to {source}",
-                )
-                shutil.move(str(source), str(target))
-
         def collect_file_metadata(context: OperationContext, locator: ArtifactLocator) -> None:
             """Collect generic derived metadata from the written file."""
             context.derived_metadata.update(extract_derived_metadata(_path_from_locator(locator)))
 
+        source_description = OperationSource(kind="local_file", path=source, descriptor=str(source))
+        writer = _LocalFileArtifactWriter(
+            operation=chosen_operation,
+            naming_metadata=naming_metadata,
+        )
         with self.transaction() as transaction:
             return self._run_add_operation(
                 transaction=transaction,
@@ -161,10 +145,9 @@ class Catalog:
                 derived_metadata={},
                 naming_metadata=naming_metadata,
                 time_added=timestamp,
-                source_path=source,
-                source_descriptor=str(source),
+                source=source_description,
                 locator_factory=resolve_local_file_locator,
-                artifact_writer=write_local_file,
+                artifact_writer=writer,
                 derived_metadata_collector=collect_file_metadata,
             )
 
@@ -181,6 +164,8 @@ class Catalog:
         derived_metadata: MetadataDict | None = None,
         naming_metadata: MetadataDict | None = None,
         time_added: str | None = None,
+        source: OperationSource | None = None,
+        artifact_writer: ArtifactWriter | None = None,
         transaction: UnitOfWork | None = None,
     ) -> CatalogRecord:
         """Add an artifact record without performing any file operation.
@@ -195,6 +180,8 @@ class Catalog:
         schema = self._select_schema(record_type, require_known=False)
         schema_name = self._schema_name(record_type)
         metadata = _coerce_metadata_input(metadata_input, schema_name=schema_name)
+        validated_source = _optional_operation_source(source)
+        validated_artifact_writer = _validate_artifact_writer(artifact_writer)
         if transaction is not None:
             if transaction.repository is not self.repository:
                 raise ValueError("Transaction is bound to a different catalog repository.")
@@ -211,6 +198,8 @@ class Catalog:
                 derived_metadata=derived_metadata,
                 naming_metadata=naming_metadata,
                 time_added=time_added,
+                source=validated_source,
+                artifact_writer=validated_artifact_writer,
                 schema=schema,
             )
         with self.transaction() as unit_of_work:
@@ -227,6 +216,8 @@ class Catalog:
                 derived_metadata=derived_metadata,
                 naming_metadata=naming_metadata,
                 time_added=time_added,
+                source=validated_source,
+                artifact_writer=validated_artifact_writer,
                 schema=schema,
             )
 
@@ -248,8 +239,9 @@ class Catalog:
         """Add multiple artifact records.
 
         Each item should provide the same keyword-style fields accepted by
-        `add_artifact()`. This keeps the public artifact API small while allowing
-        batch-oriented callers to avoid one-at-a-time repository writes.
+        `add_artifact()`. Items are added one at a time so hooks and artifact
+        writers run consistently for each record. Earlier items remain
+        committed if a later item fails.
         """
         validated_items = [_validate_artifact_batch_item(item, index) for index, item in enumerate(artifacts)]
 
@@ -263,41 +255,36 @@ class Catalog:
                 raise ValueError(f"artifact batch item {index}: invalid locator: {exc}") from exc
 
             record_type = str(validated["record_type"])
-            metadata = validated.get("metadata")  # type: ignore[assignment]
-            schema = self._select_schema(record_type, require_known=False)
             try:
-                self._validate_metadata(
-                    schema=schema,
-                    metadata={} if metadata is None else metadata,  # type: ignore[arg-type]
-                    record_type=record_type,
+                records.append(
+                    self.add_artifact(
+                        record_type=record_type,
+                        locator=locator,
+                        metadata=validated.get("metadata"),  # type: ignore[arg-type]
+                        storage_mode=(
+                            None if validated.get("storage_mode") is None else str(validated["storage_mode"])
+                        ),
+                        original_path=validated.get("original_path"),  # type: ignore[arg-type]
+                        original_filename=(
+                            None
+                            if validated.get("original_filename") is None
+                            else str(validated["original_filename"])
+                        ),
+                        suffixes=_optional_string_list(validated.get("suffixes")),
+                        derived_metadata=_optional_metadata(validated.get("derived_metadata")),
+                        naming_metadata=_optional_metadata(validated.get("naming_metadata")),
+                        time_added=(
+                            None if validated.get("time_added") is None else str(validated["time_added"])
+                        ),
+                        source=_optional_operation_source(validated.get("source")),
+                        artifact_writer=_optional_artifact_writer(validated.get("artifact_writer")),
+                    )
                 )
             except TypeError as exc:
                 raise TypeError(f"artifact batch item {index}: {exc}") from exc
             except ValueError as exc:
                 raise ValueError(f"artifact batch item {index}: {exc}") from exc
-            records.append(
-                self._build_artifact_record(
-                    record_type=record_type,
-                    locator=locator,
-                    metadata=metadata,  # type: ignore[arg-type]
-                    storage_mode=(
-                        None if validated.get("storage_mode") is None else str(validated["storage_mode"])
-                    ),
-                    original_path=validated.get("original_path"),  # type: ignore[arg-type]
-                    original_filename=(
-                        None
-                        if validated.get("original_filename") is None
-                        else str(validated["original_filename"])
-                    ),
-                    suffixes=validated.get("suffixes"),  # type: ignore[arg-type]
-                    derived_metadata=validated.get("derived_metadata"),  # type: ignore[arg-type]
-                    naming_metadata=validated.get("naming_metadata"),  # type: ignore[arg-type]
-                    time_added=(
-                        None if validated.get("time_added") is None else str(validated["time_added"])
-                    ),
-                )
-            )
-        return self.repository.insert_many(records)
+        return records
 
     def search(
         self,
@@ -417,9 +404,16 @@ class Catalog:
         derived_metadata: MetadataDict,
         naming_metadata: MetadataDict | None,
         time_added: str | None,
+        source: OperationSource | None,
+        artifact_writer: ArtifactWriter | None,
         schema: RecordSchema,
     ) -> CatalogRecord:
         """Add an artifact record within an active transaction."""
+        operation_source = source or OperationSource(
+            kind="external",
+            path=locator.as_path(),
+            descriptor=locator.value,
+        )
         return self._run_add_operation(
             transaction=transaction,
             commit=commit,
@@ -435,9 +429,9 @@ class Catalog:
             derived_metadata=derived_metadata,
             naming_metadata=naming_metadata,
             time_added=time_added,
-            source_path=locator.as_path(),
-            source_descriptor=locator.value,
+            source=operation_source,
             locator_factory=lambda context: locator,
+            artifact_writer=artifact_writer,
         )
 
     def _run_add_operation(
@@ -457,8 +451,7 @@ class Catalog:
         derived_metadata: MetadataDict,
         naming_metadata: MetadataDict | None,
         time_added: str | None,
-        source_path: Path | None,
-        source_descriptor: str | None,
+        source: OperationSource,
         locator_factory: ArtifactLocatorFactory,
         artifact_writer: ArtifactWriter | None = None,
         derived_metadata_collector: DerivedMetadataCollector | None = None,
@@ -472,8 +465,7 @@ class Catalog:
             user_metadata=metadata,
             derived_metadata=derived_metadata,
             register_rollback=transaction.register_rollback,
-            source_path=source_path,
-            source_descriptor=source_descriptor,
+            source=source,
             storage_mode=storage_mode,
             original_path=original_path,
             original_filename=original_filename,
@@ -493,7 +485,7 @@ class Catalog:
             canonical_locator = _artifact_locator_from_context(hook_context)
             hook_context.planned_locators[0] = canonical_locator
             if artifact_writer is not None:
-                artifact_writer(hook_context, canonical_locator)
+                artifact_writer.write(hook_context, hook_context.source, canonical_locator)
             if derived_metadata_collector is not None:
                 derived_metadata_collector(hook_context, canonical_locator)
             self.hook_manager.extract_metadata(hook_context)
@@ -613,6 +605,44 @@ def _metadata_with_hook_warnings(context: OperationContext) -> MetadataDict:
     return metadata
 
 
+@dataclass(slots=True)
+class _LocalFileArtifactWriter:
+    """Artifact writer for the bundled managed local-file operation."""
+
+    operation: str
+    naming_metadata: MetadataDict
+
+    def write(
+        self,
+        context: OperationContext,
+        source: OperationSource,
+        target: ArtifactLocator,
+    ) -> None:
+        """Copy or move a local source file to the target path locator."""
+        if source.path is None:
+            raise ValueError("Local file writer requires a path-backed operation source.")
+
+        target_path = _path_from_locator(target)
+        self.naming_metadata["resolved_filename"] = target_path.name
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.operation == "copy":
+            context.rollback(
+                lambda path=target_path: path.unlink(missing_ok=True),
+                description=f"remove copied file {target_path}",
+            )
+            shutil.copy2(source.path, target_path)
+            return
+
+        context.rollback(
+            lambda source_path=source.path, target_path=target_path: _rollback_moved_file(
+                source_path=source_path,
+                target_path=target_path,
+            ),
+            description=f"restore moved file from {target_path} to {source.path}",
+        )
+        shutil.move(str(source.path), str(target_path))
+
+
 def _coerce_metadata_input(
     metadata: object,
     *,
@@ -664,6 +694,47 @@ def _coerce_artifact_locator(value: object) -> ArtifactLocator:
     if isinstance(value, dict):
         return ArtifactLocator.from_dict(value)
     raise TypeError("artifact locator must be an ArtifactLocator or locator dictionary")
+
+
+def _optional_metadata(value: object) -> MetadataDict | None:
+    """Return optional metadata for artifact batch forwarding."""
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return dict(value)
+    raise TypeError(f"optional metadata value must be a dictionary, got {type(value).__name__}")
+
+
+def _optional_string_list(value: object) -> list[str] | None:
+    """Return an optional list of strings for artifact batch forwarding."""
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    raise TypeError(f"suffixes must be a list, got {type(value).__name__}")
+
+
+def _optional_operation_source(value: object) -> OperationSource | None:
+    """Return an optional operation source for artifact batch forwarding."""
+    if value is None:
+        return None
+    if isinstance(value, OperationSource):
+        return value
+    raise TypeError(f"source must be an OperationSource, got {type(value).__name__}")
+
+
+def _optional_artifact_writer(value: object) -> ArtifactWriter | None:
+    """Return an optional artifact writer for artifact batch forwarding."""
+    return _validate_artifact_writer(value)
+
+
+def _validate_artifact_writer(value: object) -> ArtifactWriter | None:
+    """Return an artifact writer when the optional value implements the writer protocol."""
+    if value is None:
+        return None
+    if callable(getattr(value, "write", None)):
+        return cast(ArtifactWriter, value)
+    raise TypeError(f"artifact_writer must provide a callable write() method, got {type(value).__name__}")
 
 
 def _validate_artifact_batch_item(item: object, index: int) -> dict[str, object]:
