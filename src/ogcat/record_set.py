@@ -98,8 +98,9 @@ class CatalogRecordSet(Sequence[CatalogRecord]):
             for record in self._records
         ]
 
-    def display_rows(self, fields: Sequence[str]) -> list[list[str]]:
+    def display_rows(self, fields: Sequence[str], *, limit: int | None = None) -> list[list[str]]:
         """Return CLI-style display rows for the selected fields."""
+        records = self._records if limit is None else self._records[:limit]
         return [
             [
                 format_display_value(
@@ -111,7 +112,7 @@ class CatalogRecordSet(Sequence[CatalogRecord]):
                 )
                 for field in fields
             ]
-            for record in self._records
+            for record in records
         ]
 
     def preview(
@@ -125,7 +126,7 @@ class CatalogRecordSet(Sequence[CatalogRecord]):
         field_names = list(fields)
         for field in field_names:
             table.add_column(field, overflow="fold")
-        for row in self.display_rows(field_names[:])[:limit]:
+        for row in self.display_rows(field_names, limit=limit):
             table.add_row(*row)
         return table
 

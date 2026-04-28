@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast, Literal, overload
+from typing import Literal, cast, overload
 
 from ogcat.extractors import extract_derived_metadata
 from ogcat.hooks import ArtifactWriter, HookManager, OperationContext, OperationSource

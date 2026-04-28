@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 from rich.table import Table
 
+import ogcat.record_set as record_set_module
 from ogcat import Catalog, CatalogRecordSet, CatalogSpec
 
 
@@ -45,21 +45,21 @@ def test_search_can_return_record_set_with_cli_style_field_selection(tmp_path: P
     assert results[0:1].select("species") == [{"species": "CO2"}]
 
 
-def test_record_set_to_dataframe_raises_without_pandas(tmp_path: Path) -> None:
+def test_record_set_to_dataframe_raises_without_pandas(tmp_path: Path, monkeypatch) -> None:
     catalog = _create_catalog(tmp_path)
     results = catalog.search(as_record_set=True)
 
-    original = sys.modules.pop("pandas", None)
+    def _raise_import_error(name: str) -> object:
+        raise ImportError(name)
+
+    monkeypatch.setattr(record_set_module, "import_module", _raise_import_error)
+
     try:
-        try:
-            results.to_dataframe()
-        except ImportError as exc:
-            assert "Install pandas" in str(exc)
-        else:
-            raise AssertionError("Expected ImportError when pandas is unavailable.")
-    finally:
-        if original is not None:
-            sys.modules["pandas"] = original
+        results.to_dataframe()
+    except ImportError as exc:
+        assert "Install pandas" in str(exc)
+    else:
+        raise AssertionError("Expected ImportError when pandas is unavailable.")
 
 
 def test_record_set_to_dataframe_uses_selected_rows_when_pandas_is_available(
@@ -74,7 +74,11 @@ def test_record_set_to_dataframe_uses_selected_rows_when_pandas_is_available(
         def from_records(cls, records: list[dict[str, object]]) -> list[dict[str, object]]:
             return records
 
-    monkeypatch.setitem(sys.modules, "pandas", SimpleNamespace(DataFrame=FakeDataFrame))
+    monkeypatch.setattr(
+        record_set_module,
+        "import_module",
+        lambda name: SimpleNamespace(DataFrame=FakeDataFrame),
+    )
 
     frame = results.to_dataframe(fields=["id", "species"])
 
