@@ -183,8 +183,9 @@ class UnzipArtifactWriter:
         )
         target_root = target_dir.resolve()
         with zipfile.ZipFile(source.path) as archive:
-            names = sorted(archive.namelist())
-            for member in archive.infolist():
+            members = archive.infolist()
+            names = sorted(member.filename for member in members if not member.is_dir())
+            for member in members:
                 destination = (target_dir / member.filename).resolve()
                 if destination != target_root and target_root not in destination.parents:
                     raise ValueError(f"zip member escapes target directory: {member.filename}")
