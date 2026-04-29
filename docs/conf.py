@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.metadata
+import os
 from types import UnionType
 from typing import Any, Union, get_args, get_origin
 
@@ -42,10 +43,12 @@ napoleon_google_docstring = True
 napoleon_numpy_docstring = False
 napoleon_include_init_with_doc = False
 
-intersphinx_mapping = {
-    "python": ("https://docs.python.org/3", None),
-    "pydantic": ("https://docs.pydantic.dev/latest", None),
-}
+intersphinx_mapping = {}
+if os.environ.get("OGCAT_DOCS_OFFLINE") != "1":
+    intersphinx_mapping = {
+        "python": ("https://docs.python.org/3", None),
+        "pydantic": ("https://docs.pydantic.dev/latest", None),
+    }
 
 myst_enable_extensions = ["colon_fence"]
 

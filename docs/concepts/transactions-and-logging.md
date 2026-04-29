@@ -35,9 +35,12 @@ class MyHook:
 
 ## Operation state
 
-``OperationState`` records the outcome of each operation.  After ``add_file()``
-or ``add_artifact()``, the state is available in the returned record's
-context if you need it.
+``OperationState`` records the outcome of work tracked by the internal
+``UnitOfWork``. ``add_file()`` and ``add_artifact()`` return a ``CatalogRecord``;
+they do not expose the operation context or final unit-of-work state. Callers
+only inspect ``OperationState`` directly when they manage a transaction
+themselves, for example by passing a caller-owned transaction into
+``add_artifact()``.
 
 ## Using UnitOfWork directly
 
@@ -48,11 +51,12 @@ method that must participate in the same rollback lifecycle.
 ```python
 from ogcat.transactions import UnitOfWork
 
-with UnitOfWork() as uow:
+with UnitOfWork(catalog.repository) as uow:
     uow.register_rollback(
         lambda: cleanup(),
         description="cleanup on failure",
     )
     do_work()
-    # UnitOfWork commits automatically when the block exits without error.
+    uow.commit()
+    # If commit is not called, the context manager rolls back on exit.
 ```

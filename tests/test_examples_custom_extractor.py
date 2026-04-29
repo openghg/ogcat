@@ -14,7 +14,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / "examples" / "custom_extractor" /
 
 @pytest.fixture(scope="module")
 def extractor_module() -> ModuleType:
-    """Load the custom_extractor run module once per test session."""
+    """Load the custom_extractor run module once for this test module."""
     spec = importlib.util.spec_from_file_location("custom_extractor_example", SCRIPT)
     assert spec is not None
     module = importlib.util.module_from_spec(spec)

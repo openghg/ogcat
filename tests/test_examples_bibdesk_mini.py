@@ -15,7 +15,7 @@ BIB_DATA = Path(__file__).resolve().parents[1] / "examples" / "bibdesk_mini" / "
 
 @pytest.fixture(scope="module")
 def bibdesk_module() -> ModuleType:
-    """Load the bibdesk_mini run module once per test session."""
+    """Load the bibdesk_mini run module once for this test module."""
     spec = importlib.util.spec_from_file_location("bibdesk_mini_example", SCRIPT)
     assert spec is not None
     module = importlib.util.module_from_spec(spec)

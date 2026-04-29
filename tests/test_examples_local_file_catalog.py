@@ -16,7 +16,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / "examples" / "local_file_catalog"
 
 @pytest.fixture(scope="module")
 def local_file_catalog_module() -> ModuleType:
-    """Load the local_file_catalog run module once per test session."""
+    """Load the local_file_catalog run module once for this test module."""
     spec = importlib.util.spec_from_file_location("local_file_catalog_example", SCRIPT)
     assert spec is not None
     module = importlib.util.module_from_spec(spec)
