@@ -1,4 +1,24 @@
-"""Lifecycle hook protocols and context objects for catalog operations."""
+"""Lifecycle hooks, writer protocols, and operation context objects.
+
+Hooks are structural protocols: a plugin object participates in a lifecycle
+phase by implementing the corresponding method, such as
+``before_validate_metadata(context)`` or ``extract_metadata(context)``. Hook
+methods receive an :class:`OperationContext`, a mutable object that carries the
+catalog root, operation id, source description, planned locators, user metadata,
+derived metadata, rollback registrar, and accumulated hook warnings.
+
+The design intentionally keeps hook classes lightweight. Plugin authors do not
+subclass a base class; they implement one or more protocol methods, usually with
+``context: OperationContext`` and ``-> None`` or ``-> MetadataDict | None`` type
+hints. ``HookManager`` dispatches protocols in deterministic registration order,
+merges returned derived metadata, records non-fatal after-commit failures as
+warnings, and preserves the original exception when error or rollback hooks
+fail.
+
+Artifact writers use the same context model. Any object satisfying
+:class:`ArtifactWriter` can materialise an :class:`ogcat.models.ArtifactLocator`
+from an :class:`OperationSource` before the catalog record is committed.
+"""
 
 from __future__ import annotations
 

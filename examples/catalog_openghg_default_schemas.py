@@ -21,9 +21,9 @@ catalog. The generated schema records OpenGHG type names such as ``species``,
 Command-line usage:
 
 ```bash
-python examples/catalog_openghg_default_schemas.py /tmp/openghg-ogcat
-ogcat info --catalog /tmp/openghg-ogcat
-ogcat fields --catalog /tmp/openghg-ogcat --record-type surface
+uv run python examples/catalog_openghg_default_schemas.py /tmp/openghg-ogcat
+uv run ogcat info --catalog /tmp/openghg-ogcat
+uv run ogcat fields --catalog /tmp/openghg-ogcat --record-type surface
 ```
 
 Python usage:

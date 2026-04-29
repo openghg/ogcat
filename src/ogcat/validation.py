@@ -50,7 +50,11 @@ class ValidationIssue:
 
 @dataclass(slots=True)
 class ValidationReport:
-    """Structured validation result."""
+    """Structured validation result.
+
+    Args:
+        issues: Validation issues collected during a check.
+    """
 
     issues: list[ValidationIssue] = field(default_factory=list)
 

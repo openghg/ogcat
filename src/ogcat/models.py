@@ -13,7 +13,15 @@ MetadataDict: TypeAlias = dict[str, JsonValue]
 
 @dataclass(slots=True)
 class MetadataFieldDescription:
-    """Lightweight description of an important metadata field."""
+    """Lightweight description of an important metadata field.
+
+    Args:
+        name: Metadata key.
+        description: Human-readable description for docs and CLI output.
+        example: Optional JSON-compatible example value.
+        required: Whether the field must be present during ingest.
+        value_types: Optional type labels used by validation.
+    """
 
     name: str
     description: str
@@ -48,7 +56,13 @@ class MetadataFieldDescription:
 
 @dataclass(slots=True)
 class ArtifactLocator:
-    """Minimal locator for a catalogued artifact."""
+    """Minimal locator for a catalogued artifact.
+
+    Args:
+        kind: Locator kind, such as ``"path"``, ``"uri"``, or ``"opaque"``.
+        value: Locator value, usually a path or URI string.
+        relative_path: Optional path relative to a catalog-managed root.
+    """
 
     kind: str
     value: str
@@ -56,7 +70,15 @@ class ArtifactLocator:
 
     @classmethod
     def path(cls, path: str | Path, *, relative_path: str | None = None) -> ArtifactLocator:
-        """Build a locator for a local path-backed artifact."""
+        """Build a locator for a local path-backed artifact.
+
+        Args:
+            path: Local filesystem path.
+            relative_path: Optional catalog-relative path.
+
+        Returns:
+            Path-backed artifact locator.
+        """
         return cls(kind="path", value=str(path), relative_path=relative_path)
 
     def to_dict(self) -> dict[str, JsonValue]:
@@ -92,7 +114,25 @@ class ArtifactLocator:
 
 @dataclass(slots=True)
 class CatalogRecord:
-    """A single catalogued artifact record."""
+    """A single catalogued artifact record.
+
+    Args:
+        catalog: Catalog name.
+        time_added: ISO 8601 record creation timestamp.
+        id: Repository-assigned record identifier.
+        record_type: Logical record type.
+        locator: Artifact locator.
+        stored_abspath: Backwards-compatible absolute path for path records.
+        stored_relpath: Backwards-compatible catalog-relative path.
+        storage_mode: Storage mode such as ``"copy"``, ``"move"``, or
+            ``"external"``.
+        original_path: Original source path or URI.
+        original_filename: Original source filename.
+        suffixes: Source suffixes.
+        user_metadata: User-supplied metadata.
+        derived_metadata: Extracted or hook-supplied metadata.
+        naming_metadata: Metadata used for storage template rendering.
+    """
 
     catalog: str
     time_added: str

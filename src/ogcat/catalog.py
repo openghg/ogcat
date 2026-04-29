@@ -29,7 +29,15 @@ DerivedMetadataCollector = Callable[[OperationContext, ArtifactLocator], None]
 
 @dataclass(slots=True)
 class Catalog:
-    """User-facing catalog API bound to a catalog root."""
+    """User-facing API bound to one catalog root.
+
+    Args:
+        root: Root directory containing ``catalog.json``, ``db.json``, and
+            managed files.
+        spec: Catalog specification loaded from or written to ``catalog.json``.
+        repository: Record storage backend.
+        hook_manager: Dispatcher for lifecycle hooks.
+    """
 
     root: Path
     spec: CatalogSpec
@@ -45,7 +53,21 @@ class Catalog:
         plugins: PluginRegistry | None = None,
         hooks: HookManager | None = None,
     ) -> Catalog:
-        """Create a new catalog directory and write its specification."""
+        """Create a catalog directory and write its specification.
+
+        Args:
+            root: Directory to create or reuse for the catalog.
+            spec: Catalog specification to persist.
+            plugins: Optional plugin registry used to build a hook manager.
+            hooks: Optional hook manager. Pass either ``plugins`` or ``hooks``.
+
+        Returns:
+            Open catalog instance bound to ``root``.
+
+        Raises:
+            ValueError: If the configured backend is unsupported, or both
+                ``plugins`` and ``hooks`` are supplied.
+        """
         root_path = Path(root).expanduser().resolve()
         root_path.mkdir(parents=True, exist_ok=True)
         spec.write(root_path / "catalog.json")
@@ -66,7 +88,21 @@ class Catalog:
         plugins: PluginRegistry | None = None,
         hooks: HookManager | None = None,
     ) -> Catalog:
-        """Open an existing catalog from disk."""
+        """Open an existing catalog from disk.
+
+        Args:
+            root: Existing catalog root containing ``catalog.json``.
+            plugins: Optional plugin registry used to build a hook manager.
+            hooks: Optional hook manager. Pass either ``plugins`` or ``hooks``.
+
+        Returns:
+            Open catalog instance bound to ``root``.
+
+        Raises:
+            FileNotFoundError: If ``catalog.json`` is missing.
+            ValueError: If the configured backend is unsupported, or both
+                ``plugins`` and ``hooks`` are supplied.
+        """
         root_path = Path(root).expanduser().resolve()
         spec = CatalogSpec.read(root_path / "catalog.json")
         repository = _open_repository(root_path, spec)
@@ -84,7 +120,22 @@ class Catalog:
         operation: str | None = None,
         record_type: str | None = None,
     ) -> CatalogRecord:
-        """Add a file to the catalog using managed copy or move."""
+        """Add a local file using managed copy or move.
+
+        Args:
+            path: Source file to ingest.
+            metadata: JSON-compatible user metadata.
+            operation: ``"copy"`` or ``"move"``. Defaults to the catalog spec.
+            record_type: Optional named schema to validate against.
+
+        Returns:
+            Persisted catalog record.
+
+        Raises:
+            TypeError: If metadata is not a dictionary.
+            ValueError: If validation fails, the operation is unsupported, or
+                ``record_type`` names an unknown schema.
+        """
         source = Path(path).expanduser().resolve()
         metadata_input = {} if metadata is None else metadata
         schema = self._select_schema(record_type, require_known=record_type is not None)
@@ -172,10 +223,33 @@ class Catalog:
     ) -> CatalogRecord:
         """Add an artifact record without performing any file operation.
 
-        This is the minimal general record API. `add_file()` remains the managed
-        ingest convenience wrapper that prepares a path-backed locator and then
-        delegates here. Pass a catalog transaction to stage the record as part
-        of a larger best-effort unit of work.
+        This is the minimal general record API. ``add_file()`` remains the
+        managed ingest convenience wrapper that prepares a path-backed locator
+        and delegates through the same lifecycle.
+
+        Args:
+            record_type: Logical type of record to create.
+            locator: Artifact locator to store with the record.
+            metadata: JSON-compatible user metadata.
+            storage_mode: Optional description such as ``"external"``.
+            original_path: Optional source path or URI.
+            original_filename: Optional source filename.
+            suffixes: Optional suffix list for the source artifact.
+            derived_metadata: Optional derived metadata to persist.
+            naming_metadata: Optional naming metadata to persist.
+            time_added: Optional timestamp override.
+            source: Optional operation source for hooks and writers.
+            artifact_writer: Optional writer that materialises data before the
+                record is written.
+            transaction: Optional caller-owned unit of work.
+
+        Returns:
+            Persisted or staged catalog record.
+
+        Raises:
+            TypeError: If metadata or writer inputs are invalid.
+            ValueError: If validation fails or the transaction belongs to a
+                different repository.
         """
         metadata_input = {} if metadata is None else metadata
         derived_metadata = {} if derived_metadata is None else dict(derived_metadata)
@@ -244,6 +318,12 @@ class Catalog:
         `add_artifact()`. Items are added one at a time so hooks and artifact
         writers run consistently for each record. Earlier items remain
         committed if a later item fails.
+
+        Args:
+            artifacts: List of dictionaries accepted by ``add_artifact()``.
+
+        Returns:
+            Persisted records in input order.
         """
         validated_items = [_validate_artifact_batch_item(item, index) for index, item in enumerate(artifacts)]
 
@@ -331,7 +411,22 @@ class Catalog:
         ignore_case: bool = False,
         as_record_set: bool = False,
     ) -> list[CatalogRecord] | CatalogRecordSet:
-        """Search catalog records using backend-neutral query semantics."""
+        """Search catalog records using backend-neutral query semantics.
+
+        Args:
+            query: Optional pre-built search query.
+            where: Equality filters.
+            contains: Substring or list-membership filters.
+            regex: Regular-expression filters.
+            match: Glob or substring filters.
+            exists: Fields that must be present.
+            missing: Fields that must be absent.
+            ignore_case: Whether string comparisons should be case-insensitive.
+            as_record_set: Return a ``CatalogRecordSet`` instead of a list.
+
+        Returns:
+            Matching records, either as a list or record-set view.
+        """
         results = self.repository.search(
             query=query,
             where=where,
@@ -348,11 +443,18 @@ class Catalog:
         return results
 
     def record_set(self, records: Sequence[CatalogRecord]) -> CatalogRecordSet:
-        """Wrap records in a sequence-like container using catalog field resolution order."""
+        """Wrap records in a sequence-like container.
+
+        Args:
+            records: Records to expose through ``CatalogRecordSet`` helpers.
+
+        Returns:
+            Record set using this catalog's field resolution order.
+        """
         return CatalogRecordSet(records, resolution_order=self.spec.field_resolution_order)
 
     def describe(self) -> dict[str, object]:
-        """Return a simple serialisable summary of the catalog."""
+        """Return a serialisable summary of catalog configuration and contents."""
         db_path = self.root / self.spec.db_path
         files_root = self.root / self.spec.files_root
         default_schema = self.spec.get_schema()
@@ -372,7 +474,7 @@ class Catalog:
         }
 
     def list_metadata_fields(self, record_type: str | None = None) -> list[dict[str, JsonValue]]:
-        """Return serialisable metadata field descriptions."""
+        """Return serialisable metadata field descriptions for a schema."""
         schema = self._select_schema(record_type, require_known=record_type is not None)
         return [field_description.to_dict() for field_description in schema.metadata_fields]
 

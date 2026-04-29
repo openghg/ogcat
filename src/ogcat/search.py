@@ -39,7 +39,12 @@ class FieldLookup:
 
 @dataclass(frozen=True, slots=True)
 class FieldPath:
-    """Backend-neutral field path used by search terms."""
+    """Backend-neutral field path used by search terms.
+
+    Args:
+        raw: User-facing field path. ``user.`` and ``derived.`` prefixes are
+            normalised to stored metadata namespaces.
+    """
 
     raw: str
 
@@ -75,7 +80,13 @@ class SearchOp(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class SearchTerm:
-    """One backend-neutral search predicate."""
+    """One backend-neutral search predicate.
+
+    Args:
+        field: Field path to resolve.
+        op: Search operator.
+        value: Optional comparison value.
+    """
 
     field: FieldPath
     op: SearchOp
@@ -107,7 +118,14 @@ class _SearchQueryTermBuilder:
 
 @dataclass(frozen=True, slots=True)
 class SearchQuery:
-    """Backend-neutral catalog record search query."""
+    """Backend-neutral catalog record search query.
+
+    Terms are combined with AND semantics.
+
+    Args:
+        terms: Search terms to require.
+        criteria: Backwards-compatible alias for ``terms``.
+    """
 
     terms: tuple[SearchTerm, ...] = ()
 
