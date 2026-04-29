@@ -1,4 +1,19 @@
-"""Small artifact writer helpers for examples and lightweight workflows."""
+"""Artifact writer helpers for lightweight catalog workflows.
+
+Writers bridge ``Catalog.add_artifact`` and concrete storage code. A writer is
+any object that satisfies :class:`ogcat.hooks.ArtifactWriter`: it exposes a
+``write(context, source, target)`` method, receives an
+:class:`ogcat.hooks.OperationContext`, and materialises an
+:class:`ogcat.models.ArtifactLocator` from an :class:`ogcat.hooks.OperationSource`.
+
+This module provides small adapters for common examples. ``source_writer`` wraps
+a function that accepts an ``OperationSource`` and target ``Path``.
+``memory_writer`` and ``path_writer`` adapt narrower functions for in-memory
+payloads and local files. ``UnzipArtifactWriter`` is a concrete directory writer
+used by tutorials and tests. These helpers register rollback actions through the
+operation context before writing so partially-created targets can be cleaned up
+if the catalog operation fails.
+"""
 
 from __future__ import annotations
 

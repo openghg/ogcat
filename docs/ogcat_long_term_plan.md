@@ -1163,7 +1163,7 @@ docs/
 
 #### Acceptance criteria
 
-- `sphinx-build` succeeds locally/CI.
+- `uv run sphinx-build` succeeds locally/CI.
 - Public classes/functions have Google-style docstrings.
 - Quickstart covers:
   - create/open catalog;
@@ -1211,10 +1211,10 @@ Keep the core lightweight while making optional integrations discoverable.
 
 #### Acceptance criteria
 
-- `pip install -e .[dev]` or uv equivalent works.
-- `pytest` works.
-- `ruff check` works if ruff is adopted.
-- `sphinx-build` works with docs extra.
+- `uv sync --extra dev` works.
+- `uv run pytest` works.
+- `uv run ruff check` works if ruff is adopted.
+- `uv run sphinx-build` works with docs extra.
 - Core install does not pull heavy scientific packages unnecessarily.
 
 #### Codex prompt
@@ -1775,6 +1775,9 @@ Use these terms carefully:
 - **Journal**: durable record of operation state transitions.
 - **Rollback action**: compensating action for a completed sub-step.
 - **Transaction**: only use for real backend transactions where the backend supports them.
+
+The [glossary](glossary.md) defines the shared vocabulary used by this plan and
+the current API docs.
 
 In TinyDB mode, say "transaction-like" or "recoverable operation", not ACID transaction.
 

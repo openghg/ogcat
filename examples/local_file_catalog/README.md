@@ -8,13 +8,13 @@ generated files with metadata, and search the records.
 ``ogcat`` must be installed:
 
 ```bash
-pip install -e .
+uv sync
 ```
 
 ## Run
 
 ```bash
-python examples/local_file_catalog/scripts/run.py
+uv run python examples/local_file_catalog/scripts/run.py
 ```
 
 The script creates a temporary catalog under the system temporary directory,

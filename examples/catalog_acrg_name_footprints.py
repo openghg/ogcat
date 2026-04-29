@@ -36,7 +36,7 @@ models are straightforward.
 
 Run this example from an environment where `ogcat` is installed, for example:
 
-- `pip install -e .`
+- `uv sync`
 """
 
 from __future__ import annotations

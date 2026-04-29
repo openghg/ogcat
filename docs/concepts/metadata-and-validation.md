@@ -81,12 +81,14 @@ from ogcat import validate_metadata
 report = validate_metadata(record.user_metadata, schema)
 if report.issues:
     for issue in report.issues:
-        print(issue.field, issue.message)
+        print(issue.path, issue.message)
 ```
 
 Validation is run automatically during ``add_file()`` and ``add_artifact()``.
-Missing required fields produce a warning but do not block ingest by default.
-Use a ``before_validate_metadata`` hook to enforce stricter policies.
+Missing required fields are errors and block ingest. Use a
+``before_validate_metadata`` hook to fill defaults before validation, or call
+``validate_metadata()`` directly when you want to inspect a report without
+writing a record.
 
 ## The ``ogcat fields`` command
 

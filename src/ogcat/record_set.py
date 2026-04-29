@@ -45,7 +45,12 @@ def format_display_value(value: JsonValue) -> str:
 
 
 class CatalogRecordSet(Sequence[CatalogRecord]):
-    """A lightweight, sequence-like view of catalog records."""
+    """A lightweight, sequence-like view of catalog records.
+
+    Args:
+        records: Records to expose.
+        resolution_order: Namespace order for flattened field lookup.
+    """
 
     def __init__(
         self,
@@ -84,7 +89,14 @@ class CatalogRecordSet(Sequence[CatalogRecord]):
         return self.rows(fields)
 
     def rows(self, fields: Sequence[str]) -> list[dict[str, JsonValue]]:
-        """Return JSON-friendly rows for the selected fields."""
+        """Return JSON-friendly rows for the selected fields.
+
+        Args:
+            fields: Field names or dotted paths to resolve.
+
+        Returns:
+            One dictionary per record.
+        """
         selected_fields = list(fields)
         return [
             {
@@ -136,7 +148,18 @@ class CatalogRecordSet(Sequence[CatalogRecord]):
         return table
 
     def to_dataframe(self, fields: Sequence[str] | None = None) -> Any:
-        """Convert the records to a pandas DataFrame when pandas is available."""
+        """Convert the records to a pandas DataFrame when pandas is available.
+
+        Args:
+            fields: Optional selected fields. When omitted, full record
+                dictionaries are used.
+
+        Returns:
+            ``pandas.DataFrame`` containing the selected record data.
+
+        Raises:
+            ImportError: If pandas is not installed.
+        """
         try:
             pd = import_module("pandas")
         except ImportError as exc:

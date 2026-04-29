@@ -10,7 +10,7 @@ in a catalog with a ``paper`` record type and a declared metadata schema.
 ``ogcat`` must be installed:
 
 ```bash
-pip install -e .
+uv sync
 ```
 
 No external bibliography library is required.  The example includes a small
@@ -19,7 +19,7 @@ BibTeX parser.
 ## Run
 
 ```bash
-python examples/bibdesk_mini/scripts/run.py
+uv run python examples/bibdesk_mini/scripts/run.py
 ```
 
 The script reads ``examples/bibdesk_mini/data/refs.bib``, creates a temporary

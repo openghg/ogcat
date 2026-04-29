@@ -28,7 +28,7 @@ beyond recording the string value.
 record = catalog.add_file(
     Path("data.nc"),
     metadata={"species": "CO2"},
-    mode="copy",          # or "move"
+    operation="copy",     # or "move"
 )
 print(record.path())      # path inside files/
 ```

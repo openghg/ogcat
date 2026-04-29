@@ -12,14 +12,14 @@ examples/
     README.md
     scripts/
       run.py
-  bibdesk_mini/
-    README.md
-    data/
-      refs.bib            small vendored BibTeX fixture
-    scripts/
-      run.py
   custom_extractor/
     README.md
+    scripts/
+      run.py
+  bibdesk_mini/
+    README.md             miscellaneous example, not part of the main tutorial path
+    data/
+      refs.bib
     scripts/
       run.py
 ```
@@ -27,7 +27,8 @@ examples/
 ## Rules
 
 - **ogcat is installed, not imported via path hack.**  No example modifies
-  ``sys.path``.  Run ``pip install -e .`` first.
+  ``sys.path``.  Run ``uv sync`` first, then execute scripts with
+  ``uv run python ...``.
 
 - **Vendored data is small.**  Files committed to the repository under
   ``examples/*/data/`` must be small enough to be comfortable in a Git

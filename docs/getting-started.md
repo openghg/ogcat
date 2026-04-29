@@ -6,7 +6,7 @@ records, and retrieve the stored path.
 ## Create a catalog
 
 ```bash
-ogcat init ./my-catalog --name demo
+uv run ogcat init ./my-catalog --name demo
 ```
 
 This writes ``my-catalog/catalog.json`` and creates ``my-catalog/files/``.
@@ -14,7 +14,7 @@ This writes ``my-catalog/catalog.json`` and creates ``my-catalog/files/``.
 ## Add a file
 
 ```bash
-ogcat add ./report.pdf \
+uv run ogcat add ./report.pdf \
   --catalog ./my-catalog \
   --meta title="Q1 Report" author="Alice" year=2024
 ```
@@ -26,20 +26,20 @@ printed to stdout.
 
 ```bash
 # equality
-ogcat search --catalog ./my-catalog author=Alice
+uv run ogcat search --catalog ./my-catalog author=Alice
 
 # substring
-ogcat search --catalog ./my-catalog title:report
+uv run ogcat search --catalog ./my-catalog title:report
 
 # print stored paths instead of records
-ogcat search --catalog ./my-catalog year=2024 --paths
+uv run ogcat search --catalog ./my-catalog year=2024 --paths
 ```
 
 ## Show a record or its stored path
 
 ```bash
-ogcat show 1 --catalog ./my-catalog
-ogcat path 1 --catalog ./my-catalog
+uv run ogcat show 1 --catalog ./my-catalog
+uv run ogcat path 1 --catalog ./my-catalog
 ```
 
 ## Python API
@@ -61,5 +61,6 @@ print(catalog.path(record.id))
 matches = catalog.search(where={"author": "Alice"})
 ```
 
-See :doc:`concepts/catalog-records` for a fuller explanation of the data
-model, and :doc:`tutorials/local-file-catalog` for a runnable example.
+See [Catalog records](concepts/catalog-records.md) for a fuller explanation of
+the data model, and [Basic catalog tutorial](tutorials/basic-catalog.md) for a
+runnable example.

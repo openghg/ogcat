@@ -59,13 +59,13 @@ Each catalog root is self-describing:
 ## Installation
 
 ```bash
-pip install -e .
+uv sync
 ```
 
 Optional netCDF metadata extraction:
 
 ```bash
-pip install -e '.[netcdf]'
+uv sync --extra netcdf
 ```
 
 ## Python API
@@ -114,9 +114,9 @@ catalog.search(exists=["user.site.code"], missing=["user.platform"])
 The CLI accepts both explicit flags and simple positional expressions:
 
 ```bash
-ogcat search --catalog example-catalog species=CO2
-ogcat search --catalog example-catalog tags:paris user.site.code? --json
-ogcat search --catalog example-catalog 'locator.uri~s3://bucket/*.zarr' --match title=paris --ids
+uv run ogcat search --catalog example-catalog species=CO2
+uv run ogcat search --catalog example-catalog tags:paris user.site.code? --json
+uv run ogcat search --catalog example-catalog 'locator.uri~s3://bucket/*.zarr' --match title=paris --ids
 ```
 
 Register simple hooks directly in Python:
@@ -152,13 +152,13 @@ extraction examples.
 Initialise a catalog:
 
 ```bash
-ogcat init ./example-catalog --name fluxes
+uv run ogcat init ./example-catalog --name fluxes
 ```
 
 Add a file with metadata:
 
 ```bash
-ogcat add ./anthropogenic.202401.nc \
+uv run ogcat add ./anthropogenic.202401.nc \
   --catalog ./example-catalog \
   --meta species=CO2 \
   product=CTE-HR \
@@ -169,30 +169,30 @@ ogcat add ./anthropogenic.202401.nc \
 Search records:
 
 ```bash
-ogcat search --catalog ./example-catalog --where species=CO2
-ogcat search --catalog ./example-catalog species=CO2 tags:paris
-ogcat search --catalog ./example-catalog --contains title=anthropogenic --ignore-case
-ogcat search --catalog ./example-catalog --regex version='^v4\.[0-9]+$'
-ogcat search --catalog ./example-catalog --where derived.netcdf.dims.time=12 --paths
-ogcat search --catalog ./example-catalog --where species=CO2 --limit 20
-ogcat search --catalog ./example-catalog --where species=CO2 --fields id,species,user_metadata.domain,path
-ogcat search --catalog ./example-catalog --where species=CO2 --fields id,species,path --format tsv
-ogcat search --catalog ./example-catalog --where species=CO2 --all
+uv run ogcat search --catalog ./example-catalog --where species=CO2
+uv run ogcat search --catalog ./example-catalog species=CO2 tags:paris
+uv run ogcat search --catalog ./example-catalog --contains title=anthropogenic --ignore-case
+uv run ogcat search --catalog ./example-catalog --regex version='^v4\.[0-9]+$'
+uv run ogcat search --catalog ./example-catalog --where derived.netcdf.dims.time=12 --paths
+uv run ogcat search --catalog ./example-catalog --where species=CO2 --limit 20
+uv run ogcat search --catalog ./example-catalog --where species=CO2 --fields id,species,user_metadata.domain,path
+uv run ogcat search --catalog ./example-catalog --where species=CO2 --fields id,species,path --format tsv
+uv run ogcat search --catalog ./example-catalog --where species=CO2 --all
 ```
 
 Show a record or print its stored path:
 
 ```bash
-ogcat show 1 --catalog ./example-catalog
-ogcat path 1 --catalog ./example-catalog
+uv run ogcat show 1 --catalog ./example-catalog
+uv run ogcat path 1 --catalog ./example-catalog
 ```
 
 Inspect catalog info and declared metadata fields:
 
 ```bash
-ogcat info --catalog ./example-catalog
-ogcat fields --catalog ./example-catalog
-ogcat fields --catalog ./example-catalog --json
+uv run ogcat info --catalog ./example-catalog
+uv run ogcat fields --catalog ./example-catalog
+uv run ogcat fields --catalog ./example-catalog --json
 ```
 
 `ogcat search` supports compact positional filters: `field=value` for equality, `field:value` for contains/list membership, `field~pattern` for glob or substring matching, `field?` for exists, and `!field?` for missing. Compatibility flags remain available: `--where`, `--contains`, `--match`, `--regex`, `--exists`, and `--missing`. Human-readable search output is capped by default; use `--limit N` to choose a cap or `--all` to show every match. Use `--fields a,b,c` to choose displayed fields, and `--format table|plain|csv|tsv|pipe` to choose the display format. For automation and shell use, `--json`, `--ids`, and `--paths` provide stable machine-friendly outputs; `--json` prints full matching records and ignores `--fields`, `--format`, and the default display cap.
@@ -208,6 +208,33 @@ Unqualified field names are resolved in this order:
 If you need to bypass flattened lookup, use an explicit dotted path such as `user_metadata.species` or `derived_metadata.netcdf.dims.time`. The shorter `user.species` and `derived.netcdf.dims.time` aliases are also accepted.
 
 Current search is intentionally small. It does not support numeric range queries or richer expressions such as `>`, `<`, `>=`, `<=`, or boolean query composition.
+
+## Development
+
+Use the project-local `.venv/` managed by `uv`; do not rely on a global Python
+or ad-hoc `pip install`.
+
+```bash
+uv sync --extra dev --extra docs
+uv run ruff check src tests examples
+uv run ruff format --check src tests examples
+uv run pyright
+uv run pytest
+```
+
+Build the documentation with:
+
+```bash
+uv run sphinx-build -b html docs docs/_build/html
+uv run sphinx-build -W -b html docs docs/_build/html
+```
+
+To host the built docs locally:
+
+```bash
+cd docs/_build/html
+uv run python -m http.server 8000
+```
 
 ## Storage Model
 

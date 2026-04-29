@@ -7,7 +7,7 @@
 ## Install from source
 
 ```bash
-pip install -e .
+uv sync
 ```
 
 ## Optional extras
@@ -15,7 +15,7 @@ pip install -e .
 ### netCDF metadata extraction
 
 ```bash
-pip install -e '.[netcdf]'
+uv sync --extra netcdf
 ```
 
 When ``xarray`` is available, ``ogcat`` extracts a lightweight summary of
@@ -24,6 +24,19 @@ dimension names and sizes from ``.nc`` files during ingest.
 ### Documentation build
 
 ```bash
-pip install -e '.[docs]'
-sphinx-build docs docs/_build/html
+uv sync --extra docs
+uv run sphinx-build -b html docs docs/_build/html
+```
+
+For CI-style warning checks:
+
+```bash
+uv run sphinx-build -W -b html docs docs/_build/html
+```
+
+To serve the generated HTML locally:
+
+```bash
+cd docs/_build/html
+uv run python -m http.server 8000
 ```

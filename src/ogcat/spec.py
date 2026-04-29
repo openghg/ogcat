@@ -15,7 +15,16 @@ DEFAULT_FILENAME_TEMPLATE = "{title_slug|original_stem}{original_suffix}"
 
 @dataclass(slots=True)
 class RecordSchema:
-    """Lightweight metadata and naming schema for one record type."""
+    """Lightweight metadata and naming schema for one record type.
+
+    Args:
+        description: Human-readable schema description.
+        directory_template: Optional storage directory template.
+        filename_template: Optional storage filename template.
+        metadata_fields: Described metadata fields.
+        allow_unknown_metadata: Whether fields outside ``metadata_fields`` are
+            allowed during strict validation.
+    """
 
     description: str = ""
     directory_template: str | None = None
@@ -80,7 +89,19 @@ class RecordSchema:
 
 @dataclass(slots=True)
 class CatalogSpec:
-    """Self-describing configuration for a catalog."""
+    """Self-describing configuration for a catalog.
+
+    Args:
+        catalog_name: Human-readable catalog name.
+        db_backend: Repository backend identifier. Only ``"tinydb"`` is
+            supported today.
+        db_path: Database path relative to the catalog root.
+        files_root: Managed file root relative to the catalog root.
+        default_operation: Default managed-file operation.
+        field_resolution_order: Namespace order for flattened search fields.
+        default_schema: Fallback schema.
+        record_schemas: Named schemas for record types.
+    """
 
     catalog_name: str
     db_backend: str = "tinydb"

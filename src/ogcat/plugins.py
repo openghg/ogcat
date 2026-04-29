@@ -8,7 +8,11 @@ from ogcat.hooks import HookManager
 
 
 class PluginRegistry:
-    """Registry for direct Python hook registration."""
+    """Registry for direct Python hook registration.
+
+    Args:
+        hooks: Hook objects to register in dispatch order.
+    """
 
     def __init__(self, hooks: Iterable[object] = ()) -> None:
         self._hooks: list[object] = list(hooks)

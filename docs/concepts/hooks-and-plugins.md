@@ -11,7 +11,7 @@ following methods.  You only need to implement the methods you care about.
 | Method | When it runs |
 |--------|-------------|
 | ``before_validate_metadata(context)`` | Before schema validation. Mutate ``context.user_metadata`` here. |
-| ``after_validate_metadata(context, report)`` | After schema validation. Inspect the :class:`ogcat.ValidationReport`. |
+| ``after_validate_metadata(context, report)`` | After schema validation. Inspect the validation report. |
 | ``resolve_artifact_locator(context)`` | After the locator is proposed. Replace or extend ``context.planned_locators``. |
 | ``extract_metadata(context)`` | During derived metadata collection. Return a dict to merge into ``context.derived_metadata``. |
 | ``before_record_write(context)`` | Just before writing the record. Last chance to mutate metadata. |
@@ -23,7 +23,7 @@ following methods.  You only need to implement the methods you care about.
 
 ## Registering hooks
 
-Pass a :class:`ogcat.PluginRegistry` when creating or opening a catalog:
+Pass a plugin registry when creating or opening a catalog:
 
 ```python
 from ogcat import Catalog, CatalogSpec, PluginRegistry
@@ -67,8 +67,8 @@ class ChecksumHook:
 
 ## OperationContext
 
-:class:`ogcat.hooks.OperationContext` is the mutable object passed to every
-hook.  The most commonly used fields are:
+``OperationContext`` is the mutable object passed to every hook.  The most
+commonly used fields are:
 
 - ``context.user_metadata`` — mutable before validation
 - ``context.derived_metadata`` — mutable during extraction
@@ -89,5 +89,5 @@ context.  They do not prevent the record from being written.
 
 ## A complete example
 
-See :doc:`../tutorials/custom-extractor` for a full worked example including
-a custom extractor hook and smoke tests.
+See the [intermediate tutorial](../tutorials/intermediate.md) for a full worked
+example including a custom extractor hook and smoke tests.

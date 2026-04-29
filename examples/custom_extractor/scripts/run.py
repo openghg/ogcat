@@ -9,7 +9,7 @@ Demonstrates two ogcat hooks:
 
 Run from the repository root after installing ogcat:
 
-    python examples/custom_extractor/scripts/run.py
+    uv run python examples/custom_extractor/scripts/run.py
 """
 
 from __future__ import annotations

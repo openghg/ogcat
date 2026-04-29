@@ -12,13 +12,13 @@ This example shows how to write custom ogcat hooks:
 ``ogcat`` must be installed:
 
 ```bash
-pip install -e .
+uv sync
 ```
 
 ## Run
 
 ```bash
-python examples/custom_extractor/scripts/run.py
+uv run python examples/custom_extractor/scripts/run.py
 ```
 
 The script creates three small temporary text files, ingests them with both

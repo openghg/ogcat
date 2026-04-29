@@ -10,7 +10,7 @@ fixed set of reserved fields plus three metadata namespaces.
 | ``id`` | Stable string identifier assigned at ingest time. |
 | ``catalog`` | Name of the catalog that owns the record. |
 | ``record_type`` | Kind of artifact, e.g. ``managed_file`` or ``external_reference``. |
-| ``locator`` | Describes where the artifact lives (see :doc:`locators-and-storage`). |
+| ``locator`` | Describes where the artifact lives (see [Locators and storage](locators-and-storage.md)). |
 | ``storage_mode`` | How the artifact was stored, e.g. ``copy``, ``move``, or ``external``. |
 | ``original_filename`` | Source filename at ingest time. |
 | ``suffixes`` | File suffix list derived from the source path. |
@@ -48,7 +48,7 @@ short aliases ``user.species`` and ``derived.netcdf.dims.time``.
 
 ## Python API
 
-Records are returned as :class:`ogcat.CatalogRecord` instances.
+Records are returned as ``CatalogRecord`` instances.
 
 ```python
 record = catalog.add_file(path, metadata={"species": "CO2"})

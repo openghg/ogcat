@@ -5,7 +5,7 @@ demonstrates basic search, and removes the temporary directory when done.
 
 Run from the repository root after installing ogcat:
 
-    python examples/local_file_catalog/scripts/run.py
+    uv run python examples/local_file_catalog/scripts/run.py
 """
 
 from __future__ import annotations

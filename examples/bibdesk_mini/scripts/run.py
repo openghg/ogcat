@@ -6,7 +6,7 @@ for records without a managed local file.
 
 Run from the repository root after installing ogcat:
 
-    python examples/bibdesk_mini/scripts/run.py
+    uv run python examples/bibdesk_mini/scripts/run.py
 """
 
 from __future__ import annotations

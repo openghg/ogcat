@@ -17,7 +17,7 @@ ogcat init <root> [--name NAME]
 Ingest a file into a catalog.
 
 ```
-ogcat add <file> --catalog <root> [--meta KEY=VALUE ...] [--mode copy|move]
+ogcat add <file> --catalog <root> [--meta KEY=VALUE ...] [--operation copy|move]
 ```
 
 ### ``ogcat search``
