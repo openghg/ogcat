@@ -79,8 +79,27 @@ ogcat info --catalog <root>
 
 ### ``ogcat fields``
 
-Print declared metadata fields from the catalog spec.
+Print declared metadata fields from the catalog spec, or inspect fields found
+in stored records.
 
 ```
-ogcat fields --catalog <root> [--record-type TYPE] [--json]
+ogcat fields --catalog <root> [--record-type TYPE] [--stored] [--values FIELD] [--json]
 ```
+
+``--stored`` lists field paths currently present in records, including nested
+metadata paths such as ``user_metadata.site.code``. ``--values FIELD`` prints
+unique scalar values for one field.
+
+### ``ogcat spec``
+
+Update small, safe parts of ``catalog.json``.
+
+```
+ogcat spec add-schema NAME --catalog <root> --schema-json JSON_OR_PATH [--overwrite]
+ogcat spec set-default-schema NAME --catalog <root>
+ogcat spec set FIELD=VALUE ... --catalog <root>
+```
+
+``ogcat spec set`` supports simple fields such as ``catalog_name``,
+``default_operation``, and ``field_resolution_order``. ``files_root`` changes
+are rejected because they require a dedicated file migration operation.

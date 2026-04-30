@@ -25,7 +25,7 @@ Today each record assumes a stored file path. A next step would be to separate "
 
 ### Typed or Per-Record Schemas
 
-Current direction: keep a broad `default_schema` plus optional named schemas for record types.
+Current direction: keep a broad default record schema plus optional named schemas for record types.
 
 Schemas remain lightweight: they describe expected metadata fields and naming templates, and only
 required-field presence is validated at ingest. Rich type validation, automatic dispatch, and

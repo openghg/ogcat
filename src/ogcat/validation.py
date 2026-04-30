@@ -151,7 +151,6 @@ def validate_schema(
 def validate_spec(spec: CatalogSpec) -> ValidationReport:
     """Validate schema validation hints across a catalog spec."""
     report = ValidationReport()
-    report.extend(validate_schema(spec.default_schema, schema_name="default", base_path="default_schema"))
     for schema_name, schema in spec.record_schemas.items():
         report.extend(
             validate_schema(
@@ -256,8 +255,12 @@ def validate_record(
     if spec is None:
         return report
 
-    schema_name = record.record_type if record.record_type in spec.record_schemas else "default"
-    schema = spec.get_schema(record.record_type) if schema_name != "default" else spec.get_schema()
+    if record.record_type in spec.record_schemas:
+        schema_name = record.record_type
+        schema = spec.get_schema(record.record_type)
+    else:
+        schema_name = spec.default_record_schema
+        schema = spec.get_schema()
     metadata_report = validate_metadata(
         record.user_metadata,
         schema,

@@ -251,8 +251,9 @@ For compatibility, managed local files still keep `stored_abspath` and `stored_r
 fields remain the simple path-facing surface for today's workflows while the locator model opens a
 path toward external references, directory-like stores, and future transform targets.
 
-`catalog.json` stores a broad `default_schema` plus optional named `record_schemas`, so a catalog
-can document expected metadata and naming behavior without adding domain-specific framework code.
+`catalog.json` stores schemas in `record_schemas` and identifies the fallback with
+`default_record_schema`, so a catalog can document expected metadata and naming behavior without
+adding domain-specific framework code.
 
 ## Current Limitations
 

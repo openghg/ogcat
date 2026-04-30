@@ -190,7 +190,7 @@ def test_validate_spec_reports_unsupported_type_labels() -> None:
 
     assert not report.ok
     assert [issue.path for issue in report.errors] == [
-        "default_schema.metadata_fields.0.type.0",
+        "record_schemas.default.metadata_fields.0.type.0",
         "record_schemas.flux.metadata_fields.0.type.0",
     ]
     assert {issue.code for issue in report.errors} == {"schema.unsupported_type"}

@@ -19,6 +19,23 @@ record = catalog.add_file(
 Keys and values must be JSON-serialisable (strings, numbers, booleans, lists,
 or nested dictionaries).
 
+List values can be searched with contains/list-membership filters:
+
+```python
+matches = catalog.search(contains={"tags": "paris"})
+```
+
+The equivalent CLI forms are:
+
+```bash
+ogcat search --catalog ./my-catalog tags:paris
+ogcat search --catalog ./my-catalog --contains tags=paris
+```
+
+When list metadata is used in a naming template, list items are joined with
+hyphens before path-safe normalisation, so `["a", "b", "c"]` renders as
+`a-b-c`.
+
 ## Record schemas
 
 A *record schema* declares which metadata fields a catalog expects.  Schemas
@@ -99,3 +116,10 @@ ogcat fields --catalog ./my-catalog --json
 ```
 
 This prints the declared metadata fields from the catalog spec.
+
+To discover fields actually present in stored records, use:
+
+```bash
+ogcat fields --catalog ./my-catalog --stored
+ogcat fields --catalog ./my-catalog --values species
+```

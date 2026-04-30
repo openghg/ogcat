@@ -18,12 +18,14 @@ from ogcat.catalog import Catalog
 from ogcat.models import CatalogRecord
 from ogcat.record_set import DEFAULT_RECORDSET_FIELDS, CatalogRecordSet
 from ogcat.search import SearchQuery
-from ogcat.spec import CatalogSpec
+from ogcat.spec import CatalogSpec, RecordSchema
 
 app = typer.Typer(
     help="Lightweight artifact catalog with managed file ingest.",
     context_settings={"help_option_names": ["-h", "--help"]},
 )
+spec_app = typer.Typer(help="Inspect and update catalog specifications.")
+app.add_typer(spec_app, name="spec")
 console = Console()
 error_console = Console(stderr=True)
 DEFAULT_SEARCH_LIMIT = 50
@@ -134,6 +136,37 @@ def _parse_search_value(raw_value: str) -> Any:
         return json.loads(raw_value)
     except json.JSONDecodeError:
         return raw_value
+
+
+def _parse_schema_json(value: str) -> RecordSchema:
+    """Parse a schema from a JSON string or JSON file path."""
+    stripped = value.strip()
+    candidate_path = Path(value).expanduser()
+    if not stripped.startswith("{") and candidate_path.exists():
+        raw_schema = candidate_path.read_text(encoding="utf-8")
+    else:
+        raw_schema = value
+    try:
+        payload = json.loads(raw_schema)
+    except json.JSONDecodeError as exc:
+        raise typer.BadParameter("--schema-json must be a JSON object or path to a JSON file.") from exc
+    if not isinstance(payload, dict):
+        raise typer.BadParameter("--schema-json must describe one JSON object.")
+    try:
+        return RecordSchema.from_dict(payload)
+    except (TypeError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+def _parse_spec_update_item(item: str) -> tuple[str, Any]:
+    """Parse one catalog spec update item from KEY=VALUE."""
+    if "=" not in item:
+        raise typer.BadParameter(f"Expected FIELD=VALUE: {item}")
+    key, raw_value = item.split("=", 1)
+    key = key.strip()
+    if not key:
+        raise typer.BadParameter(f"Spec field cannot be empty: {item}")
+    return key, _parse_search_value(raw_value)
 
 
 def _parse_search_expression(item: str) -> SearchQuery:
@@ -574,13 +607,52 @@ def fields(
         str | None,
         typer.Option("--record-type", help="Named record schema whose fields should be shown."),
     ] = None,
+    stored: Annotated[
+        bool,
+        typer.Option("--stored", help="Show field paths present in stored records."),
+    ] = False,
+    values: Annotated[
+        str | None,
+        typer.Option("--values", help="Show unique scalar values for a field."),
+    ] = None,
     json_mode: Annotated[
         bool,
         typer.Option("--json", help="Print metadata field descriptions as JSON."),
     ] = False,
 ) -> None:
-    """List important metadata fields from the catalog spec."""
+    """List schema-declared fields or fields present in stored records."""
     active_catalog = _open_catalog_or_fail(catalog)
+    if values is not None and stored:
+        raise typer.BadParameter("Use either --stored or --values, not both.")
+    if values is not None:
+        unique_values = active_catalog.unique_values(values)
+        if json_mode:
+            _print_json(unique_values)
+            return
+        if not unique_values:
+            console.print(f"No scalar values found for field: {values}")
+            return
+        table = Table(title=f"unique values for {values}")
+        table.add_column("value")
+        for value in unique_values:
+            table.add_row("" if value is None else json.dumps(value) if not isinstance(value, str) else value)
+        console.print(table)
+        return
+    if stored:
+        stored_fields = active_catalog.list_record_fields()
+        if json_mode:
+            _print_json(stored_fields)
+            return
+        if not stored_fields:
+            console.print("No records are stored in this catalog.")
+            return
+        table = Table(title="stored record fields")
+        table.add_column("field")
+        for field in stored_fields:
+            table.add_row(field)
+        console.print(table)
+        return
+
     try:
         metadata_fields = active_catalog.list_metadata_fields(record_type=record_type)
     except ValueError as exc:
@@ -614,3 +686,60 @@ def fields(
         )
 
     console.print(table)
+
+
+@spec_app.command("add-schema")
+def spec_add_schema(
+    name: Annotated[str, typer.Argument(help="Record schema name.")],
+    catalog: Annotated[Path | None, typer.Option("--catalog", help="Catalog root.")] = None,
+    schema_json: Annotated[
+        str,
+        typer.Option("--schema-json", help="Schema JSON object or path to a JSON file."),
+    ] = "",
+    overwrite: Annotated[
+        bool,
+        typer.Option("--overwrite", help="Replace an existing schema."),
+    ] = False,
+) -> None:
+    """Add or replace a record schema in catalog.json."""
+    if not schema_json:
+        raise typer.BadParameter("Provide --schema-json.")
+    active_catalog = _open_catalog_or_fail(catalog)
+    schema = _parse_schema_json(schema_json)
+    try:
+        active_catalog.add_record_schema(name, schema, overwrite=overwrite)
+    except (TypeError, ValueError) as exc:
+        _fail(str(exc))
+    console.print(f"Updated record schema: {name}")
+
+
+@spec_app.command("set-default-schema")
+def spec_set_default_schema(
+    name: Annotated[str, typer.Argument(help="Record schema name.")],
+    catalog: Annotated[Path | None, typer.Option("--catalog", help="Catalog root.")] = None,
+) -> None:
+    """Set the default record schema in catalog.json."""
+    active_catalog = _open_catalog_or_fail(catalog)
+    try:
+        active_catalog.set_default_record_schema(name)
+    except ValueError as exc:
+        _fail(str(exc))
+    console.print(f"Default record schema set to: {name}")
+
+
+@spec_app.command("set")
+def spec_set(
+    items: Annotated[list[str], typer.Argument(help="Spec field updates as FIELD=VALUE.")],
+    catalog: Annotated[Path | None, typer.Option("--catalog", help="Catalog root.")] = None,
+) -> None:
+    """Set simple catalog spec fields in catalog.json."""
+    updates: dict[str, Any] = {}
+    for item in items:
+        key, value = _parse_spec_update_item(item)
+        updates[key] = value
+    active_catalog = _open_catalog_or_fail(catalog)
+    try:
+        active_catalog.update_spec(**updates)
+    except (TypeError, ValueError) as exc:
+        _fail(str(exc))
+    console.print("Updated catalog spec.")

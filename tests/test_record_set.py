@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from rich.table import Table
 
 import ogcat.record_set as record_set_module
-from ogcat import Catalog, CatalogRecordSet, CatalogSpec
+from ogcat import ArtifactLocator, Catalog, CatalogRecordSet, CatalogSpec
 
 
 def _create_catalog(tmp_path: Path) -> Catalog:
@@ -92,3 +92,29 @@ def test_record_set_rich_preview_returns_table(tmp_path: Path) -> None:
 
     assert isinstance(preview, Table)
     assert [column.header for column in preview.columns] == ["id", "species"]
+
+
+def test_record_set_discovers_fields_and_unique_scalar_values(tmp_path: Path) -> None:
+    catalog = _create_catalog(tmp_path)
+    catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/example.zarr"),
+        metadata={"species": "CH4", "tags": ["baseline"], "site": {"code": "MHD"}},
+    )
+
+    records = catalog.search(as_record_set=True)
+
+    assert "id" in records.field_paths()
+    assert "path" in records.field_paths()
+    assert "locator.uri" in records.field_paths()
+    assert "user_metadata.species" in records.field_paths()
+    assert "user_metadata.site.code" in records.field_paths()
+    assert records.unique_values("species") == ["CH4", "CO2"]
+    assert records.unique_values("tags") == []
+
+
+def test_catalog_exposes_stored_field_discovery(tmp_path: Path) -> None:
+    catalog = _create_catalog(tmp_path)
+
+    assert "derived_metadata.netcdf.dims.time" in catalog.list_record_fields()
+    assert catalog.unique_values("derived_metadata.netcdf.dims.time") == [12]

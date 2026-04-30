@@ -509,6 +509,23 @@ def test_fields_json_output(tmp_path: Path) -> None:
     assert payload[0]["required"] is True
 
 
+def test_fields_stored_and_values_output(tmp_path: Path) -> None:
+    catalog = _create_catalog(tmp_path)
+
+    stored_result = runner.invoke(app, ["fields", "--catalog", str(catalog.root), "--stored", "--json"])
+    values_result = runner.invoke(
+        app,
+        ["fields", "--catalog", str(catalog.root), "--values", "species", "--json"],
+    )
+
+    assert stored_result.exit_code == 0
+    stored_payload = json.loads(strip_ansi(stored_result.stdout))
+    assert "user_metadata.species" in stored_payload
+    assert "path" in stored_payload
+    assert values_result.exit_code == 0
+    assert json.loads(strip_ansi(values_result.stdout)) == ["CO2"]
+
+
 def test_fields_human_output_handles_missing_field_descriptions(tmp_path: Path) -> None:
     catalog = _create_catalog(tmp_path, with_fields=False)
 
@@ -516,6 +533,57 @@ def test_fields_human_output_handles_missing_field_descriptions(tmp_path: Path) 
 
     assert result.exit_code == 0
     assert "No metadata fields are defined in this catalog." in strip_ansi(result.stdout)
+
+
+def test_spec_cli_adds_schema_sets_default_and_updates_simple_fields(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+    schema_json = json.dumps(
+        {
+            "metadata_fields": [
+                {"name": "title", "description": "Short title.", "required": True},
+            ]
+        }
+    )
+
+    add_result = runner.invoke(
+        app,
+        ["spec", "add-schema", "paper", "--catalog", str(catalog.root), "--schema-json", schema_json],
+    )
+    default_result = runner.invoke(
+        app,
+        ["spec", "set-default-schema", "paper", "--catalog", str(catalog.root)],
+    )
+    set_result = runner.invoke(
+        app,
+        [
+            "spec",
+            "set",
+            "catalog_name=library",
+            'field_resolution_order=["user_metadata","top_level"]',
+            "--catalog",
+            str(catalog.root),
+        ],
+    )
+
+    reopened = Catalog.open(catalog.root)
+    assert add_result.exit_code == 0
+    assert default_result.exit_code == 0
+    assert set_result.exit_code == 0
+    assert reopened.spec.default_record_schema == "paper"
+    assert reopened.spec.catalog_name == "library"
+    assert reopened.spec.field_resolution_order == ["user_metadata", "top_level"]
+
+
+def test_spec_cli_rejects_files_root_update(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+
+    result = runner.invoke(
+        app,
+        ["spec", "set", "files_root=renamed-files", "--catalog", str(catalog.root)],
+    )
+
+    assert result.exit_code == 1
+    assert "Changing files_root requires a file-root migration operation." in strip_ansi(result.stderr)
 
 
 def test_add_accepts_multiple_metadata_items_after_single_meta_flag(tmp_path: Path) -> None:
