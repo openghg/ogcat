@@ -246,6 +246,15 @@ def test_catalog_spec_get_schema_raises_value_error_for_unknown_schema() -> None
         raise AssertionError("Expected ValueError for unknown record schema")
 
 
+def test_catalog_spec_rejects_empty_default_record_schema() -> None:
+    try:
+        CatalogSpec(catalog_name="files", default_record_schema="  ")
+    except ValueError as exc:
+        assert "default_record_schema cannot be empty." in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("Expected ValueError for empty default_record_schema")
+
+
 def test_catalog_describe_and_list_metadata_fields_return_serialisable_values(tmp_path: Path) -> None:
     root = tmp_path / "fluxes"
     spec = CatalogSpec(

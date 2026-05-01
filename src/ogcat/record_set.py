@@ -147,7 +147,8 @@ class CatalogRecordSet(Sequence[CatalogRecord]):
                     if isinstance(value, dict):
                         fields.update(_nested_field_paths(value, prefix=field))
                     continue
-                fields.add(field)
+                if _is_discoverable_value(value):
+                    fields.add(field)
                 if isinstance(value, dict):
                     fields.update(_nested_field_paths(value, prefix=field))
             for namespace in _METADATA_NAMESPACES:
@@ -215,10 +216,16 @@ def _nested_field_paths(mapping: dict[str, JsonValue], *, prefix: str) -> set[st
     fields: set[str] = set()
     for key, value in mapping.items():
         path = f"{prefix}.{key}"
-        fields.add(path)
+        if _is_discoverable_value(value):
+            fields.add(path)
         if isinstance(value, dict):
             fields.update(_nested_field_paths(value, prefix=path))
     return fields
+
+
+def _is_discoverable_value(value: object) -> bool:
+    """Return whether a field value should appear in field discovery."""
+    return bool(value)
 
 
 def _is_scalar_json_value(value: object) -> bool:

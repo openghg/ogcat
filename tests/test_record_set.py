@@ -113,6 +113,28 @@ def test_record_set_discovers_fields_and_unique_scalar_values(tmp_path: Path) ->
     assert records.unique_values("tags") == []
 
 
+def test_record_set_field_discovery_skips_falsey_values(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+    catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/example.zarr"),
+        metadata={"species": "", "count": 0, "enabled": False, "site": {"code": None}},
+    )
+
+    fields = catalog.search(as_record_set=True).field_paths()
+
+    assert "locator.uri" in fields
+    assert "stored_abspath" not in fields
+    assert "stored_relpath" not in fields
+    assert "storage_mode" not in fields
+    assert "original_path" not in fields
+    assert "suffixes" not in fields
+    assert "user_metadata.species" not in fields
+    assert "user_metadata.count" not in fields
+    assert "user_metadata.enabled" not in fields
+    assert "user_metadata.site.code" not in fields
+
+
 def test_catalog_exposes_stored_field_discovery(tmp_path: Path) -> None:
     catalog = _create_catalog(tmp_path)
 

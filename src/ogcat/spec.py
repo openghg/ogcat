@@ -118,7 +118,9 @@ class CatalogSpec:
 
     def __post_init__(self) -> None:
         """Fill required defaults on the configured fallback schema."""
-        self.default_record_schema = str(self.default_record_schema)
+        self.default_record_schema = str(self.default_record_schema).strip()
+        if not self.default_record_schema:
+            raise ValueError("default_record_schema cannot be empty.")
         record_schemas = _coerce_record_schema_mapping(self.record_schemas)
         default_schema = _coerce_record_schema(self.default_schema, field_name="default_schema")
         if default_schema is not None:
