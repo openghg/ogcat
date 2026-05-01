@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -114,9 +114,10 @@ def render_template(template: str, context: dict[str, Any]) -> str:
     return _TEMPLATE_PATTERN.sub(replace, template)
 
 
-def ensure_unique_path(path: Path) -> Path:
+def ensure_unique_path(path: Path, *, exists: Callable[[Path], bool] | None = None) -> Path:
     """Return a unique path by appending numeric suffixes if needed."""
-    if not path.exists():
+    path_exists = Path.exists if exists is None else exists
+    if not path_exists(path):
         return path
 
     parent = path.parent
@@ -125,7 +126,7 @@ def ensure_unique_path(path: Path) -> Path:
     counter = 2
     while True:
         candidate = parent / f"{stem}_{counter}{suffix}"
-        if not candidate.exists():
+        if not path_exists(candidate):
             return candidate
         counter += 1
 
@@ -207,6 +208,7 @@ def render_storage_location(
     directory_template: str,
     filename_template: str,
     context: dict[str, object],
+    exists: Callable[[Path], bool] | None = None,
 ) -> tuple[Path, str, str]:
     """Render directory and filename templates into a final storage path."""
     rel_dir = render_template(directory_template, context)
@@ -214,7 +216,7 @@ def render_storage_location(
 
     filename = _render_filename(filename_template, context)
     target = files_root / rel_dir / filename
-    target = ensure_unique_path(target)
+    target = ensure_unique_path(target, exists=exists)
 
     rel_path = target.relative_to(files_root.parent)
     return target, str(rel_path), target.name

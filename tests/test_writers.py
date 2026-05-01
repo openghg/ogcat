@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import zipfile
 from pathlib import Path
 
@@ -11,11 +12,13 @@ from ogcat import (
     CatalogSpec,
     OperationSource,
     PluginRegistry,
+    RecordSchema,
     UnzipArtifactWriter,
     memory_source,
     memory_writer,
     path_source,
     path_writer,
+    plan_storage,
     source_writer,
 )
 from ogcat.hooks import OperationContext
@@ -135,3 +138,76 @@ def test_unzip_artifact_writer_rejects_path_traversal(tmp_path: Path) -> None:
 
     assert not target.exists()
     assert not (tmp_path / "escape.txt").exists()
+
+
+def test_writer_receives_storage_plan_and_rolls_back_directory_target(tmp_path: Path) -> None:
+    class FailingHook:
+        def before_record_write(self, context: OperationContext) -> None:
+            raise RuntimeError("stop after planned write")
+
+    class PlanAwareDirectoryWriter:
+        def write(
+            self,
+            context: OperationContext,
+            source: OperationSource,
+            target: ArtifactLocator,
+        ) -> None:
+            assert context.storage_plan is not None
+            assert context.storage_plan.target_kind == "directory"
+            assert context.storage_plan.locator == target
+            target_path = target.as_path()
+            assert target_path is not None
+            target_path.mkdir(parents=True, exist_ok=False)
+            (target_path / "payload.txt").write_text(str(source.payload), encoding="utf-8")
+            context.rollback(
+                lambda path=target_path: shutil.rmtree(path, ignore_errors=True),
+                description="remove planned directory",
+            )
+
+    target = tmp_path / "catalog" / "files" / "stores" / "example.zarr"
+    plan = plan_storage(
+        ArtifactLocator.path(target, relative_path="files/stores/example.zarr"),
+        target_kind="directory",
+        write_mode="write",
+        ogcat_owned=True,
+        backend="local",
+    )
+    registry = PluginRegistry([FailingHook()])
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"), plugins=registry)
+
+    with pytest.raises(RuntimeError, match="stop after planned write"):
+        catalog.add_artifact(
+            record_type="zarr_store",
+            storage_plan=plan,
+            source=memory_source("zarr-ish", kind="memory"),
+            artifact_writer=PlanAwareDirectoryWriter(),
+        )
+
+    assert not target.exists()
+
+
+def test_plan_artifact_can_allocate_zarr_directory_name(tmp_path: Path) -> None:
+    catalog = Catalog.create(
+        tmp_path / "catalog",
+        CatalogSpec(
+            catalog_name="artifacts",
+            record_schemas={
+                "zarr_store": RecordSchema(
+                    directory_template="{species}/{domain}",
+                    filename_template="{title}.zarr",
+                )
+            },
+        ),
+    )
+
+    plan = catalog.plan_artifact(
+        record_type="zarr_store",
+        metadata={"species": "CO2", "domain": "EUROPE", "title": "my_store"},
+        target_kind="directory",
+        write_mode="write",
+    )
+
+    assert plan.target_kind == "directory"
+    assert Path(plan.locator.value).name == "my_store.zarr"
+    assert Path(plan.locator.value).parent.name == "EUROPE"
+    assert not Path(plan.locator.value).exists()

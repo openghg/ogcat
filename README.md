@@ -68,6 +68,12 @@ Optional netCDF metadata extraction:
 uv sync --extra netcdf
 ```
 
+Optional fsspec-backed storage URLs:
+
+```bash
+uv sync --extra fsspec
+```
+
 ## Python API
 
 Create a catalog, add a file, and search by metadata:
@@ -146,6 +152,11 @@ should materialise data before the record is written. `add_file()` is the bundle
 operation that uses the same writer path to copy or move data before writing the record.
 See `ogcat.writers` for small helper wrappers around in-memory data, path-backed transforms, and zip
 extraction examples.
+
+Use `catalog.plan_artifact(...)` to dry-run a planned target before writing. The returned
+`StoragePlan` is also available to hooks and artifact writers as `context.storage_plan`, so domain
+logic can create directory-like artifacts such as NetCDF collections or `.zarr` stores while ogcat
+core records only generic locators and metadata.
 
 ## CLI
 

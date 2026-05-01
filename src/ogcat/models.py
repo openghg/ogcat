@@ -81,6 +81,19 @@ class ArtifactLocator:
         """
         return cls(kind="path", value=str(path), relative_path=relative_path)
 
+    @classmethod
+    def urlpath(cls, urlpath: str, *, relative_path: str | None = None) -> ArtifactLocator:
+        """Build a locator for an fsspec-addressable URL path.
+
+        Args:
+            urlpath: URL path understood by fsspec, such as ``s3://...``.
+            relative_path: Optional storage-root-relative path.
+
+        Returns:
+            URL-path-backed artifact locator.
+        """
+        return cls(kind="urlpath", value=str(urlpath), relative_path=relative_path)
+
     def to_dict(self) -> dict[str, JsonValue]:
         """Convert the locator to a plain dictionary."""
         return {

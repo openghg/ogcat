@@ -203,6 +203,15 @@ wheels = [
 ]
 
 [[package]]
+name = "fsspec"
+version = "2026.4.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d5/8d/1c51c094345df128ca4a990d633fe1a0ff28726c9e6b3c41ba65087bba1d/fsspec-2026.4.0.tar.gz", hash = "sha256:301d8ac70ae90ef3ad05dcf94d6c3754a097f9b5fe4667d2787aa359ec7df7e4", size = 312760, upload-time = "2026-04-29T20:42:38.635Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d5/0c/043d5e551459da400957a1395e0febbf771446ff34291afcbe3d8be2a279/fsspec-2026.4.0-py3-none-any.whl", hash = "sha256:11ef7bb35dab8a394fde6e608221d5cf3e8499401c249bebaeaad760a1a8dec2", size = 203402, upload-time = "2026-04-29T20:42:36.842Z" },
+]
+
+[[package]]
 name = "furo"
 version = "2025.12.19"
 source = { registry = "https://pypi.org/simple" }
@@ -496,12 +505,16 @@ docs = [
     { name = "sphinx-autodoc-typehints", version = "3.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "sphinx-autodoc-typehints", version = "3.10.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
+fsspec = [
+    { name = "fsspec" },
+]
 netcdf = [
     { name = "xarray" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "fsspec", marker = "extra == 'fsspec'", specifier = ">=2024.0" },
     { name = "furo", marker = "extra == 'docs'", specifier = ">=2024.0" },
     { name = "myst-parser", marker = "extra == 'docs'", specifier = ">=2.0" },
     { name = "pydantic", specifier = ">=2" },
@@ -515,7 +528,7 @@ requires-dist = [
     { name = "typer", specifier = ">=0.12" },
     { name = "xarray", marker = "extra == 'netcdf'", specifier = ">=2024.0" },
 ]
-provides-extras = ["netcdf", "dev", "docs"]
+provides-extras = ["fsspec", "netcdf", "dev", "docs"]
 
 [[package]]
 name = "packaging"

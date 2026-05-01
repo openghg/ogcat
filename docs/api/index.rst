@@ -7,6 +7,7 @@ API reference
    catalog
    models
    search
+   storage
    hooks
    validation
    writers-transactions

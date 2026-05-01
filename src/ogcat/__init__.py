@@ -7,6 +7,14 @@ from ogcat.plugins import PluginRegistry
 from ogcat.record_set import CatalogRecordSet
 from ogcat.search import FieldPath, SearchOp, SearchQuery, SearchTerm
 from ogcat.spec import CatalogSpec, RecordSchema
+from ogcat.storage import (
+    FsspecStorageBackend,
+    LocalStorageBackend,
+    StoragePlan,
+    backend_for_locator,
+    execute_storage_plan,
+    plan_storage,
+)
 from ogcat.transactions import OperationState, RollbackFailure, UnitOfWork
 from ogcat.validation import (
     ValidationIssue,
@@ -34,8 +42,10 @@ __all__ = [
     "CatalogRecordSet",
     "CatalogSpec",
     "FunctionArtifactWriter",
+    "FsspecStorageBackend",
     "HookManager",
     "HookWarning",
+    "LocalStorageBackend",
     "MetadataFieldDescription",
     "OperationState",
     "OperationContext",
@@ -47,6 +57,7 @@ __all__ = [
     "SearchOp",
     "SearchQuery",
     "SearchTerm",
+    "StoragePlan",
     "UnitOfWork",
     "UnzipArtifactWriter",
     "ValidationIssue",
@@ -59,5 +70,8 @@ __all__ = [
     "memory_writer",
     "path_source",
     "path_writer",
+    "backend_for_locator",
+    "execute_storage_plan",
+    "plan_storage",
     "source_writer",
 ]

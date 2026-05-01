@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import shutil
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, cast, overload
+from uuid import uuid4
 
 from ogcat.extractors import extract_derived_metadata
 from ogcat.hooks import ArtifactWriter, HookManager, OperationContext, OperationSource
@@ -19,11 +19,21 @@ from ogcat.record_set import CatalogRecordSet
 from ogcat.repository import CatalogRepository
 from ogcat.search import SearchQuery
 from ogcat.spec import CatalogSpec, RecordSchema
+from ogcat.storage import (
+    LocalStorageBackend,
+    StoragePlan,
+    TargetKind,
+    WriteMode,
+    backend_for_locator,
+    execute_storage_plan,
+    plan_storage,
+)
 from ogcat.tinydb_repository import TinyDbCatalogRepository
 from ogcat.transactions import OperationState, UnitOfWork
 from ogcat.validation import ValidationReport, validate_metadata, validate_spec
 
 ArtifactLocatorFactory = Callable[[OperationContext], ArtifactLocator]
+StoragePlanFactory = Callable[[OperationContext, ArtifactLocator], StoragePlan | None]
 DerivedMetadataCollector = Callable[[OperationContext, ArtifactLocator], None]
 
 
@@ -165,23 +175,36 @@ class Catalog:
                 metadata=context.user_metadata,
                 date_added=timestamp[:10],
             )
+            storage_backend = LocalStorageBackend()
             target, rel_path, _resolved_filename = render_storage_location(
                 files_root=files_root,
                 directory_template=directory_template,
                 filename_template=filename_template,
                 context=naming_context,
+                exists=lambda candidate: storage_backend.exists(ArtifactLocator.path(candidate)),
             )
+            naming_metadata["resolved_filename"] = _resolved_filename
             return ArtifactLocator.path(target, relative_path=rel_path)
+
+        def plan_local_file_storage(
+            context: OperationContext,
+            locator: ArtifactLocator,
+        ) -> StoragePlan:
+            """Build the storage plan for a managed local file."""
+            return plan_storage(
+                locator,
+                source=ArtifactLocator.path(source),
+                target_kind="file",
+                write_mode=cast(WriteMode, chosen_operation),
+                ogcat_owned=True,
+                backend="local",
+            )
 
         def collect_file_metadata(context: OperationContext, locator: ArtifactLocator) -> None:
             """Collect generic derived metadata from the written file."""
             context.derived_metadata.update(extract_derived_metadata(_path_from_locator(locator)))
 
         source_description = OperationSource(kind="local_file", path=source, descriptor=str(source))
-        writer = _LocalFileArtifactWriter(
-            operation=chosen_operation,
-            naming_metadata=naming_metadata,
-        )
         with self.transaction() as transaction:
             return self._run_add_operation(
                 transaction=transaction,
@@ -200,15 +223,105 @@ class Catalog:
                 time_added=timestamp,
                 source=source_description,
                 locator_factory=resolve_local_file_locator,
-                artifact_writer=writer,
+                storage_plan_factory=plan_local_file_storage,
                 derived_metadata_collector=collect_file_metadata,
             )
+
+    def plan_artifact(
+        self,
+        path: str | Path | None = None,
+        *,
+        record_type: str | None = None,
+        metadata: MetadataDict | None = None,
+        locator: ArtifactLocator | None = None,
+        target_kind: TargetKind = "file",
+        write_mode: WriteMode | None = None,
+        ogcat_owned: bool = True,
+        storage_root: str | Path | None = None,
+    ) -> StoragePlan:
+        """Plan an artifact location without writing data or a catalog record.
+
+        Args:
+            path: Optional local source path used for naming and copy/move
+                plans.
+            record_type: Optional named schema to validate and use for naming.
+            metadata: JSON-compatible user metadata.
+            locator: Optional pre-resolved target locator. When omitted,
+                schema naming templates are rendered under ``storage_root`` or
+                this catalog's managed files root.
+            target_kind: Whether the target is a file-like or directory-like
+                artifact.
+            write_mode: Desired materialisation mode. Defaults to ``"write"``
+                for owned artifacts and ``"reference"`` otherwise.
+            ogcat_owned: Whether ogcat should treat the target as managed.
+            storage_root: Optional local root or fsspec URL root for rendered
+                template targets.
+
+        Returns:
+            Planned storage decision.
+        """
+        metadata_input = {} if metadata is None else metadata
+        schema = self._select_schema(record_type, require_known=record_type is not None)
+        schema_name = self._schema_name(record_type)
+        user_metadata = _coerce_metadata_input(metadata_input, schema_name=schema_name)
+        resolved_record_type = "managed_artifact" if record_type is None else record_type
+        resolved_write_mode = write_mode or ("write" if ogcat_owned else "reference")
+        source_path = None if path is None else Path(path).expanduser().resolve()
+        operation_id = uuid4().hex
+        source = OperationSource(
+            kind="planned_artifact" if source_path is None else "local_file",
+            path=source_path,
+            descriptor=None if source_path is None else str(source_path),
+        )
+        context = OperationContext(
+            catalog_root=self.root,
+            operation_id=operation_id,
+            operation_type="plan_artifact",
+            record_type=resolved_record_type,
+            user_metadata=user_metadata,
+            source=source,
+            storage_mode=resolved_write_mode,
+            original_path=source_path,
+            original_filename=None if source_path is None else source_path.name,
+            suffixes=[] if source_path is None else list(source_path.suffixes),
+        )
+
+        self.hook_manager.before_validate_metadata(context)
+        validation_report = self._metadata_validation_report(
+            schema=schema,
+            metadata=context.user_metadata,
+            record_type=record_type,
+        )
+        self.hook_manager.after_validate_metadata(context, validation_report)
+        validation_report.raise_for_errors()
+
+        planned_locator = locator or self._render_planned_locator(
+            context=context,
+            schema=schema,
+            record_type=record_type,
+            source_path=source_path,
+            storage_root=storage_root,
+        )
+        context.planned_locators = [planned_locator]
+        self.hook_manager.resolve_artifact_locator(context)
+        canonical_locator = _artifact_locator_from_context(context)
+        plan = plan_storage(
+            canonical_locator,
+            source=None if source_path is None else ArtifactLocator.path(source_path),
+            target_kind=target_kind,
+            write_mode=resolved_write_mode,
+            ogcat_owned=ogcat_owned,
+            backend=_backend_name(canonical_locator),
+        )
+        context.storage_plan = plan
+        return plan
 
     def add_artifact(
         self,
         *,
         record_type: str,
-        locator: ArtifactLocator,
+        locator: ArtifactLocator | None = None,
+        storage_plan: StoragePlan | None = None,
         metadata: MetadataDict | None = None,
         storage_mode: str | None = None,
         original_path: str | Path | None = None,
@@ -221,7 +334,7 @@ class Catalog:
         artifact_writer: ArtifactWriter | None = None,
         transaction: UnitOfWork | None = None,
     ) -> CatalogRecord:
-        """Add an artifact record without performing any file operation.
+        """Add an artifact record and optionally materialise planned storage.
 
         This is the minimal general record API. ``add_file()`` remains the
         managed ingest convenience wrapper that prepares a path-backed locator
@@ -229,7 +342,10 @@ class Catalog:
 
         Args:
             record_type: Logical type of record to create.
-            locator: Artifact locator to store with the record.
+            locator: Artifact locator to store with the record. Required unless
+                ``storage_plan`` is supplied.
+            storage_plan: Optional planned storage decision to use instead of a
+                standalone locator.
             metadata: JSON-compatible user metadata.
             storage_mode: Optional description such as ``"external"``.
             original_path: Optional source path or URI.
@@ -251,6 +367,15 @@ class Catalog:
             ValueError: If validation fails or the transaction belongs to a
                 different repository.
         """
+        if locator is None and storage_plan is None:
+            raise ValueError("add_artifact requires either locator or storage_plan.")
+        if locator is not None and storage_plan is not None:
+            raise ValueError("Pass either locator or storage_plan, not both.")
+        if storage_plan is not None:
+            locator = storage_plan.locator
+            if storage_mode is None:
+                storage_mode = storage_plan.write_mode
+        assert locator is not None
         metadata_input = {} if metadata is None else metadata
         derived_metadata = {} if derived_metadata is None else dict(derived_metadata)
         schema = self._select_schema(record_type, require_known=False)
@@ -276,6 +401,7 @@ class Catalog:
                 time_added=time_added,
                 source=validated_source,
                 artifact_writer=validated_artifact_writer,
+                storage_plan=storage_plan,
                 schema=schema,
             )
         with self.transaction() as unit_of_work:
@@ -294,6 +420,7 @@ class Catalog:
                 time_added=time_added,
                 source=validated_source,
                 artifact_writer=validated_artifact_writer,
+                storage_plan=storage_plan,
                 schema=schema,
             )
 
@@ -329,12 +456,15 @@ class Catalog:
 
         records: list[CatalogRecord] = []
         for index, validated in enumerate(validated_items):
-            try:
-                locator = _coerce_artifact_locator(validated["locator"])
-            except TypeError as exc:
-                raise TypeError(f"artifact batch item {index}: invalid locator: {exc}") from exc
-            except ValueError as exc:
-                raise ValueError(f"artifact batch item {index}: invalid locator: {exc}") from exc
+            storage_plan = _optional_storage_plan(validated.get("storage_plan"))
+            locator: ArtifactLocator | None = None
+            if storage_plan is None:
+                try:
+                    locator = _coerce_artifact_locator(validated["locator"])
+                except TypeError as exc:
+                    raise TypeError(f"artifact batch item {index}: invalid locator: {exc}") from exc
+                except ValueError as exc:
+                    raise ValueError(f"artifact batch item {index}: invalid locator: {exc}") from exc
 
             record_type = str(validated["record_type"])
             try:
@@ -342,6 +472,7 @@ class Catalog:
                     self.add_artifact(
                         record_type=record_type,
                         locator=locator,
+                        storage_plan=storage_plan,
                         metadata=validated.get("metadata"),  # type: ignore[arg-type]
                         storage_mode=(
                             None if validated.get("storage_mode") is None else str(validated["storage_mode"])
@@ -621,6 +752,65 @@ class Catalog:
             naming_metadata={} if naming_metadata is None else dict(naming_metadata),
         )
 
+    def _render_planned_locator(
+        self,
+        *,
+        context: OperationContext,
+        schema: RecordSchema,
+        record_type: str | None,
+        source_path: Path | None,
+        storage_root: str | Path | None,
+    ) -> ArtifactLocator:
+        """Render schema naming templates into a local or fsspec target locator."""
+        directory_template = _require_template(schema.directory_template, field_name="directory_template")
+        filename_template = _require_template(schema.filename_template, field_name="filename_template")
+        naming_source = source_path or Path("artifact")
+        naming_context = build_naming_context(
+            record_id=context.operation_id,
+            operation_id=context.operation_id,
+            original_path=naming_source,
+            metadata=context.user_metadata,
+            date_added=_utc_timestamp()[:10],
+        )
+
+        if storage_root is not None and _is_urlpath_root(storage_root):
+            root_url = str(storage_root).rstrip("/")
+            fake_root = Path("/__ogcat_storage__")
+
+            def storage_backend_locator(candidate: Path) -> ArtifactLocator:
+                """Build a URL locator for a candidate rendered path."""
+                relative_path = candidate.relative_to(fake_root).as_posix()
+                return ArtifactLocator.urlpath(_join_urlpath(root_url, relative_path))
+
+            target, _rel_path, _resolved_filename = render_storage_location(
+                files_root=fake_root,
+                directory_template=directory_template,
+                filename_template=filename_template,
+                context=naming_context,
+                exists=lambda candidate: backend_for_locator(storage_backend_locator(candidate)).exists(
+                    storage_backend_locator(candidate)
+                ),
+            )
+            relative_path = target.relative_to(fake_root).as_posix()
+            return ArtifactLocator.urlpath(
+                _join_urlpath(root_url, relative_path),
+                relative_path=relative_path,
+            )
+
+        if storage_root is None:
+            files_root = self.root / self.spec.files_root
+        else:
+            files_root = Path(storage_root).expanduser().resolve()
+        storage_backend = LocalStorageBackend()
+        target, rel_path, _resolved_filename = render_storage_location(
+            files_root=files_root,
+            directory_template=directory_template,
+            filename_template=filename_template,
+            context=naming_context,
+            exists=lambda candidate: storage_backend.exists(ArtifactLocator.path(candidate)),
+        )
+        return ArtifactLocator.path(target, relative_path=rel_path)
+
     def _add_artifact_in_transaction(
         self,
         *,
@@ -638,6 +828,7 @@ class Catalog:
         time_added: str | None,
         source: OperationSource | None,
         artifact_writer: ArtifactWriter | None,
+        storage_plan: StoragePlan | None,
         schema: RecordSchema,
     ) -> CatalogRecord:
         """Add an artifact record within an active transaction."""
@@ -664,6 +855,14 @@ class Catalog:
             source=operation_source,
             locator_factory=lambda context: locator,
             artifact_writer=artifact_writer,
+            storage_plan_factory=(
+                None
+                if storage_plan is None
+                else lambda context, canonical_locator: _storage_plan_with_locator(
+                    storage_plan,
+                    canonical_locator,
+                )
+            ),
         )
 
     def _run_add_operation(
@@ -685,6 +884,7 @@ class Catalog:
         time_added: str | None,
         source: OperationSource,
         locator_factory: ArtifactLocatorFactory,
+        storage_plan_factory: StoragePlanFactory | None = None,
         artifact_writer: ArtifactWriter | None = None,
         derived_metadata_collector: DerivedMetadataCollector | None = None,
     ) -> CatalogRecord:
@@ -716,8 +916,32 @@ class Catalog:
             self.hook_manager.resolve_artifact_locator(hook_context)
             canonical_locator = _artifact_locator_from_context(hook_context)
             hook_context.planned_locators[0] = canonical_locator
+            hook_context.storage_plan = (
+                storage_plan_factory(hook_context, canonical_locator)
+                if storage_plan_factory is not None
+                else plan_storage(
+                    canonical_locator,
+                    write_mode="reference",
+                    ogcat_owned=False,
+                    backend=_backend_name(canonical_locator),
+                )
+            )
             if artifact_writer is not None:
                 artifact_writer.write(hook_context, hook_context.source, canonical_locator)
+            storage_plan = hook_context.storage_plan
+            if storage_plan is None:
+                raise RuntimeError("Add operation did not produce a storage plan.")
+            if artifact_writer is None and storage_plan.write_mode != "reference":
+
+                def register_storage_rollback(action: Callable[[], None], description: str) -> None:
+                    """Register storage cleanup with the active operation."""
+                    hook_context.rollback(action, description=description)
+
+                execute_storage_plan(
+                    storage_plan,
+                    source_path=hook_context.source.path,
+                    register_rollback=register_storage_rollback,
+                )
             if derived_metadata_collector is not None:
                 derived_metadata_collector(hook_context, canonical_locator)
             self.hook_manager.extract_metadata(hook_context)
@@ -855,42 +1079,30 @@ def _metadata_with_hook_warnings(context: OperationContext) -> MetadataDict:
     return metadata
 
 
-@dataclass(slots=True)
-class _LocalFileArtifactWriter:
-    """Artifact writer for the bundled managed local-file operation."""
+def _storage_plan_with_locator(plan: StoragePlan, locator: ArtifactLocator) -> StoragePlan:
+    """Return a storage plan adjusted to a hook-resolved canonical locator."""
+    if plan.locator == locator:
+        return plan
+    return replace(plan, locator=locator, backend=_backend_name(locator))
 
-    operation: str
-    naming_metadata: MetadataDict
 
-    def write(
-        self,
-        context: OperationContext,
-        source: OperationSource,
-        target: ArtifactLocator,
-    ) -> None:
-        """Copy or move a local source file to the target path locator."""
-        if source.path is None:
-            raise ValueError("Local file writer requires a path-backed operation source.")
+def _backend_name(locator: ArtifactLocator) -> str | None:
+    """Return the storage backend name implied by a locator."""
+    if locator.kind == "path":
+        return "local"
+    if locator.kind == "urlpath":
+        return "fsspec"
+    return None
 
-        target_path = _path_from_locator(target)
-        self.naming_metadata["resolved_filename"] = target_path.name
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        if self.operation == "copy":
-            context.rollback(
-                lambda path=target_path: path.unlink(missing_ok=True),
-                description=f"remove copied file {target_path}",
-            )
-            shutil.copy2(source.path, target_path)
-            return
 
-        context.rollback(
-            lambda source_path=source.path, target_path=target_path: _rollback_moved_file(
-                source_path=source_path,
-                target_path=target_path,
-            ),
-            description=f"restore moved file from {target_path} to {source.path}",
-        )
-        shutil.move(str(source.path), str(target_path))
+def _is_urlpath_root(value: str | Path) -> bool:
+    """Return whether a storage root should be treated as an fsspec URL."""
+    return isinstance(value, str) and "://" in value
+
+
+def _join_urlpath(root_url: str, relative_path: str) -> str:
+    """Join an fsspec URL root and relative path without local path coercion."""
+    return f"{root_url.rstrip('/')}/{relative_path.lstrip('/')}"
 
 
 def _coerce_metadata_input(
@@ -917,17 +1129,6 @@ def _path_from_locator(locator: ArtifactLocator) -> Path:
     if path is None:
         raise ValueError("Managed file operations require a path-backed artifact locator.")
     return path
-
-
-def _rollback_moved_file(*, source_path: Path, target_path: Path) -> None:
-    """Restore a moved file when possible, otherwise remove the moved target."""
-    if not target_path.exists():
-        return
-    if not source_path.exists():
-        source_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(target_path), str(source_path))
-        return
-    target_path.unlink(missing_ok=True)
 
 
 def _require_template(value: str | None, *, field_name: str) -> str:
@@ -978,6 +1179,15 @@ def _optional_artifact_writer(value: object) -> ArtifactWriter | None:
     return _validate_artifact_writer(value)
 
 
+def _optional_storage_plan(value: object) -> StoragePlan | None:
+    """Return an optional storage plan for artifact batch forwarding."""
+    if value is None:
+        return None
+    if isinstance(value, StoragePlan):
+        return value
+    raise TypeError(f"storage_plan must be a StoragePlan, got {type(value).__name__}")
+
+
 def _validate_artifact_writer(value: object) -> ArtifactWriter | None:
     """Return an artifact writer when the optional value implements the writer protocol."""
     if value is None:
@@ -992,10 +1202,14 @@ def _validate_artifact_batch_item(item: object, index: int) -> dict[str, object]
     if not isinstance(item, dict):
         raise TypeError(f"artifact batch item {index} must be a dictionary")
 
-    missing_keys = [key for key in ["record_type", "locator"] if key not in item]
+    missing_keys = [key for key in ["record_type"] if key not in item]
+    if "locator" not in item and "storage_plan" not in item:
+        missing_keys.append("locator or storage_plan")
     if missing_keys:
         missing = ", ".join(missing_keys)
         raise ValueError(f"artifact batch item {index} is missing required key(s): {missing}")
+    if "locator" in item and "storage_plan" in item:
+        raise ValueError(f"artifact batch item {index} must not supply both locator and storage_plan")
     forbidden_id_keys = [key for key in ["record_id", "id"] if key in item]
     if forbidden_id_keys:
         forbidden = ", ".join(forbidden_id_keys)
