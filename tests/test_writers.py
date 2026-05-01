@@ -10,6 +10,8 @@ from ogcat import (
     ArtifactLocator,
     Catalog,
     CatalogSpec,
+    CopyArtifactWriter,
+    MoveArtifactWriter,
     OperationSource,
     PluginRegistry,
     RecordSchema,
@@ -140,6 +142,80 @@ def test_unzip_artifact_writer_rejects_path_traversal(tmp_path: Path) -> None:
     assert not (tmp_path / "escape.txt").exists()
 
 
+def test_non_reference_storage_plan_requires_writer(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+    target = tmp_path / "catalog" / "files" / "generated.txt"
+    plan = plan_storage(
+        ArtifactLocator.from_path(target, relative_path="files/generated.txt"),
+        write_mode="write",
+        ogcat_owned=True,
+    )
+
+    with pytest.raises(ValueError, match="requires an artifact_writer"):
+        catalog.add_artifact(record_type="generated_text", storage_plan=plan)
+
+    assert not target.exists()
+    assert catalog.repository.all() == []
+
+
+def test_copy_artifact_writer_materialises_file_and_rolls_back(tmp_path: Path) -> None:
+    class FailingHook:
+        def before_record_write(self, context: OperationContext) -> None:
+            raise RuntimeError("stop after copy")
+
+    source = tmp_path / "source.txt"
+    source.write_text("payload", encoding="utf-8")
+    target = tmp_path / "catalog" / "files" / "copied.txt"
+    plan = plan_storage(
+        ArtifactLocator.from_path(target, relative_path="files/copied.txt"),
+        write_mode="copy",
+        ogcat_owned=True,
+    )
+    registry = PluginRegistry([FailingHook()])
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"), plugins=registry)
+
+    with pytest.raises(RuntimeError, match="stop after copy"):
+        catalog.add_artifact(
+            record_type="copied_file",
+            storage_plan=plan,
+            source=path_source(source, kind="local_file"),
+            artifact_writer=CopyArtifactWriter(),
+        )
+
+    assert source.exists()
+    assert not target.exists()
+    assert catalog.repository.all() == []
+
+
+def test_move_artifact_writer_restores_source_on_rollback(tmp_path: Path) -> None:
+    class FailingHook:
+        def before_record_write(self, context: OperationContext) -> None:
+            raise RuntimeError("stop after move")
+
+    source = tmp_path / "source.txt"
+    source.write_text("payload", encoding="utf-8")
+    target = tmp_path / "catalog" / "files" / "moved.txt"
+    plan = plan_storage(
+        ArtifactLocator.from_path(target, relative_path="files/moved.txt"),
+        write_mode="move",
+        ogcat_owned=True,
+    )
+    registry = PluginRegistry([FailingHook()])
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"), plugins=registry)
+
+    with pytest.raises(RuntimeError, match="stop after move"):
+        catalog.add_artifact(
+            record_type="moved_file",
+            storage_plan=plan,
+            source=path_source(source, kind="local_file"),
+            artifact_writer=MoveArtifactWriter(),
+        )
+
+    assert source.read_text(encoding="utf-8") == "payload"
+    assert not target.exists()
+    assert catalog.repository.all() == []
+
+
 def test_writer_receives_storage_plan_and_rolls_back_directory_target(tmp_path: Path) -> None:
     class FailingHook:
         def before_record_write(self, context: OperationContext) -> None:
@@ -166,11 +242,11 @@ def test_writer_receives_storage_plan_and_rolls_back_directory_target(tmp_path: 
 
     target = tmp_path / "catalog" / "files" / "stores" / "example.zarr"
     plan = plan_storage(
-        ArtifactLocator.path(target, relative_path="files/stores/example.zarr"),
+        ArtifactLocator.from_path(target, relative_path="files/stores/example.zarr"),
         target_kind="directory",
         write_mode="write",
         ogcat_owned=True,
-        backend="local",
+        adapter="local",
     )
     registry = PluginRegistry([FailingHook()])
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"), plugins=registry)

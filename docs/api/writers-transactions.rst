@@ -59,6 +59,24 @@ Methods
 
 .. automethod:: ogcat.writers.FunctionArtifactWriter.write
 
+CopyArtifactWriter
+------------------
+
+.. autoclass:: ogcat.writers.CopyArtifactWriter
+   :members:
+   :member-order: bysource
+   :exclude-members: source_kind, target_kind
+   :no-show-inheritance:
+
+MoveArtifactWriter
+------------------
+
+.. autoclass:: ogcat.writers.MoveArtifactWriter
+   :members:
+   :member-order: bysource
+   :exclude-members: source_kind, target_kind
+   :no-show-inheritance:
+
 UnzipArtifactWriter
 -------------------
 

@@ -156,7 +156,8 @@ extraction examples.
 Use `catalog.plan_artifact(...)` to dry-run a planned target before writing. The returned
 `StoragePlan` is also available to hooks and artifact writers as `context.storage_plan`, so domain
 logic can create directory-like artifacts such as NetCDF collections or `.zarr` stores while ogcat
-core records only generic locators and metadata.
+core records only generic locators and metadata. Artifact writers remain the place where filesystem
+work and rollback registration happen.
 
 ## CLI
 

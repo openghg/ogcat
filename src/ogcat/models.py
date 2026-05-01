@@ -69,7 +69,7 @@ class ArtifactLocator:
     relative_path: str | None = None
 
     @classmethod
-    def path(cls, path: str | Path, *, relative_path: str | None = None) -> ArtifactLocator:
+    def from_path(cls, path: str | Path, *, relative_path: str | None = None) -> ArtifactLocator:
         """Build a locator for a local path-backed artifact.
 
         Args:
@@ -82,7 +82,16 @@ class ArtifactLocator:
         return cls(kind="path", value=str(path), relative_path=relative_path)
 
     @classmethod
-    def urlpath(cls, urlpath: str, *, relative_path: str | None = None) -> ArtifactLocator:
+    def path(cls, path: str | Path, *, relative_path: str | None = None) -> ArtifactLocator:
+        """Build a local path locator.
+
+        This compatibility alias is kept for existing code. Prefer
+        :meth:`from_path` in new code.
+        """
+        return cls.from_path(path, relative_path=relative_path)
+
+    @classmethod
+    def from_urlpath(cls, urlpath: str, *, relative_path: str | None = None) -> ArtifactLocator:
         """Build a locator for an fsspec-addressable URL path.
 
         Args:
@@ -93,6 +102,15 @@ class ArtifactLocator:
             URL-path-backed artifact locator.
         """
         return cls(kind="urlpath", value=str(urlpath), relative_path=relative_path)
+
+    @classmethod
+    def urlpath(cls, urlpath: str, *, relative_path: str | None = None) -> ArtifactLocator:
+        """Build an fsspec URL-path locator.
+
+        This compatibility alias is kept for existing code. Prefer
+        :meth:`from_urlpath` in new code.
+        """
+        return cls.from_urlpath(urlpath, relative_path=relative_path)
 
     def to_dict(self) -> dict[str, JsonValue]:
         """Convert the locator to a plain dictionary."""

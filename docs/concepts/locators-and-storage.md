@@ -69,7 +69,8 @@ print(plan.locator)
 Plans are also passed to hooks and artifact writers as
 ``context.storage_plan``.  This lets domain code materialise a generic artifact
 such as a directory of NetCDF files or a ``.zarr`` store while ogcat core only
-records the locator and handles rollback registration.
+records the locator.  Artifact writers remain responsible for filesystem side
+effects and rollback registration.
 
 ## External references
 
@@ -81,7 +82,7 @@ from ogcat import ArtifactLocator
 
 catalog.add_artifact(
     record_type="external_reference",
-    locator=ArtifactLocator.path("/data/shared/flux.nc"),
+    locator=ArtifactLocator.from_path("/data/shared/flux.nc"),
     metadata={"species": "CO2"},
 )
 ```
@@ -100,9 +101,9 @@ catalog.add_artifact(
 )
 ```
 
-Use ``ArtifactLocator.urlpath(...)`` when the location should be interpreted by
-fsspec-backed storage operations.  Install the optional dependency with
-``ogcat[fsspec]`` before executing fsspec-backed plans.
+Use ``ArtifactLocator.from_urlpath(...)`` when the location should be interpreted
+by fsspec-backed storage adapters.  Install the optional dependency with
+``ogcat[fsspec]`` before a writer performs fsspec-backed storage work.
 
 ## Catalog layout
 

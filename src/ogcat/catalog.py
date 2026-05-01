@@ -20,17 +20,17 @@ from ogcat.repository import CatalogRepository
 from ogcat.search import SearchQuery
 from ogcat.spec import CatalogSpec, RecordSchema
 from ogcat.storage import (
-    LocalStorageBackend,
+    LocalStorageAdapter,
     StoragePlan,
     TargetKind,
     WriteMode,
-    backend_for_locator,
-    execute_storage_plan,
+    adapter_for_locator,
     plan_storage,
 )
 from ogcat.tinydb_repository import TinyDbCatalogRepository
 from ogcat.transactions import OperationState, UnitOfWork
 from ogcat.validation import ValidationReport, validate_metadata, validate_spec
+from ogcat.writers import CopyArtifactWriter, MoveArtifactWriter
 
 ArtifactLocatorFactory = Callable[[OperationContext], ArtifactLocator]
 StoragePlanFactory = Callable[[OperationContext, ArtifactLocator], StoragePlan | None]
@@ -175,16 +175,16 @@ class Catalog:
                 metadata=context.user_metadata,
                 date_added=timestamp[:10],
             )
-            storage_backend = LocalStorageBackend()
+            storage_adapter = LocalStorageAdapter()
             target, rel_path, _resolved_filename = render_storage_location(
                 files_root=files_root,
                 directory_template=directory_template,
                 filename_template=filename_template,
                 context=naming_context,
-                exists=lambda candidate: storage_backend.exists(ArtifactLocator.path(candidate)),
+                exists=lambda candidate: storage_adapter.exists(ArtifactLocator.from_path(candidate)),
             )
             naming_metadata["resolved_filename"] = _resolved_filename
-            return ArtifactLocator.path(target, relative_path=rel_path)
+            return ArtifactLocator.from_path(target, relative_path=rel_path)
 
         def plan_local_file_storage(
             context: OperationContext,
@@ -193,11 +193,10 @@ class Catalog:
             """Build the storage plan for a managed local file."""
             return plan_storage(
                 locator,
-                source=ArtifactLocator.path(source),
                 target_kind="file",
                 write_mode=cast(WriteMode, chosen_operation),
                 ogcat_owned=True,
-                backend="local",
+                adapter="local",
             )
 
         def collect_file_metadata(context: OperationContext, locator: ArtifactLocator) -> None:
@@ -205,6 +204,9 @@ class Catalog:
             context.derived_metadata.update(extract_derived_metadata(_path_from_locator(locator)))
 
         source_description = OperationSource(kind="local_file", path=source, descriptor=str(source))
+        artifact_writer: ArtifactWriter = (
+            CopyArtifactWriter() if chosen_operation == "copy" else MoveArtifactWriter()
+        )
         with self.transaction() as transaction:
             return self._run_add_operation(
                 transaction=transaction,
@@ -224,6 +226,7 @@ class Catalog:
                 source=source_description,
                 locator_factory=resolve_local_file_locator,
                 storage_plan_factory=plan_local_file_storage,
+                artifact_writer=artifact_writer,
                 derived_metadata_collector=collect_file_metadata,
             )
 
@@ -307,11 +310,10 @@ class Catalog:
         canonical_locator = _artifact_locator_from_context(context)
         plan = plan_storage(
             canonical_locator,
-            source=None if source_path is None else ArtifactLocator.path(source_path),
             target_kind=target_kind,
             write_mode=resolved_write_mode,
             ogcat_owned=ogcat_owned,
-            backend=_backend_name(canonical_locator),
+            adapter=_adapter_name(canonical_locator),
         )
         context.storage_plan = plan
         return plan
@@ -777,22 +779,22 @@ class Catalog:
             root_url = str(storage_root).rstrip("/")
             fake_root = Path("/__ogcat_storage__")
 
-            def storage_backend_locator(candidate: Path) -> ArtifactLocator:
+            def storage_adapter_locator(candidate: Path) -> ArtifactLocator:
                 """Build a URL locator for a candidate rendered path."""
                 relative_path = candidate.relative_to(fake_root).as_posix()
-                return ArtifactLocator.urlpath(_join_urlpath(root_url, relative_path))
+                return ArtifactLocator.from_urlpath(_join_urlpath(root_url, relative_path))
 
             target, _rel_path, _resolved_filename = render_storage_location(
                 files_root=fake_root,
                 directory_template=directory_template,
                 filename_template=filename_template,
                 context=naming_context,
-                exists=lambda candidate: backend_for_locator(storage_backend_locator(candidate)).exists(
-                    storage_backend_locator(candidate)
+                exists=lambda candidate: adapter_for_locator(storage_adapter_locator(candidate)).exists(
+                    storage_adapter_locator(candidate)
                 ),
             )
             relative_path = target.relative_to(fake_root).as_posix()
-            return ArtifactLocator.urlpath(
+            return ArtifactLocator.from_urlpath(
                 _join_urlpath(root_url, relative_path),
                 relative_path=relative_path,
             )
@@ -801,15 +803,15 @@ class Catalog:
             files_root = self.root / self.spec.files_root
         else:
             files_root = Path(storage_root).expanduser().resolve()
-        storage_backend = LocalStorageBackend()
+        storage_adapter = LocalStorageAdapter()
         target, rel_path, _resolved_filename = render_storage_location(
             files_root=files_root,
             directory_template=directory_template,
             filename_template=filename_template,
             context=naming_context,
-            exists=lambda candidate: storage_backend.exists(ArtifactLocator.path(candidate)),
+            exists=lambda candidate: storage_adapter.exists(ArtifactLocator.from_path(candidate)),
         )
-        return ArtifactLocator.path(target, relative_path=rel_path)
+        return ArtifactLocator.from_path(target, relative_path=rel_path)
 
     def _add_artifact_in_transaction(
         self,
@@ -923,25 +925,20 @@ class Catalog:
                     canonical_locator,
                     write_mode="reference",
                     ogcat_owned=False,
-                    backend=_backend_name(canonical_locator),
+                    adapter=_adapter_name(canonical_locator),
                 )
             )
-            if artifact_writer is not None:
-                artifact_writer.write(hook_context, hook_context.source, canonical_locator)
             storage_plan = hook_context.storage_plan
             if storage_plan is None:
                 raise RuntimeError("Add operation did not produce a storage plan.")
-            if artifact_writer is None and storage_plan.write_mode != "reference":
-
-                def register_storage_rollback(action: Callable[[], None], description: str) -> None:
-                    """Register storage cleanup with the active operation."""
-                    hook_context.rollback(action, description=description)
-
-                execute_storage_plan(
-                    storage_plan,
-                    source_path=hook_context.source.path,
-                    register_rollback=register_storage_rollback,
-                )
+            if artifact_writer is None:
+                if storage_plan.write_mode != "reference":
+                    raise ValueError(
+                        f"Storage plan with write mode {storage_plan.write_mode!r} "
+                        "requires an artifact_writer."
+                    )
+            else:
+                artifact_writer.write(hook_context, hook_context.source, canonical_locator)
             if derived_metadata_collector is not None:
                 derived_metadata_collector(hook_context, canonical_locator)
             self.hook_manager.extract_metadata(hook_context)
@@ -1083,11 +1080,11 @@ def _storage_plan_with_locator(plan: StoragePlan, locator: ArtifactLocator) -> S
     """Return a storage plan adjusted to a hook-resolved canonical locator."""
     if plan.locator == locator:
         return plan
-    return replace(plan, locator=locator, backend=_backend_name(locator))
+    return replace(plan, locator=locator, adapter=_adapter_name(locator))
 
 
-def _backend_name(locator: ArtifactLocator) -> str | None:
-    """Return the storage backend name implied by a locator."""
+def _adapter_name(locator: ArtifactLocator) -> str | None:
+    """Return the storage adapter name implied by a locator."""
     if locator.kind == "path":
         return "local"
     if locator.kind == "urlpath":
