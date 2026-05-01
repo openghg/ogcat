@@ -141,11 +141,11 @@ def _parse_search_value(raw_value: str) -> Any:
 def _parse_schema_json(value: str) -> RecordSchema:
     """Parse a schema from a JSON string or JSON file path."""
     stripped = value.strip()
-    candidate_path = Path(value).expanduser()
+    candidate_path = Path(stripped).expanduser()
     if not stripped.startswith("{") and candidate_path.exists():
         raw_schema = candidate_path.read_text(encoding="utf-8")
     else:
-        raw_schema = value
+        raw_schema = stripped
     try:
         payload = json.loads(raw_schema)
     except json.JSONDecodeError as exc:

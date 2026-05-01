@@ -124,6 +124,10 @@ class CatalogSpec:
         record_schemas = _coerce_record_schema_mapping(self.record_schemas)
         default_schema = _coerce_record_schema(self.default_schema, field_name="default_schema")
         if default_schema is not None:
+            if self.default_record_schema in record_schemas:
+                raise ValueError(
+                    "Pass either default_schema or record_schemas[default_record_schema], not both."
+                )
             record_schemas[self.default_record_schema] = default_schema
         elif self.default_record_schema not in record_schemas:
             record_schemas[self.default_record_schema] = _default_record_schema()

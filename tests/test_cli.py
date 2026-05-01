@@ -574,6 +574,40 @@ def test_spec_cli_adds_schema_sets_default_and_updates_simple_fields(tmp_path: P
     assert reopened.spec.field_resolution_order == ["user_metadata", "top_level"]
 
 
+def test_spec_cli_add_schema_accepts_file_path_with_outer_whitespace(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+    schema_path = tmp_path / "schema.json"
+    schema_path.write_text('{"metadata_fields": []}', encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "spec",
+            "add-schema",
+            "paper",
+            "--catalog",
+            str(catalog.root),
+            "--schema-json",
+            f"  {schema_path}  ",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "paper" in Catalog.open(catalog.root).list_record_schemas()
+
+
+def test_spec_cli_rejects_unknown_field_resolution_order_value(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+
+    result = runner.invoke(
+        app,
+        ["spec", "set", 'field_resolution_order=["user_metadata","unknown"]', "--catalog", str(catalog.root)],
+    )
+
+    assert result.exit_code == 1
+    assert "Unsupported field_resolution_order value(s): unknown" in strip_ansi(result.stderr)
+
+
 def test_spec_cli_rejects_files_root_update(tmp_path: Path) -> None:
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
 

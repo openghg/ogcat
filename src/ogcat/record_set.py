@@ -143,18 +143,10 @@ class CatalogRecordSet(Sequence[CatalogRecord]):
                 fields.add("locator.uri")
             record_dict = record.to_dict()
             for field, value in record_dict.items():
-                if field in _METADATA_NAMESPACES:
-                    if isinstance(value, dict):
-                        fields.update(_nested_field_paths(value, prefix=field))
-                    continue
                 if _is_discoverable_value(value):
                     fields.add(field)
                 if isinstance(value, dict):
                     fields.update(_nested_field_paths(value, prefix=field))
-            for namespace in _METADATA_NAMESPACES:
-                metadata = record_dict.get(namespace)
-                if isinstance(metadata, dict):
-                    fields.update(_nested_field_paths(metadata, prefix=namespace))
         return sorted(fields)
 
     def unique_values(self, field: str) -> list[JsonValue]:
@@ -166,7 +158,7 @@ class CatalogRecordSet(Sequence[CatalogRecord]):
                 continue
             key = json.dumps(resolved.value, sort_keys=True)
             values[key] = resolved.value
-        return [values[key] for key in sorted(values)]
+        return list(values.values())
 
     def preview(
         self,

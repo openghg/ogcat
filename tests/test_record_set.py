@@ -109,8 +109,24 @@ def test_record_set_discovers_fields_and_unique_scalar_values(tmp_path: Path) ->
     assert "locator.uri" in records.field_paths()
     assert "user_metadata.species" in records.field_paths()
     assert "user_metadata.site.code" in records.field_paths()
-    assert records.unique_values("species") == ["CH4", "CO2"]
+    assert records.unique_values("species") == ["CO2", "CH4"]
     assert records.unique_values("tags") == []
+
+
+def test_record_set_unique_values_preserves_first_seen_order(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+    catalog.add_artifacts(
+        [
+            {
+                "record_type": "external_reference",
+                "locator": ArtifactLocator(kind="uri", value=f"s3://bucket/{value}.zarr"),
+                "metadata": {"priority": value},
+            }
+            for value in [2, 12, 2]
+        ]
+    )
+
+    assert catalog.search(as_record_set=True).unique_values("priority") == [2, 12]
 
 
 def test_record_set_field_discovery_skips_falsey_values(tmp_path: Path) -> None:

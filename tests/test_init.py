@@ -255,6 +255,19 @@ def test_catalog_spec_rejects_empty_default_record_schema() -> None:
         raise AssertionError("Expected ValueError for empty default_record_schema")
 
 
+def test_catalog_spec_rejects_conflicting_default_schema_inputs() -> None:
+    try:
+        CatalogSpec(
+            catalog_name="files",
+            default_schema=RecordSchema(description="Constructor default."),
+            record_schemas={"default": RecordSchema(description="Mapping default.")},
+        )
+    except ValueError as exc:
+        assert "Pass either default_schema or record_schemas[default_record_schema], not both." in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("Expected ValueError for conflicting default schema inputs")
+
+
 def test_catalog_describe_and_list_metadata_fields_return_serialisable_values(tmp_path: Path) -> None:
     root = tmp_path / "fluxes"
     spec = CatalogSpec(

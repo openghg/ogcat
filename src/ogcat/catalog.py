@@ -569,7 +569,13 @@ class Catalog:
             order = updates["field_resolution_order"]
             if not isinstance(order, list):
                 raise TypeError("field_resolution_order must be a list.")
-            updates["field_resolution_order"] = [str(item) for item in order]
+            field_resolution_order = [str(item) for item in order]
+            supported_namespaces = {"top_level", "user_metadata", "derived_metadata"}
+            invalid_namespaces = sorted(set(field_resolution_order) - supported_namespaces)
+            if invalid_namespaces:
+                joined = ", ".join(invalid_namespaces)
+                raise ValueError(f"Unsupported field_resolution_order value(s): {joined}")
+            updates["field_resolution_order"] = field_resolution_order
 
         self._replace_spec(**updates)
 
