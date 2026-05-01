@@ -48,7 +48,9 @@ def test_catalog_spec_round_trips_via_catalog_json(tmp_path: Path) -> None:
     assert "metadata_fields" not in serialized
     assert "directory_template" not in serialized
     assert "filename_template" not in serialized
-    assert serialized["default_schema"]["metadata_fields"] == [
+    assert "default_schema" not in serialized
+    assert serialized["default_record_schema"] == "default"
+    assert serialized["record_schemas"]["default"]["metadata_fields"] == [
         {
             "name": "species",
             "description": "Gas species name used for grouping and search.",
@@ -98,9 +100,39 @@ def test_catalog_spec_round_trips_record_schemas(tmp_path: Path) -> None:
     serialized = json.loads((root / "catalog.json").read_text(encoding="utf-8"))
     reloaded = CatalogSpec.read(root / "catalog.json")
 
-    assert serialized["default_schema"]["description"] == "Generic fallback schema for heterogeneous files."
+    assert "default_schema" not in serialized
+    assert serialized["default_record_schema"] == "default"
+    assert (
+        serialized["record_schemas"]["default"]["description"]
+        == "Generic fallback schema for heterogeneous files."
+    )
     assert serialized["record_schemas"]["flux"]["metadata_fields"][0]["required"] is True
     assert reloaded == spec
+
+
+def test_catalog_spec_supports_custom_default_record_schema(tmp_path: Path) -> None:
+    root = tmp_path / "fluxes"
+    spec = CatalogSpec(
+        catalog_name="fluxes",
+        default_record_schema="generic",
+        record_schemas={
+            "generic": RecordSchema(
+                metadata_fields=[
+                    MetadataFieldDescription(name="title", description="Short title.", required=True),
+                ],
+            ),
+            "flux": RecordSchema(filename_template="{species}{original_suffix}"),
+        },
+    )
+
+    Catalog.create(root, spec)
+    serialized = json.loads((root / "catalog.json").read_text(encoding="utf-8"))
+    reloaded = CatalogSpec.read(root / "catalog.json")
+
+    assert serialized["default_record_schema"] == "generic"
+    assert "default_schema" not in serialized
+    assert reloaded.get_schema().required_field_names() == ["title"]
+    assert reloaded.get_schema("flux").directory_template == "{year_added}/{original_stem}"
 
 
 def test_metadata_field_description_serialises_type_information() -> None:
@@ -136,6 +168,7 @@ def test_catalog_spec_does_not_mutate_default_schema_input() -> None:
 
     assert schema.directory_template is None
     assert schema.filename_template is None
+    assert isinstance(spec.default_schema, RecordSchema)
     assert spec.default_schema.directory_template == "{year_added}/{original_stem}"
     assert spec.default_schema.filename_template == "{title_slug|original_stem}{original_suffix}"
 
@@ -146,7 +179,7 @@ def test_catalog_spec_normalises_constructor_record_schema_keys() -> None:
         record_schemas={1: RecordSchema(metadata_fields=[])},  # type: ignore[dict-item]
     )
 
-    assert spec.list_record_schemas() == ["1"]
+    assert spec.list_record_schemas() == ["1", "default"]
     assert spec.get_schema("1").directory_template == "{year_added}/{original_stem}"
 
 
@@ -179,9 +212,11 @@ def test_catalog_spec_accepts_default_schema_dict_at_constructor_boundary() -> N
         },  # type: ignore[arg-type]
     )
 
+    assert isinstance(spec.default_schema, RecordSchema)
     assert spec.default_schema.directory_template == "{year_added}/{original_stem}"
     assert spec.default_schema.metadata_fields[0].name == "title"
     assert spec.default_schema.metadata_fields[0].required is True
+    assert spec.record_schemas["default"] == spec.default_schema
 
 
 def test_catalog_spec_rejects_invalid_default_schema_at_constructor_boundary() -> None:
@@ -209,6 +244,28 @@ def test_catalog_spec_get_schema_raises_value_error_for_unknown_schema() -> None
         assert "Unknown record schema: missing" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("Expected ValueError for unknown record schema")
+
+
+def test_catalog_spec_rejects_empty_default_record_schema() -> None:
+    try:
+        CatalogSpec(catalog_name="files", default_record_schema="  ")
+    except ValueError as exc:
+        assert "default_record_schema cannot be empty." in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("Expected ValueError for empty default_record_schema")
+
+
+def test_catalog_spec_rejects_conflicting_default_schema_inputs() -> None:
+    try:
+        CatalogSpec(
+            catalog_name="files",
+            default_schema=RecordSchema(description="Constructor default."),
+            record_schemas={"default": RecordSchema(description="Mapping default.")},
+        )
+    except ValueError as exc:
+        assert "Pass either default_schema or record_schemas[default_record_schema], not both." in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("Expected ValueError for conflicting default schema inputs")
 
 
 def test_catalog_describe_and_list_metadata_fields_return_serialisable_values(tmp_path: Path) -> None:
@@ -269,9 +326,9 @@ def test_catalog_schema_helpers_return_serialisable_values(tmp_path: Path) -> No
         ),
     )
 
-    assert catalog.list_record_schemas() == ["flux"]
+    assert catalog.list_record_schemas() == ["default", "flux"]
     assert catalog.describe()["has_metadata_fields"] is True
-    assert catalog.describe()["record_schemas"] == ["flux"]
+    assert catalog.describe()["record_schemas"] == ["default", "flux"]
     assert catalog.get_schema("flux")["metadata_fields"] == [
         {
             "name": "species",
@@ -281,6 +338,38 @@ def test_catalog_schema_helpers_return_serialisable_values(tmp_path: Path) -> No
         }
     ]
     assert catalog.list_metadata_fields("flux")[0]["name"] == "species"
+
+
+def test_catalog_spec_mutation_helpers_persist_updates(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+
+    catalog.add_record_schema(
+        "paper",
+        RecordSchema(
+            metadata_fields=[
+                MetadataFieldDescription(name="title", description="Short title.", required=True),
+            ]
+        ),
+    )
+    catalog.set_default_record_schema("paper")
+    catalog.update_spec(catalog_name="library", default_operation="move")
+    reopened = Catalog.open(catalog.root)
+
+    assert reopened.spec.default_record_schema == "paper"
+    assert reopened.spec.catalog_name == "library"
+    assert reopened.spec.default_operation == "move"
+    assert reopened.list_metadata_fields()[0]["name"] == "title"
+
+
+def test_catalog_update_spec_rejects_files_root_without_migration(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+
+    try:
+        catalog.update_spec(files_root="renamed-files")
+    except ValueError as exc:
+        assert "Changing files_root requires a file-root migration operation." in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("Expected files_root update to be rejected")
 
 
 def test_record_schema_fallbacks_preserve_empty_templates() -> None:

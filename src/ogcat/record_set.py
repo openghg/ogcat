@@ -11,9 +11,10 @@ from typing import Any, overload
 from rich.table import Table
 
 from ogcat.models import CatalogRecord, JsonValue
-from ogcat.search import flatten_lookup
+from ogcat.search import flatten_lookup, resolve_field
 
 DEFAULT_RECORDSET_FIELDS = ("id", "title", "product", "species", "path")
+_METADATA_NAMESPACES = ("user_metadata", "derived_metadata", "naming_metadata")
 
 
 def resolve_record_field(
@@ -132,6 +133,33 @@ class CatalogRecordSet(Sequence[CatalogRecord]):
             for record in records
         ]
 
+    def field_paths(self) -> list[str]:
+        """Return discoverable field paths present in this record set."""
+        fields: set[str] = set()
+        for record in self._records:
+            if record.path() is not None:
+                fields.add("path")
+            if record.locator.kind == "uri":
+                fields.add("locator.uri")
+            record_dict = record.to_dict()
+            for field, value in record_dict.items():
+                if _is_discoverable_value(value):
+                    fields.add(field)
+                if isinstance(value, dict):
+                    fields.update(_nested_field_paths(value, prefix=field))
+        return sorted(fields)
+
+    def unique_values(self, field: str) -> list[JsonValue]:
+        """Return unique scalar values present for a field."""
+        values: dict[str, JsonValue] = {}
+        for record in self._records:
+            resolved = resolve_field(record, field, resolution_order=self._resolution_order)
+            if not resolved.found or not _is_scalar_json_value(resolved.value):
+                continue
+            key = json.dumps(resolved.value, sort_keys=True)
+            values[key] = resolved.value
+        return list(values.values())
+
     def preview(
         self,
         *,
@@ -173,3 +201,25 @@ class CatalogRecordSet(Sequence[CatalogRecord]):
     def __rich__(self) -> Table:
         """Return a Rich preview for terminals and notebooks."""
         return self.preview()
+
+
+def _nested_field_paths(mapping: dict[str, JsonValue], *, prefix: str) -> set[str]:
+    """Return dotted field paths for a nested JSON mapping."""
+    fields: set[str] = set()
+    for key, value in mapping.items():
+        path = f"{prefix}.{key}"
+        if _is_discoverable_value(value):
+            fields.add(path)
+        if isinstance(value, dict):
+            fields.update(_nested_field_paths(value, prefix=path))
+    return fields
+
+
+def _is_discoverable_value(value: object) -> bool:
+    """Return whether a field value should appear in field discovery."""
+    return bool(value)
+
+
+def _is_scalar_json_value(value: object) -> bool:
+    """Return whether a value is safe to include in unique-value summaries."""
+    return value is None or isinstance(value, str | int | float | bool)

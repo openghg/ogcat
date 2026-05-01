@@ -99,7 +99,8 @@ class CatalogSpec:
         files_root: Managed file root relative to the catalog root.
         default_operation: Default managed-file operation.
         field_resolution_order: Namespace order for flattened search fields.
-        default_schema: Fallback schema.
+        default_record_schema: Name of the fallback schema in ``record_schemas``.
+        default_schema: Optional constructor convenience for the fallback schema.
         record_schemas: Named schemas for record types.
     """
 
@@ -111,16 +112,38 @@ class CatalogSpec:
     field_resolution_order: list[str] = field(
         default_factory=lambda: ["top_level", "user_metadata", "derived_metadata"]
     )
-    default_schema: RecordSchema = field(default_factory=lambda: _default_record_schema())
+    default_record_schema: str = "default"
+    default_schema: RecordSchema | dict[str, object] | None = None
     record_schemas: dict[str, RecordSchema] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        """Fill required defaults on the broad fallback schema."""
-        self.record_schemas = _coerce_record_schema_mapping(self.record_schemas)
+        """Fill required defaults on the configured fallback schema."""
+        self.default_record_schema = str(self.default_record_schema).strip()
+        if not self.default_record_schema:
+            raise ValueError("default_record_schema cannot be empty.")
+        record_schemas = _coerce_record_schema_mapping(self.record_schemas)
         default_schema = _coerce_record_schema(self.default_schema, field_name="default_schema")
-        self.default_schema = (default_schema or _default_record_schema()).with_fallbacks(
-            _default_record_schema()
-        )
+        if default_schema is not None:
+            if self.default_record_schema in record_schemas:
+                raise ValueError(
+                    "Pass either default_schema or record_schemas[default_record_schema], not both."
+                )
+            record_schemas[self.default_record_schema] = default_schema
+        elif self.default_record_schema not in record_schemas:
+            record_schemas[self.default_record_schema] = _default_record_schema()
+
+        record_schemas[self.default_record_schema] = record_schemas[
+            self.default_record_schema
+        ].with_fallbacks(_default_record_schema())
+        self.record_schemas = {
+            self.default_record_schema: record_schemas[self.default_record_schema],
+            **{
+                schema_name: schema
+                for schema_name, schema in record_schemas.items()
+                if schema_name != self.default_record_schema
+            },
+        }
+        self.default_schema = self.record_schemas[self.default_record_schema]
 
     def to_dict(self) -> dict[str, object]:
         """Convert the spec to a serialisable dictionary."""
@@ -131,7 +154,7 @@ class CatalogSpec:
             "files_root": self.files_root,
             "default_operation": self.default_operation,
             "field_resolution_order": list(self.field_resolution_order),
-            "default_schema": self.default_schema.to_dict(),
+            "default_record_schema": self.default_record_schema,
             "record_schemas": {
                 record_type: schema.to_dict() for record_type, schema in self.record_schemas.items()
             },
@@ -140,7 +163,6 @@ class CatalogSpec:
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> CatalogSpec:
         """Build a spec from a dictionary."""
-        default_schema = _coerce_record_schema(data.get("default_schema"), field_name="default_schema")
         record_schemas = _coerce_record_schema_mapping(data.get("record_schemas"))
 
         return cls(
@@ -157,7 +179,7 @@ class CatalogSpec:
                 )
             ]
             or ["top_level", "user_metadata", "derived_metadata"],
-            default_schema=default_schema or _default_record_schema(),
+            default_record_schema=str(data.get("default_record_schema", "default")),
             record_schemas=record_schemas,
         )
 
@@ -171,10 +193,12 @@ class CatalogSpec:
             ValueError: If a non-default record type has no schema.
         """
         if record_type is None:
-            return self.default_schema
+            return self.record_schemas[self.default_record_schema]
         if record_type not in self.record_schemas:
             raise ValueError(f"Unknown record schema: {record_type}")
-        return self.record_schemas[record_type].with_fallbacks(self.default_schema)
+        return self.record_schemas[record_type].with_fallbacks(
+            self.record_schemas[self.default_record_schema]
+        )
 
     def list_record_schemas(self) -> list[str]:
         """Return available named record schema names."""

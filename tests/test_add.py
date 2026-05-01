@@ -291,6 +291,29 @@ def test_add_file_does_not_truncate_fractional_year_metadata_for_naming(tmp_path
     assert _stored_path(record).name == "floatyear.nc"
 
 
+def test_add_file_uses_readable_list_metadata_in_naming_templates(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "tagged.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(
+        root,
+        CatalogSpec(
+            catalog_name="files",
+            default_schema=RecordSchema(
+                directory_template="{tags}",
+                filename_template="{tags}{original_suffix}",
+            ),
+        ),
+    )
+
+    record = catalog.add_file(source, metadata={"tags": ["a", "b", "c"]})
+
+    assert _stored_path(record) == root / "files" / "a-b-c" / "a-b-c.nc"
+
+
 @pytest.mark.parametrize("field_name", ["id", "uuid", "operation_id"])
 def test_add_file_rejects_metadata_that_clobbers_reserved_template_fields(
     tmp_path: Path,

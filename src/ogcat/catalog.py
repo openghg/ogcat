@@ -21,7 +21,7 @@ from ogcat.search import SearchQuery
 from ogcat.spec import CatalogSpec, RecordSchema
 from ogcat.tinydb_repository import TinyDbCatalogRepository
 from ogcat.transactions import OperationState, UnitOfWork
-from ogcat.validation import ValidationReport, validate_metadata
+from ogcat.validation import ValidationReport, validate_metadata, validate_spec
 
 ArtifactLocatorFactory = Callable[[OperationContext], ArtifactLocator]
 DerivedMetadataCollector = Callable[[OperationContext, ArtifactLocator], None]
@@ -478,6 +478,14 @@ class Catalog:
         schema = self._select_schema(record_type, require_known=record_type is not None)
         return [field_description.to_dict() for field_description in schema.metadata_fields]
 
+    def list_record_fields(self) -> list[str]:
+        """Return discoverable field paths present in stored records."""
+        return self.record_set(self.repository.all()).field_paths()
+
+    def unique_values(self, field: str) -> list[JsonValue]:
+        """Return unique scalar values present for a field across stored records."""
+        return self.record_set(self.repository.all()).unique_values(field)
+
     def get_schema(self, record_type: str | None = None) -> dict[str, object]:
         """Return a serialisable schema description."""
         return self._select_schema(record_type, require_known=record_type is not None).to_dict()
@@ -496,6 +504,80 @@ class Catalog:
         if record is None:
             return None
         return record.path()
+
+    def add_record_schema(
+        self,
+        name: str,
+        schema: RecordSchema | dict[str, object],
+        *,
+        overwrite: bool = False,
+    ) -> None:
+        """Add or replace a record schema in the catalog spec.
+
+        Args:
+            name: Record schema name.
+            schema: Schema object or serialised schema dictionary.
+            overwrite: Whether an existing schema may be replaced.
+
+        Raises:
+            ValueError: If the schema already exists and ``overwrite`` is false,
+                or if the resulting spec is invalid.
+            TypeError: If ``schema`` is not a valid schema object.
+        """
+        schema_name = str(name).strip()
+        if not schema_name:
+            raise ValueError("Record schema name cannot be empty.")
+        if schema_name in self.spec.record_schemas and not overwrite:
+            raise ValueError(f"Record schema already exists: {schema_name}")
+        if isinstance(schema, RecordSchema):
+            record_schema = schema
+        elif isinstance(schema, dict):
+            record_schema = RecordSchema.from_dict(schema)
+        else:
+            raise TypeError("schema must be a RecordSchema or dictionary.")
+
+        record_schemas = dict(self.spec.record_schemas)
+        record_schemas[schema_name] = record_schema
+        self._replace_spec(record_schemas=record_schemas)
+
+    def set_default_record_schema(self, name: str) -> None:
+        """Set the default record schema by name."""
+        schema_name = str(name).strip()
+        if schema_name not in self.spec.record_schemas:
+            raise ValueError(f"Unknown record schema: {schema_name}")
+        self._replace_spec(default_record_schema=schema_name, default_schema=None)
+
+    def update_spec(self, **fields: object) -> None:
+        """Update simple catalog spec fields and persist ``catalog.json``.
+
+        Supported fields are ``catalog_name``, ``default_operation``, and
+        ``field_resolution_order``. ``files_root`` changes require a dedicated
+        migration operation and are intentionally rejected here.
+        """
+        if "files_root" in fields:
+            raise ValueError("Changing files_root requires a file-root migration operation.")
+        allowed_fields = {"catalog_name", "default_operation", "field_resolution_order"}
+        unknown_fields = sorted(field for field in fields if field not in allowed_fields)
+        if unknown_fields:
+            joined = ", ".join(unknown_fields)
+            raise ValueError(f"Unsupported catalog spec field(s): {joined}")
+
+        updates = dict(fields)
+        if "default_operation" in updates and updates["default_operation"] not in {"copy", "move"}:
+            raise ValueError("default_operation must be 'copy' or 'move'.")
+        if "field_resolution_order" in updates:
+            order = updates["field_resolution_order"]
+            if not isinstance(order, list):
+                raise TypeError("field_resolution_order must be a list.")
+            field_resolution_order = [str(item) for item in order]
+            supported_namespaces = {"top_level", "user_metadata", "derived_metadata"}
+            invalid_namespaces = sorted(set(field_resolution_order) - supported_namespaces)
+            if invalid_namespaces:
+                joined = ", ".join(invalid_namespaces)
+                raise ValueError(f"Unsupported field_resolution_order value(s): {joined}")
+            updates["field_resolution_order"] = field_resolution_order
+
+        self._replace_spec(**updates)
 
     def _build_artifact_record(
         self,
@@ -709,13 +791,31 @@ class Catalog:
         """Return the validation schema name for a record type."""
         if record_type is not None and record_type in self.spec.record_schemas:
             return record_type
-        return "default"
+        return self.spec.default_record_schema
 
     def _has_metadata_fields(self) -> bool:
         """Return whether any default or named schema describes metadata fields."""
-        if self.spec.get_schema().metadata_fields:
-            return True
         return any(schema.metadata_fields for schema in self.spec.record_schemas.values())
+
+    def _replace_spec(self, **updates: object) -> None:
+        """Replace the active spec after validation and persist it."""
+        payload = {
+            "catalog_name": self.spec.catalog_name,
+            "db_backend": self.spec.db_backend,
+            "db_path": self.spec.db_path,
+            "files_root": self.spec.files_root,
+            "default_operation": self.spec.default_operation,
+            "field_resolution_order": list(self.spec.field_resolution_order),
+            "default_record_schema": self.spec.default_record_schema,
+            "default_schema": None,
+            "record_schemas": dict(self.spec.record_schemas),
+        }
+        payload.update(updates)
+        next_spec = CatalogSpec(**payload)  # type: ignore[arg-type]
+        validation_report = validate_spec(next_spec)
+        validation_report.raise_for_errors()
+        next_spec.write(self.root / "catalog.json")
+        self.spec = next_spec
 
 
 def _utc_timestamp() -> str:

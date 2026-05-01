@@ -1,19 +1,19 @@
 # Typed Record Schemas
 
-`ogcat` keeps schemas deliberately small. A catalog has one explicit
-`default_schema` for broad, heterogeneous ingest and an optional
-`record_schemas` mapping keyed by record type. Each `RecordSchema` can describe
-metadata fields, a directory template, a filename template, and a short
-description.
+`ogcat` keeps schemas deliberately small. A catalog stores all schemas in a
+`record_schemas` mapping and uses `default_record_schema` to identify the
+broad, heterogeneous ingest fallback. Each `RecordSchema` can describe metadata
+fields, a directory template, a filename template, and a short description.
 
 Metadata field descriptions can also carry lightweight type names. These are
 serialised as human-readable schema hints for now; they are not enforced by the
 catalog core.
 
-`default_schema` is the source of truth for broad catalog behavior. Earlier MVP
-top-level fields such as `metadata_fields`, `directory_template`, and
-`filename_template` were removed before any real catalog migration burden existed,
-which keeps `CatalogSpec` smaller and avoids parallel compatibility state.
+The configured `default_record_schema` is the source of truth for broad catalog
+behavior. Earlier MVP top-level fields such as `metadata_fields`,
+`directory_template`, `filename_template`, and `default_schema` were removed
+before any real catalog migration burden existed, which keeps `CatalogSpec`
+smaller and avoids parallel compatibility state.
 
 For this first pass, record type and schema name are the same concept only where
 a named schema exists. `Catalog.add_file(..., record_type="flux")` selects the

@@ -79,6 +79,8 @@ def _stringify_template_value(value: object) -> str:
     """Stringify template values without exposing Python repr details."""
     if value is None:
         return ""
+    if isinstance(value, list):
+        return "-".join(_stringify_template_value(item) for item in value if item is not None)
     return str(value)
 
 
