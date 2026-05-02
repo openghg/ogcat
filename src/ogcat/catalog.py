@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
@@ -785,7 +786,9 @@ class Catalog:
                 directory_template=directory_template,
                 filename_template=filename_template,
                 context=naming_context,
-                exists=lambda _candidate: False,
+                exists=lambda candidate: _urlpath_exists_if_supported(
+                    _join_urlpath(root_url, candidate.relative_to(fake_root).as_posix())
+                ),
             )
             relative_path = target.relative_to(fake_root).as_posix()
             return ArtifactLocator.from_urlpath(
@@ -913,6 +916,8 @@ class Catalog:
             self.hook_manager.resolve_artifact_locator(hook_context)
             canonical_locator = _artifact_locator_from_context(hook_context)
             hook_context.planned_locators[0] = canonical_locator
+            if naming_metadata is not None and "resolved_filename" in naming_metadata:
+                naming_metadata["resolved_filename"] = _filename_from_locator(canonical_locator)
             hook_context.storage_plan = (
                 storage_plan_factory(hook_context, canonical_locator)
                 if storage_plan_factory is not None
@@ -1087,6 +1092,25 @@ def _adapter_name(locator: ArtifactLocator) -> str | None:
     return None
 
 
+def _urlpath_exists_if_supported(urlpath: str) -> bool:
+    """Return whether a URL path exists when fsspec is installed.
+
+    Args:
+        urlpath: URL path to check.
+
+    Returns:
+        ``True`` when the fsspec target exists. Returns ``False`` when fsspec is
+        not installed so planning can remain a dry-run without optional storage
+        dependencies.
+    """
+    if importlib.util.find_spec("fsspec") is None:
+        return False
+    from ogcat.storage import adapter_for_locator
+
+    locator = ArtifactLocator.from_urlpath(urlpath)
+    return adapter_for_locator(locator).exists(locator)
+
+
 def _is_urlpath_root(value: str | Path) -> bool:
     """Return whether a storage root should be treated as an fsspec URL."""
     return isinstance(value, str) and "://" in value
@@ -1113,6 +1137,13 @@ def _artifact_locator_from_context(context: OperationContext) -> ArtifactLocator
     if not context.planned_locators:
         raise ValueError("resolve_artifact_locator hook removed the planned artifact locator.")
     return context.planned_locators[0]
+
+
+def _filename_from_locator(locator: ArtifactLocator) -> str:
+    """Return the final filename-like component from a locator."""
+    if locator.kind == "path":
+        return Path(locator.value).name
+    return locator.value.rstrip("/").rsplit("/", 1)[-1]
 
 
 def _path_from_locator(locator: ArtifactLocator) -> Path:

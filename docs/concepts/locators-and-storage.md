@@ -66,11 +66,14 @@ plan = catalog.plan_artifact(
 print(plan.locator)
 ```
 
-Plans are also passed to hooks and artifact writers as
-``context.storage_plan``.  This lets domain code materialise a generic artifact
-such as a directory of NetCDF files or a ``.zarr`` store while ogcat core only
-records the locator.  Artifact writers remain responsible for filesystem side
-effects and rollback registration.
+After locator-resolution hooks have run, the selected plan is available to later
+hooks and artifact writers as ``context.storage_plan``.  Earlier hooks such as
+``before_validate_metadata`` and ``resolve_artifact_locator`` should inspect
+``context.planned_locators`` instead because the final ``StoragePlan`` has not
+been built yet.  The plan lets domain code materialise a generic artifact such as
+a directory of NetCDF files or a ``.zarr`` store while ogcat core only records
+the locator.  Artifact writers remain responsible for filesystem side effects
+and rollback registration.
 
 ## External references
 

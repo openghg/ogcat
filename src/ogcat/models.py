@@ -103,15 +103,6 @@ class ArtifactLocator:
         """
         return cls(kind="urlpath", value=str(urlpath), relative_path=relative_path)
 
-    @classmethod
-    def urlpath(cls, urlpath: str, *, relative_path: str | None = None) -> ArtifactLocator:
-        """Build an fsspec URL-path locator.
-
-        This compatibility alias is kept for existing code. Prefer
-        :meth:`from_urlpath` in new code.
-        """
-        return cls.from_urlpath(urlpath, relative_path=relative_path)
-
     def to_dict(self) -> dict[str, JsonValue]:
         """Convert the locator to a plain dictionary."""
         return {

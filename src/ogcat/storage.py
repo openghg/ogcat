@@ -188,7 +188,18 @@ class FsspecStorageAdapter:
 
 
 def adapter_for_locator(locator: ArtifactLocator) -> StorageAdapter:
-    """Return the storage adapter that can interpret a locator."""
+    """Return the storage adapter that can interpret a locator.
+
+    Args:
+        locator: Artifact locator to inspect.
+
+    Returns:
+        Storage adapter for local path or fsspec URL-path locators.
+
+    Raises:
+        ValueError: If ogcat does not provide a storage adapter for the locator
+            kind.
+    """
     if locator.kind == "path":
         return LocalStorageAdapter()
     if locator.kind == "urlpath":
@@ -206,7 +217,21 @@ def plan_storage(
     profile: str | None = None,
     adapter: str | None = None,
 ) -> StoragePlan:
-    """Build a storage plan from already-resolved storage decisions."""
+    """Build a storage plan from already-resolved storage decisions.
+
+    Args:
+        locator: Target locator that should be recorded for the artifact.
+        target_kind: Whether the target is file-like or directory-like.
+        write_mode: Intended materialisation mode.
+        checksum: Checksum policy requested for the write.
+        ogcat_owned: Whether ogcat should treat the target as managed.
+        profile: Optional storage profile name or hint.
+        adapter: Optional adapter identifier, such as ``"local"`` or
+            ``"fsspec"``.
+
+    Returns:
+        Storage plan describing the target and intended write.
+    """
     return StoragePlan(
         locator=locator,
         target_kind=target_kind,
@@ -219,7 +244,18 @@ def plan_storage(
 
 
 def require_storage_target(locator: ArtifactLocator) -> StorageAdapter:
-    """Return an adapter for a filesystem-like target locator."""
+    """Return an adapter for a filesystem-like target locator.
+
+    Args:
+        locator: Artifact locator that should be writable through a storage
+            adapter.
+
+    Returns:
+        Storage adapter that can operate on the locator.
+
+    Raises:
+        ValueError: If the locator kind is not filesystem-like.
+    """
     return adapter_for_locator(locator)
 
 
@@ -228,7 +264,16 @@ def ensure_target_absent(
     *,
     adapter: StorageAdapter | None = None,
 ) -> None:
-    """Raise if a target already exists."""
+    """Raise if a target already exists.
+
+    Args:
+        locator: Target locator to check.
+        adapter: Optional pre-resolved storage adapter.
+
+    Raises:
+        FileExistsError: If the target exists.
+        ValueError: If no adapter can interpret the locator.
+    """
     storage = require_storage_target(locator) if adapter is None else adapter
     if storage.exists(locator):
         raise FileExistsError(f"target already exists: {locator.value}")
@@ -239,7 +284,15 @@ def ensure_parent_directory(
     *,
     adapter: StorageAdapter | None = None,
 ) -> None:
-    """Create parent directories for a file-like target."""
+    """Create parent directories for a file-like target.
+
+    Args:
+        locator: File-like target locator whose parent should exist.
+        adapter: Optional pre-resolved storage adapter.
+
+    Raises:
+        ValueError: If no adapter can interpret the locator.
+    """
     storage = require_storage_target(locator) if adapter is None else adapter
     storage.mkdir_parent(locator)
 
@@ -249,7 +302,16 @@ def create_directory_target(
     *,
     adapter: StorageAdapter | None = None,
 ) -> None:
-    """Create an empty directory target after checking it does not exist."""
+    """Create an empty directory target after checking it does not exist.
+
+    Args:
+        locator: Directory-like target locator to create.
+        adapter: Optional pre-resolved storage adapter.
+
+    Raises:
+        FileExistsError: If the directory target already exists.
+        ValueError: If no adapter can interpret the locator.
+    """
     storage = require_storage_target(locator) if adapter is None else adapter
     ensure_target_absent(locator, adapter=storage)
     storage.mkdir(locator)
@@ -261,7 +323,16 @@ def remove_target(
     target_kind: TargetKind = "file",
     adapter: StorageAdapter | None = None,
 ) -> None:
-    """Remove a file-like or directory-like target."""
+    """Remove a file-like or directory-like target.
+
+    Args:
+        locator: Target locator to remove.
+        target_kind: Whether to remove a file-like or directory-like target.
+        adapter: Optional pre-resolved storage adapter.
+
+    Raises:
+        ValueError: If no adapter can interpret the locator.
+    """
     storage = require_storage_target(locator) if adapter is None else adapter
     storage.remove(locator, target_kind=target_kind)
 
@@ -274,7 +345,19 @@ def register_remove_on_rollback(
     adapter: StorageAdapter | None = None,
     description: str | None = None,
 ) -> None:
-    """Register target removal with a writer's rollback callback."""
+    """Register target removal with a writer's rollback callback.
+
+    Args:
+        rollback: Rollback registration callback, such as
+            :meth:`ogcat.hooks.OperationContext.rollback`.
+        locator: Target locator to remove if rollback runs.
+        target_kind: Whether the target is file-like or directory-like.
+        adapter: Optional pre-resolved storage adapter.
+        description: Optional human-readable rollback description.
+
+    Raises:
+        ValueError: If no adapter can interpret the locator.
+    """
     storage = require_storage_target(locator) if adapter is None else adapter
     rollback(
         lambda: storage.remove(locator, target_kind=target_kind),
@@ -283,7 +366,17 @@ def register_remove_on_rollback(
 
 
 def require_local_path(locator: ArtifactLocator) -> Path:
-    """Return a local path for a path-backed locator."""
+    """Return a local path for a path-backed locator.
+
+    Args:
+        locator: Artifact locator expected to contain a local path.
+
+    Returns:
+        Local filesystem path represented by the locator.
+
+    Raises:
+        ValueError: If the locator is not path-backed.
+    """
     path = locator.as_path()
     if path is None:
         raise ValueError(f"local adapter requires locator kind 'path', got {locator.kind!r}")

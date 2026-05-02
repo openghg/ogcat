@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import importlib.util
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,7 @@ from ogcat.storage import (
 
 
 def test_plan_artifact_renders_local_template_without_writing(tmp_path: Path) -> None:
+    """Planning renders local templates but does not create files or records."""
     source = tmp_path / "source.nc"
     source.write_text("payload", encoding="utf-8")
     root = tmp_path / "catalog"
@@ -53,6 +55,7 @@ def test_plan_artifact_collision_uses_storage_adapter_exists(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Local planning asks the storage adapter when allocating a suffix."""
     source = tmp_path / "source.nc"
     source.write_text("payload", encoding="utf-8")
     catalog = Catalog.create(
@@ -80,6 +83,7 @@ def test_plan_artifact_urlpath_root_does_not_import_fsspec(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Remote planning skips fsspec imports when the optional dependency is absent."""
     source = tmp_path / "source.nc"
     source.write_text("payload", encoding="utf-8")
     catalog = Catalog.create(
@@ -92,13 +96,20 @@ def test_plan_artifact_urlpath_root_does_not_import_fsspec(
         ),
     )
     real_import_module = importlib.import_module
+    real_find_spec = importlib.util.find_spec
 
     def fake_import_module(name: str, package: str | None = None) -> object:
         if name == "fsspec":
             raise AssertionError("planning should not import fsspec")
         return real_import_module(name, package)
 
+    def fake_find_spec(name: str):
+        if name == "fsspec":
+            return None
+        return real_find_spec(name)
+
     monkeypatch.setattr(importlib, "import_module", fake_import_module)
+    monkeypatch.setattr(importlib.util, "find_spec", fake_find_spec)
 
     plan = catalog.plan_artifact(
         source,
@@ -114,7 +125,43 @@ def test_plan_artifact_urlpath_root_does_not_import_fsspec(
     assert plan.adapter == "fsspec"
 
 
+def test_plan_artifact_urlpath_root_uses_available_collision_check(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Remote planning allocates a unique suffix when a URL path is known to exist."""
+    source = tmp_path / "source.nc"
+    source.write_text("payload", encoding="utf-8")
+    catalog = Catalog.create(
+        tmp_path / "catalog",
+        CatalogSpec(
+            catalog_name="files", default_schema=RecordSchema(filename_template="fixed{original_suffix}")
+        ),
+    )
+    seen: list[str] = []
+
+    def fake_exists(urlpath: str) -> bool:
+        seen.append(urlpath)
+        return urlpath.endswith("/fixed.nc")
+
+    monkeypatch.setattr(catalog_module, "_urlpath_exists_if_supported", fake_exists)
+
+    plan = catalog.plan_artifact(source, storage_root="s3://bucket/prefix", write_mode="copy")
+
+    assert plan.locator == ArtifactLocator.from_urlpath(
+        "s3://bucket/prefix/2026/source/fixed_2.nc",
+        relative_path="2026/source/fixed_2.nc",
+    )
+    assert seen == (
+        [
+            "s3://bucket/prefix/2026/source/fixed.nc",
+            "s3://bucket/prefix/2026/source/fixed_2.nc",
+        ]
+    )
+
+
 def test_plan_artifact_custom_local_root_has_no_catalog_relative_path(tmp_path: Path) -> None:
+    """Custom local storage roots do not populate catalog-relative compatibility paths."""
     source = tmp_path / "source.nc"
     source.write_text("payload", encoding="utf-8")
     external_root = tmp_path / "external-root"
@@ -146,6 +193,8 @@ def test_add_file_hook_urlpath_redirect_updates_plan_and_skips_path_extractor(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Hook-redirected add_file operations keep plan metadata consistent."""
+
     class RedirectHook:
         def resolve_artifact_locator(self, context: OperationContext) -> None:
             context.planned_locators = [
@@ -182,9 +231,11 @@ def test_add_file_hook_urlpath_redirect_updates_plan_and_skips_path_extractor(
 
     assert record.locator.kind == "urlpath"
     assert record.derived_metadata["writer"] == "redirected"
+    assert record.naming_metadata["resolved_filename"] == "copied.nc"
 
 
 def test_add_artifact_records_external_uri_without_existence_check(tmp_path: Path) -> None:
+    """External URI references are recorded without filesystem checks."""
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
 
     record = catalog.add_artifact(
@@ -201,6 +252,7 @@ def test_add_artifact_records_external_uri_without_existence_check(tmp_path: Pat
 def test_urlpath_adapter_reports_missing_fsspec_only_when_requested(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """URL-path adapters raise the optional fsspec error only when used."""
     real_import_module = importlib.import_module
 
     def fake_import_module(name: str, package: str | None = None) -> object:
@@ -219,6 +271,7 @@ def test_urlpath_adapter_reports_missing_fsspec_only_when_requested(
 
 
 def test_plan_storage_accepts_urlpath_locator_without_importing_fsspec() -> None:
+    """StoragePlan construction is descriptive and does not load fsspec."""
     plan = plan_storage(
         ArtifactLocator.from_urlpath("ssh://example.org/path/data.zarr"),
         target_kind="directory",
@@ -231,15 +284,14 @@ def test_plan_storage_accepts_urlpath_locator_without_importing_fsspec() -> None
 
 
 def test_artifact_locator_constructor_aliases(tmp_path: Path) -> None:
+    """The path constructor alias remains compatible with from_path."""
     path = tmp_path / "example.nc"
 
     assert ArtifactLocator.from_path(path) == ArtifactLocator.path(path)
-    assert ArtifactLocator.from_urlpath("memory://example.nc") == ArtifactLocator.urlpath(
-        "memory://example.nc"
-    )
 
 
 def test_storage_helpers_prepare_and_remove_local_targets(tmp_path: Path) -> None:
+    """Storage helper functions create parents, reject collisions, and remove targets."""
     file_locator = ArtifactLocator.from_path(tmp_path / "nested" / "output.txt")
     directory_locator = ArtifactLocator.from_path(tmp_path / "store.zarr")
 
@@ -262,6 +314,7 @@ def test_storage_helpers_prepare_and_remove_local_targets(tmp_path: Path) -> Non
 
 
 def test_register_remove_on_rollback_uses_keyword_description(tmp_path: Path) -> None:
+    """Rollback helper passes descriptions using the OperationContext-compatible keyword."""
     target = tmp_path / "written.txt"
     target.write_text("payload", encoding="utf-8")
     actions = []

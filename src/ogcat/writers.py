@@ -336,7 +336,6 @@ __all__ = [
     "MoveArtifactWriter",
     "PathWriteFunction",
     "SourceWriteFunction",
-    "TargetKind",
     "UnzipArtifactWriter",
     "memory_source",
     "memory_writer",
