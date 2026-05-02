@@ -80,6 +80,14 @@ class StorageAdapter(Protocol):
         ...
 
 
+class _RollbackRegistrar(Protocol):
+    """Callable shape accepted by writer rollback helpers."""
+
+    def __call__(self, action: Callable[[], None], *, description: str | None = None) -> object:
+        """Register a rollback action with an optional description."""
+        ...
+
+
 @dataclass(frozen=True, slots=True)
 class LocalStorageAdapter:
     """Storage adapter for local path locators."""
@@ -259,7 +267,7 @@ def remove_target(
 
 
 def register_remove_on_rollback(
-    rollback: Callable[[Callable[[], None], str], object],
+    rollback: _RollbackRegistrar,
     locator: ArtifactLocator,
     *,
     target_kind: TargetKind = "file",
@@ -270,7 +278,7 @@ def register_remove_on_rollback(
     storage = require_storage_target(locator) if adapter is None else adapter
     rollback(
         lambda: storage.remove(locator, target_kind=target_kind),
-        description or f"remove written {target_kind} artifact {locator.value}",
+        description=description or f"remove written {target_kind} artifact {locator.value}",
     )
 
 

@@ -183,12 +183,12 @@ class MoveArtifactWriter:
         """Move a local source path to the target and register rollback."""
         if source.kind != self.source_kind or source.path is None:
             raise ValueError(f"move writer requires OperationSource(kind={self.source_kind!r}, path=...)")
-        adapter = adapter_for_locator(target)
-        ensure_target_absent(target, adapter=adapter)
         if target.kind != "path":
             raise ValueError("move writer currently requires a path-backed target for rollback-safe moves")
         if self.target_kind != "file":
             raise ValueError("move writer currently supports file targets only")
+        adapter = adapter_for_locator(target)
+        ensure_target_absent(target, adapter=adapter)
         target_path = require_local_path(target)
         ensure_parent_directory(target, adapter=adapter)
         context.rollback(

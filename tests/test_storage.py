@@ -13,6 +13,7 @@ from ogcat.storage import (
     ensure_parent_directory,
     ensure_target_absent,
     plan_storage,
+    register_remove_on_rollback,
     remove_target,
 )
 
@@ -148,3 +149,24 @@ def test_storage_helpers_prepare_and_remove_local_targets(tmp_path: Path) -> Non
     remove_target(directory_locator, target_kind="directory")
     assert not (tmp_path / "nested" / "output.txt").exists()
     assert not (tmp_path / "store.zarr").exists()
+
+
+def test_register_remove_on_rollback_uses_keyword_description(tmp_path: Path) -> None:
+    target = tmp_path / "written.txt"
+    target.write_text("payload", encoding="utf-8")
+    actions = []
+    descriptions: list[str | None] = []
+
+    def rollback(action, *, description: str | None = None):
+        actions.append(action)
+        descriptions.append(description)
+
+    register_remove_on_rollback(
+        rollback,
+        ArtifactLocator.from_path(target),
+        description="remove test target",
+    )
+
+    assert descriptions == ["remove test target"]
+    actions[0]()
+    assert not target.exists()

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import ogcat.writers as writers_module
 from ogcat import (
     ArtifactLocator,
     Catalog,
@@ -213,6 +214,31 @@ def test_move_artifact_writer_restores_source_on_rollback(tmp_path: Path) -> Non
 
     assert source.read_text(encoding="utf-8") == "payload"
     assert not target.exists()
+    assert catalog.repository.all() == []
+
+
+def test_move_artifact_writer_rejects_urlpath_before_adapter_lookup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.txt"
+    source.write_text("payload", encoding="utf-8")
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+
+    def fail_adapter_lookup(target: ArtifactLocator):
+        raise AssertionError(f"adapter lookup should not run for {target.kind!r}")
+
+    monkeypatch.setattr(writers_module, "adapter_for_locator", fail_adapter_lookup)
+
+    with pytest.raises(ValueError, match="path-backed target"):
+        catalog.add_artifact(
+            record_type="moved_file",
+            locator=ArtifactLocator.from_urlpath("memory://catalog/files/moved.txt"),
+            source=path_source(source, kind="local_file"),
+            artifact_writer=MoveArtifactWriter(),
+        )
+
+    assert source.read_text(encoding="utf-8") == "payload"
     assert catalog.repository.all() == []
 
 
