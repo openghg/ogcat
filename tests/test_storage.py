@@ -51,6 +51,24 @@ def test_plan_artifact_renders_local_template_without_writing(tmp_path: Path) ->
     assert catalog.repository.all() == []
 
 
+def test_add_artifact_uses_planned_timestamp_for_date_named_paths(tmp_path: Path) -> None:
+    """Records created from plans keep the timestamp used for date templates."""
+    catalog = Catalog.create(
+        tmp_path / "catalog",
+        CatalogSpec(
+            catalog_name="files",
+            default_schema=RecordSchema(directory_template="{year_added}", filename_template="{title}.txt"),
+        ),
+    )
+
+    plan = catalog.plan_artifact(metadata={"title": "planned"}, write_mode="reference")
+    record = catalog.add_artifact(record_type="managed_artifact", storage_plan=plan)
+
+    assert plan.time_added is not None
+    assert record.time_added == plan.time_added
+    assert record.locator.relative_path == f"files/{plan.time_added[:4]}/planned.txt"
+
+
 def test_plan_artifact_collision_uses_storage_adapter_exists(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

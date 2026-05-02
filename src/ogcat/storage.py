@@ -37,6 +37,8 @@ class StoragePlan:
         profile: Optional storage profile name or hint.
         adapter: Optional adapter identifier, such as ``"local"`` or
             ``"fsspec"``.
+        time_added: Optional timestamp used when rendering date-based storage
+            templates.
     """
 
     locator: ArtifactLocator
@@ -46,6 +48,7 @@ class StoragePlan:
     ogcat_owned: bool = False
     profile: str | None = None
     adapter: str | None = None
+    time_added: str | None = None
 
 
 class StorageAdapter(Protocol):
@@ -216,6 +219,7 @@ def plan_storage(
     ogcat_owned: bool = False,
     profile: str | None = None,
     adapter: str | None = None,
+    time_added: str | None = None,
 ) -> StoragePlan:
     """Build a storage plan from already-resolved storage decisions.
 
@@ -228,6 +232,8 @@ def plan_storage(
         profile: Optional storage profile name or hint.
         adapter: Optional adapter identifier, such as ``"local"`` or
             ``"fsspec"``.
+        time_added: Optional timestamp used when rendering date-based storage
+            templates.
 
     Returns:
         Storage plan describing the target and intended write.
@@ -240,6 +246,7 @@ def plan_storage(
         ogcat_owned=ogcat_owned,
         profile=profile,
         adapter=adapter,
+        time_added=time_added,
     )
 
 

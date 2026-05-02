@@ -272,6 +272,7 @@ class Catalog:
         resolved_record_type = "managed_artifact" if record_type is None else record_type
         resolved_write_mode = write_mode or ("write" if ogcat_owned else "reference")
         source_path = None if path is None else Path(path).expanduser().resolve()
+        timestamp = _utc_timestamp()
         operation_id = uuid4().hex
         source = OperationSource(
             kind="planned_artifact" if source_path is None else "local_file",
@@ -306,6 +307,7 @@ class Catalog:
             record_type=record_type,
             source_path=source_path,
             storage_root=storage_root,
+            date_added=timestamp[:10],
         )
         context.planned_locators = [planned_locator]
         self.hook_manager.resolve_artifact_locator(context)
@@ -316,6 +318,7 @@ class Catalog:
             write_mode=resolved_write_mode,
             ogcat_owned=ogcat_owned,
             adapter=_adapter_name(canonical_locator),
+            time_added=timestamp,
         )
         context.storage_plan = plan
         return plan
@@ -379,6 +382,8 @@ class Catalog:
             locator = storage_plan.locator
             if storage_mode is None:
                 storage_mode = storage_plan.write_mode
+            if time_added is None:
+                time_added = storage_plan.time_added
         assert locator is not None
         metadata_input = {} if metadata is None else metadata
         derived_metadata = {} if derived_metadata is None else dict(derived_metadata)
@@ -764,6 +769,7 @@ class Catalog:
         record_type: str | None,
         source_path: Path | None,
         storage_root: str | Path | None,
+        date_added: str,
     ) -> ArtifactLocator:
         """Render schema naming templates into a local or fsspec target locator."""
         directory_template = _require_template(schema.directory_template, field_name="directory_template")
@@ -774,7 +780,7 @@ class Catalog:
             operation_id=context.operation_id,
             original_path=naming_source,
             metadata=context.user_metadata,
-            date_added=_utc_timestamp()[:10],
+            date_added=date_added,
         )
 
         if storage_root is not None and _is_urlpath_root(storage_root):
@@ -920,8 +926,9 @@ class Catalog:
                 if storage_plan_factory is not None
                 else plan_storage(
                     canonical_locator,
-                    write_mode="reference",
-                    ogcat_owned=False,
+                    target_kind=_target_kind_from_writer(artifact_writer),
+                    write_mode=_write_mode_from_writer(artifact_writer),
+                    ogcat_owned=artifact_writer is not None,
                     adapter=_adapter_name(canonical_locator),
                 )
             )
@@ -1078,6 +1085,26 @@ def _storage_plan_with_locator(plan: StoragePlan, locator: ArtifactLocator) -> S
     if plan.locator == locator:
         return plan
     return replace(plan, locator=locator, adapter=_adapter_name(locator))
+
+
+def _target_kind_from_writer(artifact_writer: ArtifactWriter | None) -> TargetKind:
+    """Infer a storage target kind from a writer when it declares one."""
+    if artifact_writer is None:
+        return "file"
+    target_kind = getattr(artifact_writer, "target_kind", "file")
+    if target_kind in {"file", "directory"}:
+        return cast(TargetKind, target_kind)
+    return "file"
+
+
+def _write_mode_from_writer(artifact_writer: ArtifactWriter | None) -> WriteMode:
+    """Infer a storage write mode from a writer when it declares one."""
+    if artifact_writer is None:
+        return "reference"
+    write_mode = getattr(artifact_writer, "write_mode", "write")
+    if write_mode in {"copy", "move", "write", "reference"}:
+        return cast(WriteMode, write_mode)
+    return "write"
 
 
 def _adapter_name(locator: ArtifactLocator) -> str | None:

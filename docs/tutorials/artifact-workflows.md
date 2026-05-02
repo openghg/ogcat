@@ -719,9 +719,12 @@ class RequestsDownloadWriter:
         target_path.parent.mkdir(parents=True, exist_ok=True)
         context.rollback(lambda path=target_path: path.unlink(missing_ok=True), description="remove download")
 
-        response = requests.get(url, timeout=60)
-        response.raise_for_status()
-        target_path.write_bytes(response.content)
+        with requests.get(url, timeout=60, stream=True) as response:
+            response.raise_for_status()
+            with target_path.open("wb") as target_file:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        target_file.write(chunk)
 
         context.derived_metadata.update(
             {

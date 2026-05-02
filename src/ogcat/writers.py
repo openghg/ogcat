@@ -28,6 +28,7 @@ from ogcat.hooks import OperationContext, OperationSource
 from ogcat.models import ArtifactLocator, JsonValue, MetadataDict
 from ogcat.storage import (
     TargetKind,
+    WriteMode,
     adapter_for_locator,
     ensure_parent_directory,
     ensure_target_absent,
@@ -113,6 +114,7 @@ class FunctionArtifactWriter:
     write_function: SourceWriteFunction
     target_kind: TargetKind
     source_kind: str | None = None
+    write_mode: WriteMode = "write"
 
     def write(
         self,
@@ -141,6 +143,7 @@ class CopyArtifactWriter:
 
     source_kind: str = "local_file"
     target_kind: TargetKind = "file"
+    write_mode: WriteMode = "copy"
 
     def write(
         self,
@@ -173,6 +176,7 @@ class MoveArtifactWriter:
 
     source_kind: str = "local_file"
     target_kind: TargetKind = "file"
+    write_mode: WriteMode = "move"
 
     def write(
         self,
@@ -252,6 +256,8 @@ class UnzipArtifactWriter:
     """Example writer that safely extracts a zip file into a directory target."""
 
     source_kind: str = "zip_file"
+    target_kind: TargetKind = "directory"
+    write_mode: WriteMode = "write"
 
     def write(
         self,

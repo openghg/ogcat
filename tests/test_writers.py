@@ -29,6 +29,8 @@ from ogcat.models import MetadataDict
 
 
 def test_memory_writer_writes_file_and_persists_metadata(tmp_path: Path) -> None:
+    """Memory writer writes file data and records returned metadata."""
+
     def write_text(data: object, target: Path) -> MetadataDict:
         text = str(data)
         target.write_text(text, encoding="utf-8")
@@ -49,6 +51,8 @@ def test_memory_writer_writes_file_and_persists_metadata(tmp_path: Path) -> None
 
 
 def test_path_writer_writes_directory_and_rolls_back_on_hook_failure(tmp_path: Path) -> None:
+    """Path writer directory targets are cleaned up on later hook failure."""
+
     def copy_tree(source: Path, target: Path) -> MetadataDict:
         (target / "copied.txt").write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
         return {"copied": True}
@@ -75,7 +79,38 @@ def test_path_writer_writes_directory_and_rolls_back_on_hook_failure(tmp_path: P
     assert catalog.repository.all() == []
 
 
+def test_locator_writer_fallback_plan_uses_writer_intent(tmp_path: Path) -> None:
+    """Plain locator-plus-writer calls expose writer storage intent in context."""
+    seen: list[tuple[str, str]] = []
+
+    def copy_tree(source: Path, target: Path) -> MetadataDict:
+        (target / "copied.txt").write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+        return {}
+
+    class InspectPlanHook:
+        def extract_metadata(self, context: OperationContext) -> None:
+            assert context.storage_plan is not None
+            seen.append((context.storage_plan.target_kind, context.storage_plan.write_mode))
+
+    source = tmp_path / "source.txt"
+    source.write_text("payload", encoding="utf-8")
+    target = tmp_path / "directory-target"
+    registry = PluginRegistry([InspectPlanHook()])
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"), plugins=registry)
+
+    catalog.add_artifact(
+        record_type="processed_directory",
+        locator=ArtifactLocator.path(target),
+        source=path_source(source, kind="local_text"),
+        artifact_writer=path_writer(copy_tree, target_kind="directory", source_kind="local_text"),
+    )
+
+    assert seen == [("directory", "write")]
+
+
 def test_source_writer_receives_full_operation_source(tmp_path: Path) -> None:
+    """Source writer receives the full OperationSource object."""
+
     def write_source(source: OperationSource, target: Path) -> MetadataDict:
         assert source.path is None
         assert source.payload == {"value": 3}
