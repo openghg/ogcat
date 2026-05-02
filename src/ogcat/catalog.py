@@ -24,7 +24,6 @@ from ogcat.storage import (
     StoragePlan,
     TargetKind,
     WriteMode,
-    adapter_for_locator,
     plan_storage,
 )
 from ogcat.tinydb_repository import TinyDbCatalogRepository
@@ -196,12 +195,14 @@ class Catalog:
                 target_kind="file",
                 write_mode=cast(WriteMode, chosen_operation),
                 ogcat_owned=True,
-                adapter="local",
+                adapter=_adapter_name(locator),
             )
 
         def collect_file_metadata(context: OperationContext, locator: ArtifactLocator) -> None:
             """Collect generic derived metadata from the written file."""
-            context.derived_metadata.update(extract_derived_metadata(_path_from_locator(locator)))
+            locator_path = locator.as_path()
+            if locator_path is not None:
+                context.derived_metadata.update(extract_derived_metadata(locator_path))
 
         source_description = OperationSource(kind="local_file", path=source, descriptor=str(source))
         artifact_writer: ArtifactWriter = (
@@ -779,19 +780,12 @@ class Catalog:
             root_url = str(storage_root).rstrip("/")
             fake_root = Path("/__ogcat_storage__")
 
-            def storage_adapter_locator(candidate: Path) -> ArtifactLocator:
-                """Build a URL locator for a candidate rendered path."""
-                relative_path = candidate.relative_to(fake_root).as_posix()
-                return ArtifactLocator.from_urlpath(_join_urlpath(root_url, relative_path))
-
             target, _rel_path, _resolved_filename = render_storage_location(
                 files_root=fake_root,
                 directory_template=directory_template,
                 filename_template=filename_template,
                 context=naming_context,
-                exists=lambda candidate: adapter_for_locator(storage_adapter_locator(candidate)).exists(
-                    storage_adapter_locator(candidate)
-                ),
+                exists=lambda _candidate: False,
             )
             relative_path = target.relative_to(fake_root).as_posix()
             return ArtifactLocator.from_urlpath(
@@ -811,7 +805,8 @@ class Catalog:
             context=naming_context,
             exists=lambda candidate: storage_adapter.exists(ArtifactLocator.from_path(candidate)),
         )
-        return ArtifactLocator.from_path(target, relative_path=rel_path)
+        relative_path = rel_path if storage_root is None else None
+        return ArtifactLocator.from_path(target, relative_path=relative_path)
 
     def _add_artifact_in_transaction(
         self,
