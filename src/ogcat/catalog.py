@@ -791,10 +791,7 @@ class Catalog:
                 ),
             )
             relative_path = target.relative_to(fake_root).as_posix()
-            return ArtifactLocator.from_urlpath(
-                _join_urlpath(root_url, relative_path),
-                relative_path=relative_path,
-            )
+            return ArtifactLocator.from_urlpath(_join_urlpath(root_url, relative_path))
 
         if storage_root is None:
             files_root = self.root / self.spec.files_root
@@ -1099,16 +1096,19 @@ def _urlpath_exists_if_supported(urlpath: str) -> bool:
         urlpath: URL path to check.
 
     Returns:
-        ``True`` when the fsspec target exists. Returns ``False`` when fsspec is
-        not installed so planning can remain a dry-run without optional storage
-        dependencies.
+        ``True`` when the fsspec target exists. Returns ``False`` when fsspec or
+        a protocol-specific dependency is not installed so planning can remain a
+        dry-run without optional storage dependencies.
     """
     if importlib.util.find_spec("fsspec") is None:
         return False
     from ogcat.storage import adapter_for_locator
 
     locator = ArtifactLocator.from_urlpath(urlpath)
-    return adapter_for_locator(locator).exists(locator)
+    try:
+        return adapter_for_locator(locator).exists(locator)
+    except ImportError:
+        return False
 
 
 def _is_urlpath_root(value: str | Path) -> bool:

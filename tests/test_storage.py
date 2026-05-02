@@ -120,9 +120,44 @@ def test_plan_artifact_urlpath_root_does_not_import_fsspec(
 
     assert plan.locator == ArtifactLocator.from_urlpath(
         "s3://bucket/prefix/CO2/remote.nc",
-        relative_path="CO2/remote.nc",
     )
+    assert plan.locator.relative_path is None
     assert plan.adapter == "fsspec"
+
+
+def test_urlpath_storage_root_does_not_populate_stored_relpath(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Remote planned locators do not fill local compatibility path fields."""
+    source = tmp_path / "source.nc"
+    source.write_text("payload", encoding="utf-8")
+    catalog = Catalog.create(
+        tmp_path / "catalog",
+        CatalogSpec(
+            catalog_name="files",
+            default_schema=RecordSchema(
+                directory_template="{species}", filename_template="{title}{original_suffix}"
+            ),
+        ),
+    )
+    monkeypatch.setattr(catalog_module, "_urlpath_exists_if_supported", lambda _urlpath: False)
+
+    plan = catalog.plan_artifact(
+        source,
+        metadata={"species": "CO2", "title": "remote"},
+        storage_root="s3://bucket/prefix",
+        write_mode="reference",
+    )
+    record = catalog.add_artifact(
+        record_type="managed_file",
+        storage_plan=plan,
+        metadata={"species": "CO2", "title": "remote"},
+    )
+
+    assert record.locator.kind == "urlpath"
+    assert record.locator.relative_path is None
+    assert record.stored_relpath is None
 
 
 def test_plan_artifact_urlpath_root_uses_available_collision_check(
@@ -150,8 +185,8 @@ def test_plan_artifact_urlpath_root_uses_available_collision_check(
 
     assert plan.locator == ArtifactLocator.from_urlpath(
         "s3://bucket/prefix/2026/source/fixed_2.nc",
-        relative_path="2026/source/fixed_2.nc",
     )
+    assert plan.locator.relative_path is None
     assert seen == (
         [
             "s3://bucket/prefix/2026/source/fixed.nc",

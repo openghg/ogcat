@@ -66,14 +66,16 @@ plan = catalog.plan_artifact(
 print(plan.locator)
 ```
 
-After locator-resolution hooks have run, the selected plan is available to later
-hooks and artifact writers as ``context.storage_plan``.  Earlier hooks such as
-``before_validate_metadata`` and ``resolve_artifact_locator`` should inspect
-``context.planned_locators`` instead because the final ``StoragePlan`` has not
-been built yet.  The plan lets domain code materialise a generic artifact such as
-a directory of NetCDF files or a ``.zarr`` store while ogcat core only records
-the locator.  Artifact writers remain responsible for filesystem side effects
-and rollback registration.
+Hook timing matters.  ``before_validate_metadata`` runs before planning, so it
+receives neither ``context.planned_locators`` nor ``context.storage_plan``.
+``resolve_artifact_locator`` receives proposed locators in
+``context.planned_locators`` and can return the locator that should be used for
+the artifact being added.  After that hook returns, ogcat builds the final
+``StoragePlan`` and exposes it to later hooks and artifact writers as
+``context.storage_plan``.  The plan lets domain code materialise a generic
+artifact such as a directory of NetCDF files or a ``.zarr`` store while ogcat
+core only records the locator.  Artifact writers remain responsible for
+filesystem side effects and rollback registration.
 
 ## External references
 
