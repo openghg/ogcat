@@ -199,9 +199,7 @@ class Catalog:
                 ogcat_owned=True,
                 adapter=_adapter_name(locator),
                 storage_relative_path=locator.relative_path,
-                resolved_directory=(
-                    None if locator.relative_path is None else Path(locator.relative_path).parent.as_posix()
-                ),
+                resolved_directory=_directory_from_relative_path(locator.relative_path),
                 resolved_filename=_filename_from_locator(locator),
             )
 
@@ -962,8 +960,6 @@ class Catalog:
             self.hook_manager.resolve_artifact_locator(hook_context)
             canonical_locator = _artifact_locator_from_context(hook_context)
             hook_context.planned_locators[0] = canonical_locator
-            if naming_metadata is not None and "resolved_filename" in naming_metadata:
-                naming_metadata["resolved_filename"] = _filename_from_locator(canonical_locator)
             hook_context.storage_plan = (
                 storage_plan_factory(hook_context, canonical_locator)
                 if storage_plan_factory is not None
@@ -981,6 +977,8 @@ class Catalog:
             storage_plan = hook_context.storage_plan
             if storage_plan is None:
                 raise RuntimeError("Add operation did not produce a storage plan.")
+            if naming_metadata is not None:
+                naming_metadata.update(_naming_metadata_from_storage_plan(storage_plan))
             if artifact_writer is None:
                 if storage_plan.write_mode != "reference":
                     raise ValueError(
@@ -1243,6 +1241,14 @@ def _directory_from_locator(locator: ArtifactLocator) -> str:
     if locator.kind == "path":
         return Path(locator.value).parent.as_posix()
     return locator.value.rstrip("/").rsplit("/", 1)[0]
+
+
+def _directory_from_relative_path(relative_path: str | None) -> str | None:
+    """Return the directory component from a storage-relative path."""
+    if relative_path is None:
+        return None
+    directory = Path(relative_path).parent.as_posix()
+    return "" if directory == "." else directory
 
 
 def _path_from_locator(locator: ArtifactLocator) -> Path:

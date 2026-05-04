@@ -321,6 +321,8 @@ def test_add_file_hook_urlpath_redirect_updates_plan_and_skips_path_extractor(
 
     assert record.locator.kind == "urlpath"
     assert record.derived_metadata["writer"] == "redirected"
+    assert record.naming_metadata["storage_relative_path"] == "copied.nc"
+    assert record.naming_metadata["resolved_directory"] == ""
     assert record.naming_metadata["resolved_filename"] == "copied.nc"
 
 

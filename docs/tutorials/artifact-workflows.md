@@ -714,7 +714,7 @@ Write a managed copy with a small requests-based writer:
 ```python
 import requests
 
-from ogcat import OperationContext, OperationSource, memory_source
+from ogcat import ArtifactLocator, OperationContext, OperationSource, memory_source
 
 
 class RequestsDownloadWriter:
