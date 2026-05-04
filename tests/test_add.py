@@ -513,7 +513,7 @@ def test_add_file_removes_partial_target_when_copy_fails(
         target_path.write_text("partial", encoding="utf-8")
         raise OSError("simulated copy failure")
 
-    monkeypatch.setattr("ogcat.catalog.shutil.copy2", fail_copy)
+    monkeypatch.setattr("ogcat.storage.shutil.copy2", fail_copy)
 
     with pytest.raises(OSError, match="simulated copy failure"):
         catalog.add_file(source)

@@ -14,7 +14,6 @@ from ogcat.models import CatalogRecord, JsonValue
 from ogcat.search import flatten_lookup, resolve_field
 
 DEFAULT_RECORDSET_FIELDS = ("id", "title", "product", "species", "path")
-_METADATA_NAMESPACES = ("user_metadata", "derived_metadata", "naming_metadata")
 
 
 def resolve_record_field(

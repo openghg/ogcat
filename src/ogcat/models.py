@@ -69,7 +69,7 @@ class ArtifactLocator:
     relative_path: str | None = None
 
     @classmethod
-    def path(cls, path: str | Path, *, relative_path: str | None = None) -> ArtifactLocator:
+    def from_path(cls, path: str | Path, *, relative_path: str | None = None) -> ArtifactLocator:
         """Build a locator for a local path-backed artifact.
 
         Args:
@@ -80,6 +80,28 @@ class ArtifactLocator:
             Path-backed artifact locator.
         """
         return cls(kind="path", value=str(path), relative_path=relative_path)
+
+    @classmethod
+    def path(cls, path: str | Path, *, relative_path: str | None = None) -> ArtifactLocator:
+        """Build a local path locator.
+
+        This compatibility alias is kept for existing code. Prefer
+        :meth:`from_path` in new code.
+        """
+        return cls.from_path(path, relative_path=relative_path)
+
+    @classmethod
+    def from_urlpath(cls, urlpath: str, *, relative_path: str | None = None) -> ArtifactLocator:
+        """Build a locator for an fsspec-addressable URL path.
+
+        Args:
+            urlpath: URL path understood by fsspec, such as ``s3://...``.
+            relative_path: Optional storage-root-relative path.
+
+        Returns:
+            URL-path-backed artifact locator.
+        """
+        return cls(kind="urlpath", value=str(urlpath), relative_path=relative_path)
 
     def to_dict(self) -> dict[str, JsonValue]:
         """Convert the locator to a plain dictionary."""
@@ -159,7 +181,11 @@ class CatalogRecord:
         locator_path = self.locator.as_path()
         if locator_path is not None and self.stored_abspath is None:
             self.stored_abspath = str(locator_path)
-        if self.locator.relative_path is not None and self.stored_relpath is None:
+        if (
+            self.locator.kind == "path"
+            and self.locator.relative_path is not None
+            and self.stored_relpath is None
+        ):
             self.stored_relpath = self.locator.relative_path
 
     def path(self) -> Path | None:

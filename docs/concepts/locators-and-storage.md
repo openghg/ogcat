@@ -11,13 +11,22 @@ the file ended up there.
     this kind.  Path-backed records support :meth:`ogcat.CatalogRecord.path`
     and the ``ogcat path`` CLI command.
 
+``urlpath``
+:   An fsspec-addressable URL path, such as ``ssh://host/path/file.nc`` or
+    ``s3://bucket/path/store.zarr``.  These locators are interpreted only when
+    fsspec-backed storage behavior is requested.
+
+``uri``
+:   An external reference that ogcat records but does not manage or inspect.
+    Use this for DOI, FTP, HTTP, ICOS, object-store, or project-specific
+    references that domain code will interpret later.
+
 ``opaque``
 :   A placeholder used when the locator is not yet set or when no path is
     applicable.  You will not normally see this in practice.
 
-Other kinds such as ``uri`` or ``s3`` can be stored using
-:meth:`ogcat.ArtifactLocator` directly, but ogcat does not interpret them
-beyond recording the string value.
+Other project-specific kinds can be stored using :meth:`ogcat.ArtifactLocator`
+directly, but ogcat does not interpret them beyond recording the string value.
 
 ## Managed files
 
@@ -41,6 +50,38 @@ directory: {year_added}/{original_stem}
 filename:  {title_slug|original_stem}{original_suffix}
 ```
 
+## Storage plans
+
+``Catalog.plan_artifact_storage()`` performs the planning part of an add operation
+without writing data or inserting a record.  It validates metadata, applies the
+same naming templates, lets locator-resolution hooks adjust the result, and
+returns a ``StoragePlan``.
+
+```python
+plan = catalog.plan_artifact_storage(
+    Path("incoming/example.nc"),
+    metadata={"title": "example"},
+    write_mode="copy",
+)
+print(plan.locator)
+```
+
+``StoragePlan`` describes storage only.  It carries the resolved locator,
+target kind, write mode, storage-relative path, resolved directory, and resolved
+filename.  It does not carry record metadata; pass metadata again to
+``add_artifact(...)`` when turning a storage plan into a record.
+
+Hook timing matters.  ``before_validate_metadata`` runs before planning, so it
+receives neither ``context.planned_locators`` nor ``context.storage_plan``.
+``resolve_artifact_locator`` receives proposed locators in
+``context.planned_locators`` and can return the locator that should be used for
+the artifact being added.  After that hook returns, ogcat builds the final
+``StoragePlan`` and exposes it to later hooks and artifact writers as
+``context.storage_plan``.  The plan lets domain code materialise a generic
+artifact such as a directory of NetCDF files or a ``.zarr`` store while ogcat
+core only records the locator.  Artifact writers remain responsible for
+filesystem side effects and rollback registration.
+
 ## External references
 
 To catalog a file that should stay in place, use ``add_artifact()`` with a
@@ -51,13 +92,28 @@ from ogcat import ArtifactLocator
 
 catalog.add_artifact(
     record_type="external_reference",
-    locator=ArtifactLocator.path("/data/shared/flux.nc"),
+    locator=ArtifactLocator.from_path("/data/shared/flux.nc"),
     metadata={"species": "CO2"},
 )
 ```
 
 The file is not copied or moved.  ogcat records only the path and the
 metadata.
+
+For non-local references, use a ``uri`` locator when ogcat should not check or
+manage the target:
+
+```python
+catalog.add_artifact(
+    record_type="external_reference",
+    locator=ArtifactLocator(kind="uri", value="ftp://example.org/data/file.nc"),
+    storage_mode="external",
+)
+```
+
+Use ``ArtifactLocator.from_urlpath(...)`` when the location should be interpreted
+by fsspec-backed storage adapters.  Install the optional dependency with
+``ogcat[fsspec]`` before a writer performs fsspec-backed storage work.
 
 ## Catalog layout
 

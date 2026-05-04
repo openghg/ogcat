@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from ogcat.models import ArtifactLocator, MetadataDict
+from ogcat.storage import StoragePlan
 from ogcat.transactions import RollbackAction
 from ogcat.validation import ValidationReport
 
@@ -123,6 +124,7 @@ class OperationContext:
             normally call ``context.rollback(...)`` instead.
         source: Artifact source description for this operation.
         storage_mode: Optional storage mode, such as ``"copy"`` or ``"move"``.
+        storage_plan: Optional planned artifact storage decision.
         original_path: Optional original path or URI.
         original_filename: Optional original filename.
         suffixes: Source suffixes associated with the artifact.
@@ -138,6 +140,7 @@ class OperationContext:
     register_rollback: RollbackRegistrar | None = None
     source: OperationSource = field(default_factory=lambda: OperationSource(kind="unknown"))
     storage_mode: str | None = None
+    storage_plan: StoragePlan | None = None
     original_path: str | Path | None = None
     original_filename: str | None = None
     suffixes: list[str] = field(default_factory=list)

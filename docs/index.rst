@@ -31,6 +31,7 @@ searching records.
    tutorials/basic-catalog
    tutorials/intermediate
    tutorials/advanced-real-world
+   tutorials/artifact-workflows
 
 .. toctree::
    :maxdepth: 1

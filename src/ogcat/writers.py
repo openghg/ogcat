@@ -22,12 +22,20 @@ import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, TypeAlias
+from typing import TypeAlias
 
 from ogcat.hooks import OperationContext, OperationSource
 from ogcat.models import ArtifactLocator, JsonValue, MetadataDict
+from ogcat.storage import (
+    TargetKind,
+    WriteMode,
+    adapter_for_locator,
+    ensure_parent_directory,
+    ensure_target_absent,
+    remove_target,
+    require_local_path,
+)
 
-TargetKind: TypeAlias = Literal["file", "directory"]
 SourceWriteFunction: TypeAlias = Callable[[OperationSource, Path], MetadataDict | None]
 MemoryWriteFunction: TypeAlias = Callable[[object, Path], MetadataDict | None]
 PathWriteFunction: TypeAlias = Callable[[Path, Path], MetadataDict | None]
@@ -106,6 +114,7 @@ class FunctionArtifactWriter:
     write_function: SourceWriteFunction
     target_kind: TargetKind
     source_kind: str | None = None
+    write_mode: WriteMode = "write"
 
     def write(
         self,
@@ -126,6 +135,74 @@ class FunctionArtifactWriter:
         metadata = self.write_function(source, target_path)
         if metadata is not None:
             context.derived_metadata.update(metadata)
+
+
+@dataclass(frozen=True, slots=True)
+class CopyArtifactWriter:
+    """Artifact writer that copies a local source path to a storage target."""
+
+    source_kind: str = "local_file"
+    target_kind: TargetKind = "file"
+    write_mode: WriteMode = "copy"
+
+    def write(
+        self,
+        context: OperationContext,
+        source: OperationSource,
+        target: ArtifactLocator,
+    ) -> None:
+        """Copy a local source path to the target and register rollback."""
+        if source.kind != self.source_kind or source.path is None:
+            raise ValueError(f"copy writer requires OperationSource(kind={self.source_kind!r}, path=...)")
+        if self.target_kind != "file":
+            raise ValueError("copy writer currently supports file targets only")
+        adapter = adapter_for_locator(target)
+        ensure_target_absent(target, adapter=adapter)
+        ensure_parent_directory(target, adapter=adapter)
+        context.rollback(
+            lambda locator=target, target_kind=self.target_kind, storage=adapter: remove_target(
+                locator,
+                target_kind=target_kind,
+                adapter=storage,
+            ),
+            description=f"remove copied {self.target_kind} artifact {target.value}",
+        )
+        adapter.copy_from_path(source.path, target)
+
+
+@dataclass(frozen=True, slots=True)
+class MoveArtifactWriter:
+    """Artifact writer that moves a local source path to a storage target."""
+
+    source_kind: str = "local_file"
+    target_kind: TargetKind = "file"
+    write_mode: WriteMode = "move"
+
+    def write(
+        self,
+        context: OperationContext,
+        source: OperationSource,
+        target: ArtifactLocator,
+    ) -> None:
+        """Move a local source path to the target and register rollback."""
+        if source.kind != self.source_kind or source.path is None:
+            raise ValueError(f"move writer requires OperationSource(kind={self.source_kind!r}, path=...)")
+        if target.kind != "path":
+            raise ValueError("move writer currently requires a path-backed target for rollback-safe moves")
+        if self.target_kind != "file":
+            raise ValueError("move writer currently supports file targets only")
+        adapter = adapter_for_locator(target)
+        ensure_target_absent(target, adapter=adapter)
+        target_path = require_local_path(target)
+        ensure_parent_directory(target, adapter=adapter)
+        context.rollback(
+            lambda source_path=source.path, stored_path=target_path: _rollback_moved_file(
+                source_path=source_path,
+                target_path=stored_path,
+            ),
+            description=f"restore moved file from {target_path} to {source.path}",
+        )
+        adapter.move_from_path(source.path, target)
 
 
 def source_writer(
@@ -179,6 +256,8 @@ class UnzipArtifactWriter:
     """Example writer that safely extracts a zip file into a directory target."""
 
     source_kind: str = "zip_file"
+    target_kind: TargetKind = "directory"
+    write_mode: WriteMode = "write"
 
     def write(
         self,
@@ -245,12 +324,24 @@ def _remove_target(target_path: Path, target_kind: TargetKind) -> None:
     shutil.rmtree(target_path, ignore_errors=True)
 
 
+def _rollback_moved_file(*, source_path: Path, target_path: Path) -> None:
+    """Restore a moved file when possible, otherwise remove the moved target."""
+    if not target_path.exists():
+        return
+    if not source_path.exists():
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(target_path), str(source_path))
+        return
+    target_path.unlink(missing_ok=True)
+
+
 __all__ = [
+    "CopyArtifactWriter",
     "FunctionArtifactWriter",
     "MemoryWriteFunction",
+    "MoveArtifactWriter",
     "PathWriteFunction",
     "SourceWriteFunction",
-    "TargetKind",
     "UnzipArtifactWriter",
     "memory_source",
     "memory_writer",

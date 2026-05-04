@@ -7,6 +7,19 @@ from ogcat.plugins import PluginRegistry
 from ogcat.record_set import CatalogRecordSet
 from ogcat.search import FieldPath, SearchOp, SearchQuery, SearchTerm
 from ogcat.spec import CatalogSpec, RecordSchema
+from ogcat.storage import (
+    FsspecStorageAdapter,
+    LocalStorageAdapter,
+    StoragePlan,
+    adapter_for_locator,
+    create_directory_target,
+    ensure_parent_directory,
+    ensure_target_absent,
+    plan_storage,
+    remove_target,
+    require_local_path,
+    require_storage_target,
+)
 from ogcat.transactions import OperationState, RollbackFailure, UnitOfWork
 from ogcat.validation import (
     ValidationIssue,
@@ -17,7 +30,9 @@ from ogcat.validation import (
     validate_spec,
 )
 from ogcat.writers import (
+    CopyArtifactWriter,
     FunctionArtifactWriter,
+    MoveArtifactWriter,
     UnzipArtifactWriter,
     memory_source,
     memory_writer,
@@ -33,10 +48,14 @@ __all__ = [
     "CatalogRecord",
     "CatalogRecordSet",
     "CatalogSpec",
+    "CopyArtifactWriter",
+    "FsspecStorageAdapter",
     "FunctionArtifactWriter",
     "HookManager",
     "HookWarning",
+    "LocalStorageAdapter",
     "MetadataFieldDescription",
+    "MoveArtifactWriter",
     "OperationState",
     "OperationContext",
     "OperationSource",
@@ -47,6 +66,7 @@ __all__ = [
     "SearchOp",
     "SearchQuery",
     "SearchTerm",
+    "StoragePlan",
     "UnitOfWork",
     "UnzipArtifactWriter",
     "ValidationIssue",
@@ -59,5 +79,13 @@ __all__ = [
     "memory_writer",
     "path_source",
     "path_writer",
+    "adapter_for_locator",
+    "create_directory_target",
+    "ensure_parent_directory",
+    "ensure_target_absent",
+    "plan_storage",
+    "remove_target",
+    "require_local_path",
+    "require_storage_target",
     "source_writer",
 ]

@@ -13,6 +13,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+fsspec = [
+  "fsspec>=2024.0",
+]
 netcdf = [
   "xarray>=2024.0",
 ]

@@ -77,5 +77,5 @@ Event log
   operation state.
 
 Storage profile
-: A planned named configuration for resolving non-local storage backends and
+: A planned named configuration for resolving non-local storage adapters and
   credentials without storing secrets in records.
