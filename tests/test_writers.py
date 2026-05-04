@@ -323,7 +323,8 @@ def test_writer_receives_storage_plan_and_rolls_back_directory_target(tmp_path: 
     assert not target.exists()
 
 
-def test_plan_artifact_can_allocate_zarr_directory_name(tmp_path: Path) -> None:
+def test_plan_artifact_storage_can_allocate_zarr_directory_name(tmp_path: Path) -> None:
+    """Storage planning can allocate directory-like Zarr store names."""
     catalog = Catalog.create(
         tmp_path / "catalog",
         CatalogSpec(
@@ -337,7 +338,7 @@ def test_plan_artifact_can_allocate_zarr_directory_name(tmp_path: Path) -> None:
         ),
     )
 
-    plan = catalog.plan_artifact(
+    plan = catalog.plan_artifact_storage(
         record_type="zarr_store",
         metadata={"species": "CO2", "domain": "EUROPE", "title": "my_store"},
         target_kind="directory",

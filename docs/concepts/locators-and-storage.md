@@ -52,19 +52,24 @@ filename:  {title_slug|original_stem}{original_suffix}
 
 ## Storage plans
 
-``Catalog.plan_artifact()`` performs the planning part of an add operation
+``Catalog.plan_artifact_storage()`` performs the planning part of an add operation
 without writing data or inserting a record.  It validates metadata, applies the
 same naming templates, lets locator-resolution hooks adjust the result, and
 returns a ``StoragePlan``.
 
 ```python
-plan = catalog.plan_artifact(
+plan = catalog.plan_artifact_storage(
     Path("incoming/example.nc"),
     metadata={"title": "example"},
     write_mode="copy",
 )
 print(plan.locator)
 ```
+
+``StoragePlan`` describes storage only.  It carries the resolved locator,
+target kind, write mode, storage-relative path, resolved directory, and resolved
+filename.  It does not carry record metadata; pass metadata again to
+``add_artifact(...)`` when turning a storage plan into a record.
 
 Hook timing matters.  ``before_validate_metadata`` runs before planning, so it
 receives neither ``context.planned_locators`` nor ``context.storage_plan``.

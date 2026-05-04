@@ -9,6 +9,7 @@ import pytest
 import ogcat.catalog as catalog_module
 from ogcat import ArtifactLocator, Catalog, CatalogSpec, PluginRegistry, RecordSchema
 from ogcat.hooks import OperationContext, OperationSource
+from ogcat.models import MetadataDict
 from ogcat.storage import (
     LocalStorageAdapter,
     adapter_for_locator,
@@ -21,7 +22,7 @@ from ogcat.storage import (
 )
 
 
-def test_plan_artifact_renders_local_template_without_writing(tmp_path: Path) -> None:
+def test_plan_artifact_storage_renders_local_template_without_writing(tmp_path: Path) -> None:
     """Planning renders local templates but does not create files or records."""
     source = tmp_path / "source.nc"
     source.write_text("payload", encoding="utf-8")
@@ -37,7 +38,7 @@ def test_plan_artifact_renders_local_template_without_writing(tmp_path: Path) ->
         ),
     )
 
-    plan = catalog.plan_artifact(
+    plan = catalog.plan_artifact_storage(
         source,
         metadata={"species": "CO2", "year": 2024, "title": "paris"},
         write_mode="copy",
@@ -46,6 +47,9 @@ def test_plan_artifact_renders_local_template_without_writing(tmp_path: Path) ->
     expected = root / "files" / "CO2" / "2024" / "paris.nc"
     assert plan.locator == ArtifactLocator.from_path(expected, relative_path="files/CO2/2024/paris.nc")
     assert plan.write_mode == "copy"
+    assert plan.storage_relative_path == "CO2/2024/paris.nc"
+    assert plan.resolved_directory == "CO2/2024"
+    assert plan.resolved_filename == "paris.nc"
     assert plan.ogcat_owned
     assert not expected.exists()
     assert catalog.repository.all() == []
@@ -61,15 +65,22 @@ def test_add_artifact_uses_planned_timestamp_for_date_named_paths(tmp_path: Path
         ),
     )
 
-    plan = catalog.plan_artifact(metadata={"title": "planned"}, write_mode="reference")
-    record = catalog.add_artifact(record_type="managed_artifact", storage_plan=plan)
+    metadata: MetadataDict = {"title": "planned"}
+    plan = catalog.plan_artifact_storage(metadata=metadata, write_mode="reference")
+    record = catalog.add_artifact(
+        record_type="managed_artifact",
+        storage_plan=plan,
+        metadata=metadata,
+    )
 
     assert plan.time_added is not None
     assert record.time_added == plan.time_added
     assert record.locator.relative_path == f"files/{plan.time_added[:4]}/planned.txt"
+    assert record.user_metadata == metadata
+    assert record.naming_metadata["resolved_filename"] == "planned.txt"
 
 
-def test_plan_artifact_collision_uses_storage_adapter_exists(
+def test_plan_artifact_storage_collision_uses_storage_adapter_exists(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -91,13 +102,13 @@ def test_plan_artifact_collision_uses_storage_adapter_exists(
 
     monkeypatch.setattr(LocalStorageAdapter, "exists", fake_exists)
 
-    plan = catalog.plan_artifact(source, write_mode="copy")
+    plan = catalog.plan_artifact_storage(source, write_mode="copy")
 
     assert Path(plan.locator.value).name == "fixed_2.nc"
     assert [Path(value).name for value in seen] == ["fixed.nc", "fixed_2.nc"]
 
 
-def test_plan_artifact_urlpath_root_does_not_import_fsspec(
+def test_plan_artifact_storage_urlpath_root_does_not_import_fsspec(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -129,7 +140,7 @@ def test_plan_artifact_urlpath_root_does_not_import_fsspec(
     monkeypatch.setattr(importlib, "import_module", fake_import_module)
     monkeypatch.setattr(importlib.util, "find_spec", fake_find_spec)
 
-    plan = catalog.plan_artifact(
+    plan = catalog.plan_artifact_storage(
         source,
         metadata={"species": "CO2", "title": "remote"},
         storage_root="s3://bucket/prefix",
@@ -141,6 +152,9 @@ def test_plan_artifact_urlpath_root_does_not_import_fsspec(
     )
     assert plan.locator.relative_path is None
     assert plan.adapter == "fsspec"
+    assert plan.storage_relative_path == "CO2/remote.nc"
+    assert plan.resolved_directory == "CO2"
+    assert plan.resolved_filename == "remote.nc"
 
 
 def test_urlpath_storage_root_does_not_populate_stored_relpath(
@@ -161,7 +175,7 @@ def test_urlpath_storage_root_does_not_populate_stored_relpath(
     )
     monkeypatch.setattr(catalog_module, "_urlpath_exists_if_supported", lambda _urlpath: False)
 
-    plan = catalog.plan_artifact(
+    plan = catalog.plan_artifact_storage(
         source,
         metadata={"species": "CO2", "title": "remote"},
         storage_root="s3://bucket/prefix",
@@ -178,7 +192,23 @@ def test_urlpath_storage_root_does_not_populate_stored_relpath(
     assert record.stored_relpath is None
 
 
-def test_plan_artifact_urlpath_root_uses_available_collision_check(
+def test_urlpath_locator_relative_path_does_not_populate_stored_relpath(tmp_path: Path) -> None:
+    """Explicit URL-path relative paths do not fill local compatibility fields."""
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+
+    record = catalog.add_artifact(
+        record_type="remote_file",
+        locator=ArtifactLocator.from_urlpath(
+            "s3://bucket/prefix/example.nc",
+            relative_path="prefix/example.nc",
+        ),
+    )
+
+    assert record.locator.relative_path == "prefix/example.nc"
+    assert record.stored_relpath is None
+
+
+def test_plan_artifact_storage_urlpath_root_uses_available_collision_check(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -199,7 +229,7 @@ def test_plan_artifact_urlpath_root_uses_available_collision_check(
 
     monkeypatch.setattr(catalog_module, "_urlpath_exists_if_supported", fake_exists)
 
-    plan = catalog.plan_artifact(source, storage_root="s3://bucket/prefix", write_mode="copy")
+    plan = catalog.plan_artifact_storage(source, storage_root="s3://bucket/prefix", write_mode="copy")
 
     assert plan.locator == ArtifactLocator.from_urlpath(
         "s3://bucket/prefix/2026/source/fixed_2.nc",
@@ -213,7 +243,7 @@ def test_plan_artifact_urlpath_root_uses_available_collision_check(
     )
 
 
-def test_plan_artifact_custom_local_root_has_no_catalog_relative_path(tmp_path: Path) -> None:
+def test_plan_artifact_storage_custom_local_root_has_no_catalog_relative_path(tmp_path: Path) -> None:
     """Custom local storage roots do not populate catalog-relative compatibility paths."""
     source = tmp_path / "source.nc"
     source.write_text("payload", encoding="utf-8")
@@ -228,16 +258,23 @@ def test_plan_artifact_custom_local_root_has_no_catalog_relative_path(tmp_path: 
         ),
     )
 
-    plan = catalog.plan_artifact(
+    plan = catalog.plan_artifact_storage(
         source,
         metadata={"species": "CO2", "title": "external"},
         storage_root=external_root,
         write_mode="reference",
         ogcat_owned=False,
     )
-    record = catalog.add_artifact(record_type="external_file", storage_plan=plan)
+    record = catalog.add_artifact(
+        record_type="external_file",
+        storage_plan=plan,
+        metadata={"species": "CO2", "title": "external"},
+    )
 
     assert plan.locator == ArtifactLocator.from_path(external_root / "CO2" / "external.nc")
+    assert plan.storage_relative_path == "CO2/external.nc"
+    assert plan.resolved_directory == "CO2"
+    assert plan.resolved_filename == "external.nc"
     assert record.stored_relpath is None
     assert record.locator.relative_path is None
 

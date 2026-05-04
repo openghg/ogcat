@@ -39,6 +39,11 @@ class StoragePlan:
             ``"fsspec"``.
         time_added: Optional timestamp used when rendering date-based storage
             templates.
+        storage_relative_path: Optional target path relative to the configured
+            storage root.
+        resolved_directory: Optional rendered directory path for template-based
+            storage.
+        resolved_filename: Optional rendered filename or final path component.
     """
 
     locator: ArtifactLocator
@@ -49,6 +54,9 @@ class StoragePlan:
     profile: str | None = None
     adapter: str | None = None
     time_added: str | None = None
+    storage_relative_path: str | None = None
+    resolved_directory: str | None = None
+    resolved_filename: str | None = None
 
 
 class StorageAdapter(Protocol):
@@ -220,6 +228,9 @@ def plan_storage(
     profile: str | None = None,
     adapter: str | None = None,
     time_added: str | None = None,
+    storage_relative_path: str | None = None,
+    resolved_directory: str | None = None,
+    resolved_filename: str | None = None,
 ) -> StoragePlan:
     """Build a storage plan from already-resolved storage decisions.
 
@@ -234,6 +245,11 @@ def plan_storage(
             ``"fsspec"``.
         time_added: Optional timestamp used when rendering date-based storage
             templates.
+        storage_relative_path: Optional target path relative to the configured
+            storage root.
+        resolved_directory: Optional rendered directory path for template-based
+            storage.
+        resolved_filename: Optional rendered filename or final path component.
 
     Returns:
         Storage plan describing the target and intended write.
@@ -247,6 +263,9 @@ def plan_storage(
         profile=profile,
         adapter=adapter,
         time_added=time_added,
+        storage_relative_path=storage_relative_path,
+        resolved_directory=resolved_directory,
+        resolved_filename=resolved_filename,
     )
 
 

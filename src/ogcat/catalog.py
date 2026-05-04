@@ -35,6 +35,7 @@ from ogcat.writers import CopyArtifactWriter, MoveArtifactWriter
 ArtifactLocatorFactory = Callable[[OperationContext], ArtifactLocator]
 StoragePlanFactory = Callable[[OperationContext, ArtifactLocator], StoragePlan | None]
 DerivedMetadataCollector = Callable[[OperationContext, ArtifactLocator], None]
+PlannedLocatorResult = tuple[ArtifactLocator, str | None, str | None, str | None]
 
 
 @dataclass(slots=True)
@@ -197,6 +198,11 @@ class Catalog:
                 write_mode=cast(WriteMode, chosen_operation),
                 ogcat_owned=True,
                 adapter=_adapter_name(locator),
+                storage_relative_path=locator.relative_path,
+                resolved_directory=(
+                    None if locator.relative_path is None else Path(locator.relative_path).parent.as_posix()
+                ),
+                resolved_filename=_filename_from_locator(locator),
             )
 
         def collect_file_metadata(context: OperationContext, locator: ArtifactLocator) -> None:
@@ -232,7 +238,7 @@ class Catalog:
                 derived_metadata_collector=collect_file_metadata,
             )
 
-    def plan_artifact(
+    def plan_artifact_storage(
         self,
         path: str | Path | None = None,
         *,
@@ -244,7 +250,7 @@ class Catalog:
         ogcat_owned: bool = True,
         storage_root: str | Path | None = None,
     ) -> StoragePlan:
-        """Plan an artifact location without writing data or a catalog record.
+        """Plan artifact storage without writing data or a catalog record.
 
         Args:
             path: Optional local source path used for naming and copy/move
@@ -282,7 +288,7 @@ class Catalog:
         context = OperationContext(
             catalog_root=self.root,
             operation_id=operation_id,
-            operation_type="plan_artifact",
+            operation_type="plan_artifact_storage",
             record_type=resolved_record_type,
             user_metadata=user_metadata,
             source=source,
@@ -301,17 +307,32 @@ class Catalog:
         self.hook_manager.after_validate_metadata(context, validation_report)
         validation_report.raise_for_errors()
 
-        planned_locator = locator or self._render_planned_locator(
-            context=context,
-            schema=schema,
-            record_type=record_type,
-            source_path=source_path,
-            storage_root=storage_root,
-            date_added=timestamp[:10],
-        )
+        if locator is None:
+            (
+                planned_locator,
+                storage_relative_path,
+                resolved_directory,
+                resolved_filename,
+            ) = self._render_planned_locator(
+                context=context,
+                schema=schema,
+                record_type=record_type,
+                source_path=source_path,
+                storage_root=storage_root,
+                date_added=timestamp[:10],
+            )
+        else:
+            planned_locator = locator
+            storage_relative_path = locator.relative_path
+            resolved_directory = _directory_from_locator(locator)
+            resolved_filename = _filename_from_locator(locator)
         context.planned_locators = [planned_locator]
         self.hook_manager.resolve_artifact_locator(context)
         canonical_locator = _artifact_locator_from_context(context)
+        if canonical_locator != planned_locator:
+            storage_relative_path = canonical_locator.relative_path
+            resolved_directory = _directory_from_locator(canonical_locator)
+            resolved_filename = _filename_from_locator(canonical_locator)
         plan = plan_storage(
             canonical_locator,
             target_kind=target_kind,
@@ -319,6 +340,9 @@ class Catalog:
             ogcat_owned=ogcat_owned,
             adapter=_adapter_name(canonical_locator),
             time_added=timestamp,
+            storage_relative_path=storage_relative_path,
+            resolved_directory=resolved_directory,
+            resolved_filename=resolved_filename,
         )
         context.storage_plan = plan
         return plan
@@ -384,6 +408,8 @@ class Catalog:
                 storage_mode = storage_plan.write_mode
             if time_added is None:
                 time_added = storage_plan.time_added
+            if naming_metadata is None:
+                naming_metadata = _naming_metadata_from_storage_plan(storage_plan)
         assert locator is not None
         metadata_input = {} if metadata is None else metadata
         derived_metadata = {} if derived_metadata is None else dict(derived_metadata)
@@ -751,7 +777,7 @@ class Catalog:
             record_type=record_type,
             locator=locator,
             stored_abspath=str(locator_path) if locator_path is not None else None,
-            stored_relpath=locator.relative_path,
+            stored_relpath=locator.relative_path if locator.kind == "path" else None,
             storage_mode=storage_mode,
             original_path=resolved_original_path,
             original_filename=original_filename,
@@ -770,7 +796,7 @@ class Catalog:
         source_path: Path | None,
         storage_root: str | Path | None,
         date_added: str,
-    ) -> ArtifactLocator:
+    ) -> PlannedLocatorResult:
         """Render schema naming templates into a local or fsspec target locator."""
         directory_template = _require_template(schema.directory_template, field_name="directory_template")
         filename_template = _require_template(schema.filename_template, field_name="filename_template")
@@ -787,7 +813,7 @@ class Catalog:
             root_url = str(storage_root).rstrip("/")
             fake_root = Path("/__ogcat_storage__")
 
-            target, _rel_path, _resolved_filename = render_storage_location(
+            target, _rel_path, resolved_filename = render_storage_location(
                 files_root=fake_root,
                 directory_template=directory_template,
                 filename_template=filename_template,
@@ -797,14 +823,22 @@ class Catalog:
                 ),
             )
             relative_path = target.relative_to(fake_root).as_posix()
-            return ArtifactLocator.from_urlpath(_join_urlpath(root_url, relative_path))
+            resolved_directory = str(Path(relative_path).parent)
+            if resolved_directory == ".":
+                resolved_directory = ""
+            return (
+                ArtifactLocator.from_urlpath(_join_urlpath(root_url, relative_path)),
+                relative_path,
+                resolved_directory,
+                resolved_filename,
+            )
 
         if storage_root is None:
             files_root = self.root / self.spec.files_root
         else:
             files_root = Path(storage_root).expanduser().resolve()
         storage_adapter = LocalStorageAdapter()
-        target, rel_path, _resolved_filename = render_storage_location(
+        target, rel_path, resolved_filename = render_storage_location(
             files_root=files_root,
             directory_template=directory_template,
             filename_template=filename_template,
@@ -812,7 +846,16 @@ class Catalog:
             exists=lambda candidate: storage_adapter.exists(ArtifactLocator.from_path(candidate)),
         )
         relative_path = rel_path if storage_root is None else None
-        return ArtifactLocator.from_path(target, relative_path=relative_path)
+        storage_relative_path = target.relative_to(files_root).as_posix()
+        resolved_directory = Path(storage_relative_path).parent.as_posix()
+        if resolved_directory == ".":
+            resolved_directory = ""
+        return (
+            ArtifactLocator.from_path(target, relative_path=relative_path),
+            storage_relative_path,
+            resolved_directory,
+            resolved_filename,
+        )
 
     def _add_artifact_in_transaction(
         self,
@@ -930,6 +973,9 @@ class Catalog:
                     write_mode=_write_mode_from_writer(artifact_writer),
                     ogcat_owned=artifact_writer is not None,
                     adapter=_adapter_name(canonical_locator),
+                    storage_relative_path=canonical_locator.relative_path,
+                    resolved_directory=_directory_from_locator(canonical_locator),
+                    resolved_filename=_filename_from_locator(canonical_locator),
                 )
             )
             storage_plan = hook_context.storage_plan
@@ -1084,7 +1130,26 @@ def _storage_plan_with_locator(plan: StoragePlan, locator: ArtifactLocator) -> S
     """Return a storage plan adjusted to a hook-resolved canonical locator."""
     if plan.locator == locator:
         return plan
-    return replace(plan, locator=locator, adapter=_adapter_name(locator))
+    return replace(
+        plan,
+        locator=locator,
+        adapter=_adapter_name(locator),
+        storage_relative_path=locator.relative_path,
+        resolved_directory=_directory_from_locator(locator),
+        resolved_filename=_filename_from_locator(locator),
+    )
+
+
+def _naming_metadata_from_storage_plan(plan: StoragePlan) -> MetadataDict:
+    """Build record naming metadata from storage planning outputs."""
+    metadata: MetadataDict = {}
+    if plan.storage_relative_path is not None:
+        metadata["storage_relative_path"] = plan.storage_relative_path
+    if plan.resolved_directory is not None:
+        metadata["resolved_directory"] = plan.resolved_directory
+    if plan.resolved_filename is not None:
+        metadata["resolved_filename"] = plan.resolved_filename
+    return metadata
 
 
 def _target_kind_from_writer(artifact_writer: ArtifactWriter | None) -> TargetKind:
@@ -1171,6 +1236,13 @@ def _filename_from_locator(locator: ArtifactLocator) -> str:
     if locator.kind == "path":
         return Path(locator.value).name
     return locator.value.rstrip("/").rsplit("/", 1)[-1]
+
+
+def _directory_from_locator(locator: ArtifactLocator) -> str:
+    """Return the directory-like component from a locator."""
+    if locator.kind == "path":
+        return Path(locator.value).parent.as_posix()
+    return locator.value.rstrip("/").rsplit("/", 1)[0]
 
 
 def _path_from_locator(locator: ArtifactLocator) -> Path:

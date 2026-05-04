@@ -181,7 +181,11 @@ class CatalogRecord:
         locator_path = self.locator.as_path()
         if locator_path is not None and self.stored_abspath is None:
             self.stored_abspath = str(locator_path)
-        if self.locator.relative_path is not None and self.stored_relpath is None:
+        if (
+            self.locator.kind == "path"
+            and self.locator.relative_path is not None
+            and self.stored_relpath is None
+        ):
             self.stored_relpath = self.locator.relative_path
 
     def path(self) -> Path | None:

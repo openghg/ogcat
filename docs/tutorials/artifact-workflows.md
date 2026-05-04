@@ -155,30 +155,33 @@ the write operation and rollback cleanup. ogcat owns the plan and record.
 ```python
 from ogcat import UnzipArtifactWriter, path_source
 
-collection_plan = catalog.plan_artifact(
+collection_metadata = {
+    "species": "co2",
+    "product": "cams",
+    "title": "CAMS CO2 concentration NetCDF collection",
+    "domain": "global",
+    "source_record_id": raw_zip_record.id,
+    "source_url": ads_dataset,
+    "archive_name": downloaded_zip.name,
+    "archive_member_glob": "*.nc",
+    "member_count": 36,
+    "time_coverage": "2020-01/2022-12",
+    "bc_input": "cams",
+    "bc_input_version": "cams73_latest",
+}
+
+collection_plan = catalog.plan_artifact_storage(
     downloaded_zip,
     record_type="raw_netcdf_collection",
     target_kind="directory",
     write_mode="write",
-    metadata={
-        "species": "co2",
-        "product": "cams",
-        "title": "CAMS CO2 concentration NetCDF collection",
-        "domain": "global",
-        "source_record_id": raw_zip_record.id,
-        "source_url": ads_dataset,
-        "archive_name": downloaded_zip.name,
-        "archive_member_glob": "*.nc",
-        "member_count": 36,
-        "time_coverage": "2020-01/2022-12",
-        "bc_input": "cams",
-        "bc_input_version": "cams73_latest",
-    },
+    metadata=collection_metadata,
 )
 
 collection_record = catalog.add_artifact(
     record_type="raw_netcdf_collection",
     storage_plan=collection_plan,
+    metadata=collection_metadata,
     source=path_source(downloaded_zip, kind="zip_file"),
     artifact_writer=UnzipArtifactWriter(),
 )
@@ -258,32 +261,35 @@ collection_path = collection_record.path()
 if collection_path is None:
     raise RuntimeError("Expected extracted collection to have a local path.")
 
-processed_plan = catalog.plan_artifact(
+processed_metadata = {
+    "species": "co2",
+    "domain": "europe",
+    "bc_input": "cams",
+    "bc_input_version": "cams73_latest",
+    "title": "CAMS CO2 boundary conditions for EUROPE",
+    "source_record_id": collection_record.id,
+    "raw_zip_record_id": raw_zip_record.id,
+    "source_url": ads_dataset,
+    "processing_domain": "EUROPE",
+    "provenance": {
+        "raw_zip_record_id": raw_zip_record.id,
+        "netcdf_collection_record_id": collection_record.id,
+        "operation": "create_cams_bc",
+        "opened_with": "xarray.open_mfdataset",
+    },
+}
+
+processed_plan = catalog.plan_artifact_storage(
     record_type="boundary_conditions",
     target_kind="directory",
     write_mode="write",
-    metadata={
-        "species": "co2",
-        "domain": "europe",
-        "bc_input": "cams",
-        "bc_input_version": "cams73_latest",
-        "title": "CAMS CO2 boundary conditions for EUROPE",
-        "source_record_id": collection_record.id,
-        "raw_zip_record_id": raw_zip_record.id,
-        "source_url": ads_dataset,
-        "processing_domain": "EUROPE",
-        "provenance": {
-            "raw_zip_record_id": raw_zip_record.id,
-            "netcdf_collection_record_id": collection_record.id,
-            "operation": "create_cams_bc",
-            "opened_with": "xarray.open_mfdataset",
-        },
-    },
+    metadata=processed_metadata,
 )
 
 processed_record = catalog.add_artifact(
     record_type="boundary_conditions",
     storage_plan=processed_plan,
+    metadata=processed_metadata,
     source=memory_source(
         None,
         kind="cams_netcdf_collection",
@@ -417,31 +423,34 @@ class LocalCamsZipToZarrWriter:
 Plan and run the processing step:
 
 ```python
-local_processed_plan = catalog.plan_artifact(
+local_processed_metadata = {
+    "species": "co2",
+    "domain": "europe",
+    "bc_input": "cams",
+    "bc_input_version": "cams73_latest",
+    "title": "CAMS CO2 boundary conditions for EUROPE",
+    "source_record_id": raw_zip_record.id,
+    "source_url": ads_dataset,
+    "processing_domain": "EUROPE",
+    "provenance": {
+        "raw_zip_record_id": raw_zip_record.id,
+        "operation": "create_cams_bc",
+        "opened_with": "xarray.open_mfdataset",
+        "zip_access": "fsspec zip filesystem over local file URL",
+    },
+}
+
+local_processed_plan = catalog.plan_artifact_storage(
     record_type="boundary_conditions",
     target_kind="directory",
     write_mode="write",
-    metadata={
-        "species": "co2",
-        "domain": "europe",
-        "bc_input": "cams",
-        "bc_input_version": "cams73_latest",
-        "title": "CAMS CO2 boundary conditions for EUROPE",
-        "source_record_id": raw_zip_record.id,
-        "source_url": ads_dataset,
-        "processing_domain": "EUROPE",
-        "provenance": {
-            "raw_zip_record_id": raw_zip_record.id,
-            "operation": "create_cams_bc",
-            "opened_with": "xarray.open_mfdataset",
-            "zip_access": "fsspec zip filesystem over local file URL",
-        },
-    },
+    metadata=local_processed_metadata,
 )
 
 local_processed_record = catalog.add_artifact(
     record_type="boundary_conditions",
     storage_plan=local_processed_plan,
+    metadata=local_processed_metadata,
     source=memory_source(
         None,
         kind="local_cams_zip_urlpath",
@@ -606,31 +615,34 @@ Then plan and write the final Zarr artifact:
 ```python
 catalog.hook_manager.register(CamsZipMemberUrlpathHook())
 
-zip_chain_processed_plan = catalog.plan_artifact(
+zip_chain_processed_metadata = {
+    "species": "co2",
+    "domain": "europe",
+    "bc_input": "cams",
+    "bc_input_version": "cams73_latest",
+    "title": "CAMS CO2 boundary conditions for EUROPE",
+    "source_record_id": raw_zip_record.id,
+    "source_url": ads_dataset,
+    "processing_domain": "EUROPE",
+    "provenance": {
+        "raw_zip_record_id": raw_zip_record.id,
+        "operation": "create_cams_bc",
+        "opened_with": "xarray.open_mfdataset",
+        "zip_access": "writer built fsspec chain from raw locator",
+    },
+}
+
+zip_chain_processed_plan = catalog.plan_artifact_storage(
     record_type="boundary_conditions",
     target_kind="directory",
     write_mode="write",
-    metadata={
-        "species": "co2",
-        "domain": "europe",
-        "bc_input": "cams",
-        "bc_input_version": "cams73_latest",
-        "title": "CAMS CO2 boundary conditions for EUROPE",
-        "source_record_id": raw_zip_record.id,
-        "source_url": ads_dataset,
-        "processing_domain": "EUROPE",
-        "provenance": {
-            "raw_zip_record_id": raw_zip_record.id,
-            "operation": "create_cams_bc",
-            "opened_with": "xarray.open_mfdataset",
-            "zip_access": "writer built fsspec chain from raw locator",
-        },
-    },
+    metadata=zip_chain_processed_metadata,
 )
 
 zip_chain_processed_record = catalog.add_artifact(
     record_type="boundary_conditions",
     storage_plan=zip_chain_processed_plan,
+    metadata=zip_chain_processed_metadata,
     source=memory_source(
         None,
         kind="cams_zip_member_urlpath",
@@ -736,20 +748,23 @@ class RequestsDownloadWriter:
         )
 
 
-download_plan = catalog.plan_artifact(
+download_metadata = {
+    "species": "co2",
+    "product": "example",
+    "title": "Example downloaded CO2 data",
+    "source_record_id": source_record.id,
+}
+
+download_plan = catalog.plan_artifact_storage(
     Path("example.nc"),
     write_mode="write",
-    metadata={
-        "species": "co2",
-        "product": "example",
-        "title": "Example downloaded CO2 data",
-        "source_record_id": source_record.id,
-    },
+    metadata=download_metadata,
 )
 
 download_record = catalog.add_artifact(
     record_type="downloaded_file",
     storage_plan=download_plan,
+    metadata=download_metadata,
     source=memory_source(
         None,
         kind="download_uri",
