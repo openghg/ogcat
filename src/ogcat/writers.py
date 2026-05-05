@@ -10,7 +10,8 @@ This module provides small adapters for common examples. ``source_writer`` wraps
 a function that accepts an ``OperationSource`` and target ``Path``.
 ``memory_writer`` and ``path_writer`` adapt narrower functions for in-memory
 payloads and local files. ``UnzipArtifactWriter`` is a concrete directory writer
-used by tutorials and tests. These helpers register rollback actions through the
+used by tutorials and tests. ``UnzipSingleFileArtifactWriter`` extracts one zip
+member to a file target. These helpers register rollback actions through the
 operation context before writing so partially-created targets can be cleaned up
 if the catalog operation fails.
 """
@@ -295,6 +296,70 @@ class UnzipArtifactWriter:
         context.derived_metadata["extracted_names"] = extracted_names
 
 
+@dataclass(frozen=True, slots=True)
+class UnzipSingleFileArtifactWriter:
+    """Extract a single zip member to a file target.
+
+    Args:
+        member_name: Optional archive member to extract. When omitted, the
+            archive must contain exactly one non-directory member.
+        source_kind: Required operation source kind.
+    """
+
+    member_name: str | None = None
+    source_kind: str = "zip_file"
+    target_kind: TargetKind = "file"
+    write_mode: WriteMode = "write"
+
+    def write(
+        self,
+        context: OperationContext,
+        source: OperationSource,
+        target: ArtifactLocator,
+    ) -> None:
+        """Extract one zip source member to the target file."""
+        if source.kind != self.source_kind or source.path is None:
+            raise ValueError(
+                f"single-file unzip writer requires OperationSource(kind={self.source_kind!r}, path=...)"
+            )
+
+        target_path = _target_path(target)
+        _prepare_empty_target(target_path, "file")
+        context.rollback(
+            lambda path=target_path: path.unlink(missing_ok=True),
+            description=f"remove extracted file {target_path}",
+        )
+        with zipfile.ZipFile(source.path) as archive:
+            member = _select_zip_member(archive, member_name=self.member_name)
+            with archive.open(member) as source_file, target_path.open("wb") as target_file:
+                shutil.copyfileobj(source_file, target_file)
+
+        context.derived_metadata["extracted_file_count"] = 1
+        context.derived_metadata["extracted_name"] = member.filename
+        context.derived_metadata["extracted_size"] = member.file_size
+
+
+def _select_zip_member(archive: zipfile.ZipFile, *, member_name: str | None) -> zipfile.ZipInfo:
+    """Return the selected safe file member from an archive."""
+    members = [member for member in archive.infolist() if not member.is_dir()]
+    if member_name is None:
+        if len(members) != 1:
+            raise ValueError(f"expected exactly one file in zip archive, found {len(members)}")
+        member = members[0]
+    else:
+        try:
+            member = archive.getinfo(member_name)
+        except KeyError as exc:
+            raise ValueError(f"zip member not found: {member_name}") from exc
+        if member.is_dir():
+            raise ValueError(f"zip member is a directory: {member_name}")
+
+    member_path = Path(member.filename)
+    if member_path.is_absolute() or ".." in member_path.parts:
+        raise ValueError(f"zip member escapes target file: {member.filename}")
+    return member
+
+
 def _target_path(locator: ArtifactLocator) -> Path:
     """Return a path-backed locator target."""
     target_path = locator.as_path()
@@ -343,6 +408,7 @@ __all__ = [
     "PathWriteFunction",
     "SourceWriteFunction",
     "UnzipArtifactWriter",
+    "UnzipSingleFileArtifactWriter",
     "memory_source",
     "memory_writer",
     "path_source",

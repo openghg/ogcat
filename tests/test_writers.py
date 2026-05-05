@@ -17,6 +17,7 @@ from ogcat import (
     PluginRegistry,
     RecordSchema,
     UnzipArtifactWriter,
+    UnzipSingleFileArtifactWriter,
     memory_source,
     memory_writer,
     path_source,
@@ -176,6 +177,87 @@ def test_unzip_artifact_writer_rejects_path_traversal(tmp_path: Path) -> None:
 
     assert not target.exists()
     assert not (tmp_path / "escape.txt").exists()
+
+
+def test_unzip_single_file_artifact_writer_extracts_only_member(tmp_path: Path) -> None:
+    archive_path = tmp_path / "source.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("data.nc", "netcdf")
+
+    target = tmp_path / "stored.nc"
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+
+    record = catalog.add_artifact(
+        record_type="netcdf_file",
+        locator=ArtifactLocator.path(target),
+        source=path_source(archive_path, kind="zip_file"),
+        artifact_writer=UnzipSingleFileArtifactWriter(),
+    )
+
+    assert target.read_text(encoding="utf-8") == "netcdf"
+    assert record.derived_metadata["extracted_file_count"] == 1
+    assert record.derived_metadata["extracted_name"] == "data.nc"
+    assert record.derived_metadata["extracted_size"] == len("netcdf")
+
+
+def test_unzip_single_file_artifact_writer_can_select_named_member(tmp_path: Path) -> None:
+    archive_path = tmp_path / "source.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("readme.txt", "skip")
+        archive.writestr("nested/data.nc", "netcdf")
+
+    target = tmp_path / "stored.nc"
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+
+    catalog.add_artifact(
+        record_type="netcdf_file",
+        locator=ArtifactLocator.path(target),
+        source=path_source(archive_path, kind="zip_file"),
+        artifact_writer=UnzipSingleFileArtifactWriter(member_name="nested/data.nc"),
+    )
+
+    assert target.read_text(encoding="utf-8") == "netcdf"
+
+
+def test_unzip_single_file_artifact_writer_requires_one_member_by_default(tmp_path: Path) -> None:
+    archive_path = tmp_path / "source.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("a.nc", "alpha")
+        archive.writestr("b.nc", "bravo")
+
+    target = tmp_path / "stored.nc"
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+
+    with pytest.raises(ValueError, match="expected exactly one file"):
+        catalog.add_artifact(
+            record_type="netcdf_file",
+            locator=ArtifactLocator.path(target),
+            source=path_source(archive_path, kind="zip_file"),
+            artifact_writer=UnzipSingleFileArtifactWriter(),
+        )
+
+    assert not target.exists()
+    assert catalog.repository.all() == []
+
+
+def test_unzip_single_file_artifact_writer_rejects_path_traversal(tmp_path: Path) -> None:
+    archive_path = tmp_path / "unsafe.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("../escape.nc", "nope")
+
+    target = tmp_path / "stored.nc"
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+
+    with pytest.raises(ValueError, match="zip member escapes target file"):
+        catalog.add_artifact(
+            record_type="netcdf_file",
+            locator=ArtifactLocator.path(target),
+            source=path_source(archive_path, kind="zip_file"),
+            artifact_writer=UnzipSingleFileArtifactWriter(),
+        )
+
+    assert not target.exists()
+    assert not (tmp_path / "escape.nc").exists()
 
 
 def test_non_reference_storage_plan_requires_writer(tmp_path: Path) -> None:
