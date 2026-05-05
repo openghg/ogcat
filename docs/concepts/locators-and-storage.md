@@ -71,6 +71,44 @@ target kind, write mode, storage-relative path, resolved directory, and resolved
 filename.  It does not carry record metadata; pass metadata again to
 ``add_artifact(...)`` when turning a storage plan into a record.
 
+## Overriding template-derived storage paths
+
+Pass an explicit locator when the correct target path is known and should not be
+derived from the schema naming templates.  This is useful when the physical
+source filename is not the filename that should be stored, such as a ``.zip``
+archive that contains a single ``.nc`` member.
+
+```python
+from pathlib import Path
+
+from ogcat import ArtifactLocator, UnzipSingleFileArtifactWriter, path_source
+
+archive_path = Path("incoming/GCP-GridFEDv2023.1_2018.zip")
+target_path = catalog.root / "files" / "flux/raw/GridFED/v2023.1/co2-o2/GCP-GridFEDv2023.1_2018.nc"
+
+plan = catalog.plan_artifact_storage(
+    archive_path,
+    record_type="raw_flux",
+    locator=ArtifactLocator.from_path(target_path),
+    target_kind="file",
+    write_mode="write",
+    metadata={"product": "GridFED", "version": "v2023.1", "species": "co2-o2", "year": 2018},
+)
+
+record = catalog.add_artifact(
+    record_type="raw_flux",
+    storage_plan=plan,
+    metadata={"product": "GridFED", "version": "v2023.1", "species": "co2-o2", "year": 2018},
+    source=path_source(archive_path, kind="zip_file"),
+    artifact_writer=UnzipSingleFileArtifactWriter(),
+)
+```
+
+When a locator is supplied, ``plan_artifact_storage(...)`` still validates
+metadata and exposes the planned locator to hooks, but it does not render the
+schema directory and filename templates.  The resulting record uses the
+explicit locator from the plan.
+
 Hook timing matters.  ``before_validate_metadata`` runs before planning, so it
 receives neither ``context.planned_locators`` nor ``context.storage_plan``.
 ``resolve_artifact_locator`` receives proposed locators in
