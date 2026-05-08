@@ -23,7 +23,7 @@ import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypeAlias
+from typing import ClassVar, TypeAlias
 
 from ogcat.hooks import OperationContext, OperationSource
 from ogcat.models import ArtifactLocator, JsonValue, MetadataDict
@@ -143,8 +143,8 @@ class CopyArtifactWriter:
     """Artifact writer that copies a local source path to a storage target."""
 
     source_kind: str = "local_file"
-    target_kind: TargetKind = "file"
-    write_mode: WriteMode = "copy"
+    target_kind: ClassVar[TargetKind] = "file"
+    write_mode: ClassVar[WriteMode] = "copy"
 
     def write(
         self,
@@ -176,8 +176,8 @@ class MoveArtifactWriter:
     """Artifact writer that moves a local source path to a storage target."""
 
     source_kind: str = "local_file"
-    target_kind: TargetKind = "file"
-    write_mode: WriteMode = "move"
+    target_kind: ClassVar[TargetKind] = "file"
+    write_mode: ClassVar[WriteMode] = "move"
 
     def write(
         self,
@@ -257,8 +257,8 @@ class UnzipArtifactWriter:
     """Example writer that safely extracts a zip file into a directory target."""
 
     source_kind: str = "zip_file"
-    target_kind: TargetKind = "directory"
-    write_mode: WriteMode = "write"
+    target_kind: ClassVar[TargetKind] = "directory"
+    write_mode: ClassVar[WriteMode] = "write"
 
     def write(
         self,
@@ -308,8 +308,8 @@ class UnzipSingleFileArtifactWriter:
 
     member_name: str | None = None
     source_kind: str = "zip_file"
-    target_kind: TargetKind = "file"
-    write_mode: WriteMode = "write"
+    target_kind: ClassVar[TargetKind] = "file"
+    write_mode: ClassVar[WriteMode] = "write"
 
     def write(
         self,

@@ -200,6 +200,11 @@ def test_unzip_single_file_artifact_writer_extracts_only_member(tmp_path: Path) 
     assert record.derived_metadata["extracted_size"] == len("netcdf")
 
 
+def test_unzip_single_file_artifact_writer_storage_intent_is_not_configurable() -> None:
+    with pytest.raises(TypeError, match="target_kind"):
+        UnzipSingleFileArtifactWriter(target_kind="directory")  # type: ignore[call-arg]
+
+
 def test_unzip_single_file_artifact_writer_can_select_named_member(tmp_path: Path) -> None:
     archive_path = tmp_path / "source.zip"
     with zipfile.ZipFile(archive_path, "w") as archive:
