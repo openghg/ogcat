@@ -98,6 +98,32 @@ Methods
 
 .. automethod:: ogcat.writers.UnzipArtifactWriter.write
 
+UnzipSingleFileArtifactWriter
+-----------------------------
+
+.. autoclass:: ogcat.writers.UnzipSingleFileArtifactWriter
+   :exclude-members: source_kind, target_kind, write_mode
+   :member-order: bysource
+   :no-members:
+   :no-show-inheritance:
+
+Attributes
+~~~~~~~~~~
+
+.. py:attribute:: UnzipSingleFileArtifactWriter.member_name
+
+   Optional archive member to extract. When omitted, the archive must contain
+   exactly one non-directory member.
+
+.. py:attribute:: UnzipSingleFileArtifactWriter.source_kind
+
+   Required source kind for zip extraction. Defaults to ``"zip_file"``.
+
+Methods
+~~~~~~~
+
+.. automethod:: ogcat.writers.UnzipSingleFileArtifactWriter.write
+
 Transactions
 ------------
 

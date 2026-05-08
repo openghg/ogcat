@@ -76,6 +76,94 @@ Tradeoff:
 - collection records are convenient summaries, but they lose direct one-record
   per-file visibility unless paired with file-level records or derived indexes
 
+## Managed Collection Updates And Member Manifests
+
+Archive-backed scientific datasets often start as many transport files that
+should become one logical collection. For example, each annual ``.zip`` may
+contain one NetCDF file, and all extracted NetCDF files should live in the same
+managed directory.
+
+Current behavior is best suited to:
+
+- one record per extracted file; or
+- one collection record written in a single operation by a custom writer.
+
+It is not yet a good fit for incrementally appending files to one managed
+directory while updating the same catalog record's metadata. That would require
+new semantics beyond the current "target should be absent, writer materialises
+it, record is inserted" flow.
+
+Possible future directions:
+
+- add an explicit update/upsert API for catalog records
+- distinguish create-only writers from append/update writers
+- keep the core update API small, with plugins defining the concrete semantics
+  for a given artifact shape
+- let a collection writer return a structured manifest of members, including:
+  - source archive path
+  - archive member name
+  - stored relative path
+  - year or other member-level keys
+  - size and checksum
+- store collection-level summaries such as ``file_count``, ``years``,
+  ``time_coverage``, and ``member_glob``
+- decide whether metadata updates replace, merge, or recompute derived
+  collection metadata
+- make rollback behavior explicit for append operations, since deleting a whole
+  directory may be wrong once a collection already exists
+
+This also points toward a future artifact descriptor model where one logical
+record can have many concrete artifact members. Until then, a JSON-compatible
+manifest in ``derived_metadata`` could be a useful prototype.
+
+The core package probably should not define one universal meaning for
+``update``. It can define the envelope: load an existing record, let a manager
+materialise changes, update metadata, and register rollback. A plugin or manager
+can then decide whether an update means append, replace, merge, rebuild, or
+reject.
+
+A small vendored example could be a generic directory collection manager. It
+would treat a managed directory as a simple collection of files, roughly like a
+list in memory:
+
+- ``add`` writes one or more new files into the directory
+- ``remove`` deletes selected members
+- ``replace`` overwrites a selected member
+- ``manifest`` returns the current member list and summary metadata
+
+That would mirror the familiar Unix directory file type without committing the
+whole model to directories forever. Later, a directory collection record could
+be replaced or complemented by a record that points to other records, but a
+plain managed-directory collection is likely the most useful first step.
+
+## Archive Member Naming
+
+When an archive is just transport packaging, naming should often use the
+archive member rather than the archive file itself. A ``.zip`` named
+``GCP-GridFEDv2023.1_2018.zip`` may contain
+``GCP-GridFEDv2023.1_2018.nc``; the managed artifact should usually use the
+``.nc`` name.
+
+Current options:
+
+- pass an explicit ``locator=ArtifactLocator.from_path(...)`` when planning
+  storage
+- use a locator-resolution hook to inspect the archive and adjust the planned
+  locator before the storage plan is finalised
+- write a domain-specific multi-archive writer that controls its directory
+  layout and records extracted member metadata
+
+Possible future improvements:
+
+- add an archive-member source descriptor, separate from the physical source
+  archive path
+- expose naming context fields such as ``artifact_filename`` or
+  ``source_member_filename`` without overloading ``original_filename``
+- provide a builtin hook or planning helper for "single-member archive uses
+  member filename"
+- keep ``original_filename`` reserved for the physical source filename, so
+  metadata and naming remain easier to reason about
+
 ## Non-Path Locators
 
 The current model already leaves room for non-path locators such as URIs, but
