@@ -146,6 +146,36 @@ class UnitOfWork:
         """Alias for ``insert_staged_record``."""
         return self.insert_staged_record(record)
 
+    def update_staged_record(self, record: CatalogRecord) -> CatalogRecord:
+        """Update a staged record and restore the previous version on rollback.
+
+        Args:
+            record: Replacement record to persist. It must include an existing
+                repository id.
+
+        Returns:
+            The replacement record.
+
+        Raises:
+            RuntimeError: If the transaction has already committed.
+            ValueError: If the replacement record has no id.
+            KeyError: If no stored record exists for the supplied id.
+        """
+        if self.state is OperationState.COMMITTED:
+            raise RuntimeError("Cannot update record after commit.")
+        if record.id is None:
+            raise ValueError("Cannot update a record without an id.")
+        previous = self.repository.get(record.id)
+        if previous is None:
+            raise KeyError(f"Record not found: {record.id}")
+        self.register_rollback(
+            lambda: self.repository.update(previous),
+            description=f"restore catalog record {record.id}",
+        )
+        self.repository.update(record)
+        self.state = OperationState.STAGED
+        return record
+
     def commit(self) -> None:
         """Commit staged work and discard rollback actions."""
         self._rollback_actions.clear()

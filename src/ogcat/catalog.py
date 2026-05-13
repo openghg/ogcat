@@ -45,6 +45,7 @@ DerivedMetadataCollector = Callable[[OperationContext, ArtifactLocator], None]
 PlannedLocatorResult = tuple[ArtifactLocator, str | None, str | None, str | None]
 PluginInput = PluginRegistry | Iterable[object] | None
 HookInput = HookManager | Iterable[object] | None
+MetadataUpdateMode = Literal["replace", "shallow_merge"]
 
 
 @dataclass(slots=True)
@@ -814,6 +815,81 @@ class Catalog:
             return None
         return record.path()
 
+    def update_metadata(
+        self,
+        record_id: object,
+        metadata: Mapping[Any, Any],
+        mode: MetadataUpdateMode = "replace",
+        *,
+        transaction: UnitOfWork | None = None,
+    ) -> CatalogRecord:
+        """Update a record's user metadata through validation and storage.
+
+        Args:
+            record_id: Existing record id.
+            metadata: Replacement metadata or top-level metadata updates.
+            mode: ``"replace"`` replaces the whole user metadata dictionary.
+                ``"shallow_merge"`` applies a top-level dictionary update;
+                nested dictionaries are replaced as values, not recursively
+                merged.
+            transaction: Optional caller-owned transaction. When supplied, the
+                previous record version is restored if the transaction rolls
+                back.
+
+        Returns:
+            Updated catalog record.
+
+        Raises:
+            TypeError: If metadata is not a dictionary.
+            ValueError: If the update mode is unsupported, or schema metadata
+                validation fails.
+            KeyError: If the record id does not exist.
+        """
+        return self._update_metadata_namespace(
+            record_id=record_id,
+            metadata=metadata,
+            mode=mode,
+            namespace="user_metadata",
+            transaction=transaction,
+        )
+
+    def update_derived_metadata(
+        self,
+        record_id: object,
+        derived_metadata: Mapping[Any, Any],
+        mode: MetadataUpdateMode = "replace",
+        *,
+        transaction: UnitOfWork | None = None,
+    ) -> CatalogRecord:
+        """Update a record's derived metadata through normalization and storage.
+
+        Args:
+            record_id: Existing record id.
+            derived_metadata: Replacement derived metadata or top-level updates.
+            mode: ``"replace"`` replaces the whole derived metadata dictionary.
+                ``"shallow_merge"`` applies a top-level dictionary update;
+                nested dictionaries are replaced as values, not recursively
+                merged.
+            transaction: Optional caller-owned transaction. When supplied, the
+                previous record version is restored if the transaction rolls
+                back.
+
+        Returns:
+            Updated catalog record.
+
+        Raises:
+            TypeError: If derived metadata is not a dictionary.
+            ValueError: If the update mode is unsupported.
+            KeyError: If the record id does not exist.
+        """
+        return self._update_metadata_namespace(
+            record_id=record_id,
+            metadata=derived_metadata,
+            mode=mode,
+            namespace="derived_metadata",
+            transaction=transaction,
+        )
+
     def add_record_schema(
         self,
         name: str,
@@ -1217,6 +1293,77 @@ class Catalog:
             record_type=record_type,
         ).raise_for_errors()
 
+    def _update_metadata_namespace(
+        self,
+        *,
+        record_id: object,
+        metadata: Mapping[Any, Any],
+        mode: MetadataUpdateMode,
+        namespace: Literal["user_metadata", "derived_metadata"],
+        transaction: UnitOfWork | None,
+    ) -> CatalogRecord:
+        """Update one metadata namespace using explicit replace or shallow merge."""
+        update_mode = _coerce_metadata_update_mode(mode)
+        record = self._require_record(record_id)
+        if namespace == "user_metadata":
+            schema_name = self._schema_name(record.record_type)
+            normalized_input = _coerce_metadata_input(metadata, schema_name=schema_name)
+            updated_metadata = _merge_metadata(
+                current=record.user_metadata,
+                updates=normalized_input,
+                mode=update_mode,
+            )
+            updated_metadata = _normalize_metadata_for_schema(
+                updated_metadata,
+                schema_name=schema_name,
+            )
+            schema = self._select_schema(record.record_type, require_known=False)
+            self._validate_metadata(
+                schema=schema,
+                metadata=updated_metadata,
+                record_type=record.record_type,
+            )
+            updated_record = replace(record, user_metadata=updated_metadata)
+        else:
+            normalized_input = normalize_metadata(metadata, field_name="derived_metadata")
+            updated_metadata = _merge_metadata(
+                current=record.derived_metadata,
+                updates=normalized_input,
+                mode=update_mode,
+            )
+            updated_record = replace(
+                record,
+                derived_metadata=normalize_metadata(
+                    updated_metadata,
+                    field_name="derived_metadata",
+                ),
+            )
+        return self._stage_or_commit_record_update(updated_record, transaction=transaction)
+
+    def _require_record(self, record_id: object) -> CatalogRecord:
+        """Return an existing record or raise a clear missing-record error."""
+        resolved_record_id = _coerce_record_id(record_id)
+        record = self.repository.get(resolved_record_id)
+        if record is None:
+            raise KeyError(f"Record not found: {resolved_record_id}")
+        return record
+
+    def _stage_or_commit_record_update(
+        self,
+        record: CatalogRecord,
+        *,
+        transaction: UnitOfWork | None,
+    ) -> CatalogRecord:
+        """Apply a record replacement through a caller-owned or internal transaction."""
+        if transaction is not None:
+            if transaction.repository is not self.repository:
+                raise ValueError("Transaction is bound to a different catalog repository.")
+            return transaction.update_staged_record(record)
+        with self.transaction() as unit_of_work:
+            updated = unit_of_work.update_staged_record(record)
+            unit_of_work.commit()
+            return updated
+
     def _metadata_validation_report(
         self,
         *,
@@ -1299,6 +1446,25 @@ def _coerce_record_id(record_id: object) -> str:
     if record_id is None:
         raise TypeError("record_id must not be None")
     return str(record_id)
+
+
+def _coerce_metadata_update_mode(mode: object) -> MetadataUpdateMode:
+    """Return a supported metadata update mode."""
+    if mode in {"replace", "shallow_merge"}:
+        return cast(MetadataUpdateMode, mode)
+    raise ValueError("metadata update mode must be 'replace' or 'shallow_merge'.")
+
+
+def _merge_metadata(
+    *,
+    current: MetadataDict,
+    updates: MetadataDict,
+    mode: MetadataUpdateMode,
+) -> MetadataDict:
+    """Return metadata after an explicit replace or top-level-only merge."""
+    if mode == "replace":
+        return dict(updates)
+    return {**current, **updates}
 
 
 def _reference_locator_and_path(
