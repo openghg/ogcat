@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from ogcat import ArtifactLocator, Catalog, CatalogSpec, SearchOp, SearchQuery
 
 
@@ -143,10 +145,14 @@ def test_search_supports_list_membership_and_contains(tmp_path: Path) -> None:
     )
 
     by_contains = catalog.search(contains={"tags": "paris"})
+    by_contains_all = catalog.search(contains={"tags": ["paris", "obspack"]})
+    by_contains_missing = catalog.search(contains={"tags": ["paris", "missing"]})
     by_query_contains = catalog.search(query=SearchQuery.contains("tags", "obspack"))
     by_title_substring = catalog.search(contains={"title": "Paris"})
 
     assert [r.id for r in by_contains] == [tagged.id]
+    assert [r.id for r in by_contains_all] == [tagged.id]
+    assert by_contains_missing == []
     assert [r.id for r in by_query_contains] == [tagged.id]
     assert [r.id for r in by_title_substring] == [tagged.id]
 
@@ -160,9 +166,11 @@ def test_search_contains_supports_mapping_subset_and_unhashable_values(tmp_path:
     )
 
     by_subset = catalog.search(contains={"site": {"code": "MHD"}})
+    by_mismatch = catalog.search(contains={"site": {"code": "TAC"}})
     by_unhashable_key = catalog.search(contains={"site": ["code"]})
 
     assert [r.id for r in by_subset] == [record.id]
+    assert by_mismatch == []
     assert by_unhashable_key == []
 
 
@@ -234,3 +242,31 @@ def test_get_and_path_return_none_for_missing_record(tmp_path: Path) -> None:
 
     assert catalog.get("missing") is None
     assert catalog.path("missing") is None
+
+
+def test_search_rejects_set_where_filters(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
+
+    with pytest.raises(TypeError, match="where must be a mapping of field names to expected values"):
+        catalog.search(where={"product", "gridfed"})  # type: ignore[arg-type]
+
+
+def test_search_rejects_bare_string_exists_filters(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
+
+    with pytest.raises(TypeError, match="exists must be a sequence of field names"):
+        catalog.search(exists="site")  # type: ignore[arg-type]
+
+
+def test_search_query_from_filters_validates_filter_shapes() -> None:
+    with pytest.raises(TypeError, match="contains must be a mapping of field names to expected values"):
+        SearchQuery.from_filters(contains=["site"])  # type: ignore[arg-type]
+
+    with pytest.raises(TypeError, match=r"regex\['version'\] must be a string pattern"):
+        SearchQuery.from_filters(regex={"version": 42})  # type: ignore[dict-item]
+
+    with pytest.raises(TypeError, match=r"match\['title'\] must be a string pattern"):
+        SearchQuery.from_filters(match={"title": ["Paris"]})  # type: ignore[dict-item]
+
+    with pytest.raises(TypeError, match="missing must be a sequence of field names"):
+        SearchQuery.from_filters(missing=b"site")  # type: ignore[arg-type]

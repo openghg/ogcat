@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
@@ -77,10 +77,10 @@ class TinyDbCatalogRepository:
         self,
         *,
         query: SearchQuery | None = None,
-        where: dict[str, object] | None = None,
-        contains: dict[str, object] | None = None,
-        regex: dict[str, str] | None = None,
-        match: dict[str, str] | None = None,
+        where: Mapping[str, object] | None = None,
+        contains: Mapping[str, object] | None = None,
+        regex: Mapping[str, str] | None = None,
+        match: Mapping[str, str] | None = None,
         exists: Sequence[str] | None = None,
         missing: Sequence[str] | None = None,
         ignore_case: bool = False,

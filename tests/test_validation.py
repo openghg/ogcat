@@ -128,6 +128,22 @@ def test_validate_metadata_checks_supported_pydantic_type_labels() -> None:
     ]
 
 
+def test_validate_metadata_normalizes_values_before_type_checks() -> None:
+    schema = RecordSchema(
+        metadata_fields=[
+            MetadataFieldDescription(name="path", description="Source path.", value_types=["str"]),
+            MetadataFieldDescription(name="tags", description="Tags.", value_types=["list[str]"]),
+        ]
+    )
+
+    report = validate_metadata(
+        {"path": Path("raw/example.nc"), "tags": ("co2", "mhd")},
+        schema,
+    )
+
+    assert report.ok
+
+
 def test_validate_metadata_uses_strict_type_checks_with_any_supported_type() -> None:
     schema = RecordSchema(
         metadata_fields=[

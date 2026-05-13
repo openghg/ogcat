@@ -16,13 +16,30 @@ record = catalog.add_file(
 )
 ```
 
-Keys and values must be JSON-serialisable (strings, numbers, booleans, lists,
-or nested dictionaries).
+Keys and values must be JSON-compatible. ogcat normalizes common Python values
+before validation, naming, and storage:
 
-List values can be searched with contains/list-membership filters:
+- `pathlib.Path` values become strings.
+- Mapping keys become strings and mapping values are normalized recursively.
+- Tuples and lists become JSON lists.
+- Sets and frozensets become deterministic lists where their normalized values
+  can be sorted.
+- NumPy scalar-like values are converted through `.item()` when available.
+
+Unsupported objects are rejected with a `TypeError` naming the metadata path.
+
+`contains` filters follow the type of the stored value:
+
+- strings use substring containment;
+- lists and other stored sequences use membership matching, and a list expected
+  value requires every expected item to be present;
+- mappings match an expected mapping as a subset of key/value pairs;
+- scalar values fall back to equality.
 
 ```python
 matches = catalog.search(contains={"tags": "paris"})
+all_tags = catalog.search(contains={"tags": ["paris", "europe"]})
+site = catalog.search(contains={"site": {"code": "MHD"}})
 ```
 
 The equivalent CLI forms are:

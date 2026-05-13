@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
 
 from pydantic import StrictBool, StrictFloat, StrictInt, StrictStr, TypeAdapter, ValidationError
 
-from ogcat.models import CatalogRecord
+from ogcat.models import CatalogRecord, normalize_metadata
 from ogcat.spec import CatalogSpec, RecordSchema
 
 _TYPE_ADAPTERS: dict[str, TypeAdapter[Any]] = {
@@ -108,7 +109,7 @@ class ValidationReport:
         if not errors:
             return
         first = errors[0]
-        if first.code == "metadata.not_object":
+        if first.code in {"metadata.not_object", "metadata.not_json"}:
             raise TypeError(first.message)
         raise ValueError(_summarize_errors(errors))
 
@@ -181,13 +182,23 @@ def validate_metadata(
         Structured validation report.
     """
     report = ValidationReport()
-    if not isinstance(metadata, dict):
+    if not isinstance(metadata, Mapping):
         report.add(
             path="metadata",
             message=(
                 f"Metadata for schema {schema_name} must be a dictionary, got {type(metadata).__name__}"
             ),
             code="metadata.not_object",
+        )
+        return report
+    try:
+        metadata = normalize_metadata(metadata)
+    except (TypeError, ValueError) as exc:
+        report.add(
+            path="metadata",
+            message=str(exc),
+            code="metadata.not_json",
+            hint="Use JSON-compatible metadata values or values ogcat can normalize.",
         )
         return report
 
