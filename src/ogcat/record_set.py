@@ -101,7 +101,7 @@ class CatalogRecordSet(Sequence[CatalogRecord]):
             return self._records == other._records
         if isinstance(other, Sequence) and not isinstance(other, str | bytes | bytearray):
             return list(self._records) == list(other)
-        return NotImplemented
+        return False
 
     @property
     def ids(self) -> list[str]:
