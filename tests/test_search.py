@@ -244,6 +244,77 @@ def test_get_and_path_return_none_for_missing_record(tmp_path: Path) -> None:
     assert catalog.path("missing") is None
 
 
+def test_find_and_find_ids_use_search_filters(tmp_path: Path) -> None:
+    """Selection helpers return records and stable string ids in search order."""
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
+    co2 = catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/co2.zarr"),
+        metadata={"species": "co2", "provenance": "derived", "keywords": ["paris_verification_games"]},
+    )
+    catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/ch4.zarr"),
+        metadata={"species": "ch4", "provenance": "derived", "keywords": ["baseline"]},
+    )
+
+    records = catalog.find(
+        where={"provenance": "derived", "species": "co2"},
+        contains={"keywords": "paris_verification_games"},
+    )
+    ids = catalog.find_ids(
+        where={"provenance": "derived", "species": "co2"},
+        contains={"keywords": "paris_verification_games"},
+    )
+
+    assert records == [co2]
+    assert ids == [co2.id]
+    assert all(isinstance(record_id, str) for record_id in ids)
+
+
+def test_get_one_returns_record_for_exactly_one_match(tmp_path: Path) -> None:
+    """get_one returns the matching record for notebook-style lookup workflows."""
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
+    record = catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/gridfed-total-co2.zarr"),
+        metadata={"product": "GridFED", "sector": "TOTAL", "species": "co2"},
+    )
+
+    selected = catalog.get_one(
+        where={
+            "product": "GridFED",
+            "sector": "TOTAL",
+            "species": "co2",
+        }
+    )
+
+    assert selected == record
+    assert selected.locator.value == "s3://bucket/gridfed-total-co2.zarr"
+
+
+def test_get_one_raises_clear_errors_for_zero_and_multiple_matches(tmp_path: Path) -> None:
+    """get_one reports empty and ambiguous selections clearly."""
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
+    first = catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/first.zarr"),
+        metadata={"species": "co2"},
+    )
+    catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/second.zarr"),
+        metadata={"species": "co2"},
+    )
+
+    with pytest.raises(ValueError, match="no records"):
+        catalog.get_one(where={"site": "NO_SUCH_SITE"})
+    with pytest.raises(ValueError, match="multiple records"):
+        catalog.get_one(where={"species": "co2"})
+
+    assert catalog.get_one(where={"species": "co2"}, allow_many=True) == first
+
+
 def test_search_rejects_set_where_filters(tmp_path: Path) -> None:
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
 

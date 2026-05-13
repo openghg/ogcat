@@ -380,3 +380,25 @@ def test_record_schema_fallbacks_preserve_empty_templates() -> None:
 
     assert resolved.directory_template == ""
     assert resolved.filename_template == ""
+
+
+def test_record_schema_display_fields_round_trip() -> None:
+    """Record schemas preserve compact display field defaults."""
+    schema = RecordSchema(display_fields=["id", "species", "path"])
+
+    payload = schema.to_dict()
+    reloaded = RecordSchema.from_dict(payload)
+
+    assert payload["display_fields"] == ["id", "species", "path"]
+    assert reloaded.display_fields == ["id", "species", "path"]
+
+
+def test_record_schema_display_fields_fall_back_from_default_schema() -> None:
+    """Named schemas inherit default display fields when they do not define their own."""
+    spec = CatalogSpec(
+        catalog_name="files",
+        default_schema=RecordSchema(display_fields=["id", "title", "path"]),
+        record_schemas={"flux": RecordSchema(description="Flux records.")},
+    )
+
+    assert spec.get_schema("flux").display_fields == ["id", "title", "path"]

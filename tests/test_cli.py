@@ -287,6 +287,34 @@ def test_search_fields_selects_human_output_columns(tmp_path: Path) -> None:
     assert "CTE-HR" not in stdout
 
 
+def test_search_uses_schema_display_fields_when_fields_are_omitted(tmp_path: Path) -> None:
+    """Default search output uses schema display fields for homogeneous results."""
+    catalog = Catalog.create(
+        tmp_path / "catalog",
+        CatalogSpec(
+            catalog_name="fluxes",
+            record_schemas={
+                "flux": RecordSchema(display_fields=["id", "species", "locator.uri"]),
+            },
+        ),
+    )
+    record = catalog.add_artifact(
+        record_type="flux",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/flux.zarr"),
+        metadata={"species": "CO2", "product": "GridFED"},
+    )
+
+    result = runner.invoke(app, ["search", "--catalog", str(catalog.root), "--where", "species=CO2"])
+
+    assert result.exit_code == 0
+    stdout = strip_ansi(result.stdout)
+    assert "locator.uri" in stdout
+    assert "s3://bucket/flux.zarr" in stdout
+    assert _record_id(record) in stdout
+    assert "product" not in stdout
+    assert "GridFED" not in stdout
+
+
 def test_search_fields_supports_dotted_paths_and_locator_uri(tmp_path: Path) -> None:
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
     catalog.add_artifact(
@@ -509,7 +537,7 @@ def test_fields_human_output(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     stdout = strip_ansi(result.stdout)
-    assert "metadata fields" in stdout
+    assert "schema-declared metadata fields" in stdout
     assert "species" in stdout
     assert "Gas species name used for grouping" in stdout
 
@@ -528,12 +556,15 @@ def test_fields_json_output(tmp_path: Path) -> None:
 def test_fields_stored_and_values_output(tmp_path: Path) -> None:
     catalog = _create_catalog(tmp_path)
 
+    stored_human_result = runner.invoke(app, ["fields", "--catalog", str(catalog.root), "--stored"])
     stored_result = runner.invoke(app, ["fields", "--catalog", str(catalog.root), "--stored", "--json"])
     values_result = runner.invoke(
         app,
         ["fields", "--catalog", str(catalog.root), "--values", "species", "--json"],
     )
 
+    assert stored_human_result.exit_code == 0
+    assert "stored record fields" in strip_ansi(stored_human_result.stdout)
     assert stored_result.exit_code == 0
     stored_payload = json.loads(strip_ansi(stored_result.stdout))
     assert "user_metadata.species" in stored_payload
@@ -548,7 +579,7 @@ def test_fields_human_output_handles_missing_field_descriptions(tmp_path: Path) 
     result = runner.invoke(app, ["fields", "--catalog", str(catalog.root)])
 
     assert result.exit_code == 0
-    assert "No metadata fields are defined in this catalog." in strip_ansi(result.stdout)
+    assert "No schema-declared metadata fields are defined in this catalog." in strip_ansi(result.stdout)
 
 
 def test_spec_cli_adds_schema_sets_default_and_updates_simple_fields(tmp_path: Path) -> None:
@@ -588,6 +619,34 @@ def test_spec_cli_adds_schema_sets_default_and_updates_simple_fields(tmp_path: P
     assert reopened.spec.default_record_schema == "paper"
     assert reopened.spec.catalog_name == "library"
     assert reopened.spec.field_resolution_order == ["user_metadata", "top_level"]
+
+
+def test_spec_cli_show_schema_json_includes_display_fields(tmp_path: Path) -> None:
+    """spec show-schema --json emits the full serialisable schema."""
+    catalog = Catalog.create(
+        tmp_path / "catalog",
+        CatalogSpec(
+            catalog_name="files",
+            record_schemas={
+                "flux": RecordSchema(
+                    display_fields=["id", "species", "locator.uri"],
+                    metadata_fields=[
+                        MetadataFieldDescription(name="species", description="Gas species."),
+                    ],
+                ),
+            },
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        ["spec", "show-schema", "flux", "--catalog", str(catalog.root), "--json"],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(strip_ansi(result.stdout))
+    assert payload["display_fields"] == ["id", "species", "locator.uri"]
+    assert payload["metadata_fields"][0]["name"] == "species"
 
 
 def test_spec_cli_add_schema_accepts_file_path_with_outer_whitespace(tmp_path: Path) -> None:

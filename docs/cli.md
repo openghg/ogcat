@@ -53,6 +53,14 @@ ogcat search --catalog <root> [FILTER ...] [OPTIONS]
 **Compatibility flags** (also available):
 ``--where``, ``--contains``, ``--match``, ``--regex``, ``--exists``, ``--missing``, ``--ignore-case``
 
+Use ``--ids`` when piping search results into ID-based commands:
+
+```bash
+record_id=$(ogcat search --catalog <root> species=CO2 --ids --limit 1)
+ogcat show "$record_id" --catalog <root>
+ogcat path "$record_id" --catalog <root>
+```
+
 ### ``ogcat show``
 
 Print a single record.
@@ -79,8 +87,8 @@ ogcat info --catalog <root>
 
 ### ``ogcat fields``
 
-Print declared metadata fields from the catalog spec, or inspect fields found
-in stored records.
+Print schema-declared metadata fields from the catalog spec, or inspect fields
+found in stored records.
 
 ```
 ogcat fields --catalog <root> [--record-type TYPE] [--stored] [--values FIELD] [--json]
@@ -95,10 +103,14 @@ unique scalar values for one field.
 Update small, safe parts of ``catalog.json``.
 
 ```
+ogcat spec show-schema [TYPE] --catalog <root> [--json]
 ogcat spec add-schema NAME --catalog <root> --schema-json JSON_OR_PATH [--overwrite]
 ogcat spec set-default-schema NAME --catalog <root>
 ogcat spec set FIELD=VALUE ... --catalog <root>
 ```
+
+``ogcat spec show-schema --json`` prints the full serialisable schema,
+including ``display_fields`` when configured.
 
 ``ogcat spec set`` supports simple fields such as ``catalog_name``,
 ``default_operation``, and ``field_resolution_order``. ``files_root`` changes

@@ -22,6 +22,7 @@ class RecordSchema:
         directory_template: Optional storage directory template.
         filename_template: Optional storage filename template.
         metadata_fields: Described metadata fields.
+        display_fields: Preferred fields for compact search/result display.
         allow_unknown_metadata: Whether fields outside ``metadata_fields`` are
             allowed during strict validation.
     """
@@ -30,6 +31,7 @@ class RecordSchema:
     directory_template: str | None = None
     filename_template: str | None = None
     metadata_fields: list[MetadataFieldDescription] = field(default_factory=list)
+    display_fields: list[str] = field(default_factory=list)
     allow_unknown_metadata: bool = True
 
     def to_dict(self) -> dict[str, object]:
@@ -43,6 +45,8 @@ class RecordSchema:
             payload["directory_template"] = self.directory_template
         if self.filename_template is not None:
             payload["filename_template"] = self.filename_template
+        if self.display_fields:
+            payload["display_fields"] = list(self.display_fields)
         if not self.allow_unknown_metadata:
             payload["allow_unknown_metadata"] = False
         return payload
@@ -63,6 +67,7 @@ class RecordSchema:
                 None if data.get("filename_template") is None else str(data["filename_template"])
             ),
             metadata_fields=metadata_fields,
+            display_fields=_coerce_string_list(data.get("display_fields"), field_name="display_fields"),
             allow_unknown_metadata=bool(data.get("allow_unknown_metadata", True)),
         )
 
@@ -77,6 +82,7 @@ class RecordSchema:
                 fallback.filename_template if self.filename_template is None else self.filename_template
             ),
             metadata_fields=list(self.metadata_fields),
+            display_fields=list(self.display_fields or fallback.display_fields),
             allow_unknown_metadata=self.allow_unknown_metadata,
         )
 
@@ -282,3 +288,9 @@ def _coerce_object_list(value: object, *, field_name: str) -> list[object]:
     if not isinstance(value, list):
         raise TypeError(f"{field_name} must be a list")
     return value
+
+
+def _coerce_string_list(value: object, *, field_name: str) -> list[str]:
+    """Coerce a JSON-like list value to a string list."""
+    items = _coerce_object_list(value, field_name=field_name)
+    return [str(item) for item in items]

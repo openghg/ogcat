@@ -16,7 +16,7 @@ from rich.table import Table
 
 from ogcat.catalog import Catalog
 from ogcat.models import CatalogRecord
-from ogcat.record_set import DEFAULT_RECORDSET_FIELDS, CatalogRecordSet
+from ogcat.record_set import CatalogRecordSet
 from ogcat.search import SearchQuery
 from ogcat.spec import CatalogSpec, RecordSchema
 
@@ -29,7 +29,6 @@ app.add_typer(spec_app, name="spec")
 console = Console()
 error_console = Console(stderr=True)
 DEFAULT_SEARCH_LIMIT = 50
-DEFAULT_SEARCH_FIELDS: list[str] = list(DEFAULT_RECORDSET_FIELDS)
 SearchOutputFormat = Literal["table", "plain", "csv", "tsv", "pipe"]
 
 
@@ -427,10 +426,10 @@ def search(
     if all_results and limit is not None:
         raise typer.BadParameter("Use either --all or --limit, not both.")
     display_limit = limit if limit is not None else DEFAULT_SEARCH_LIMIT
-    display_fields = DEFAULT_SEARCH_FIELDS
+    display_fields: list[str] | None = None
     parsed_output_format: SearchOutputFormat = "table"
     if not any([json_mode, ids_only, paths_only]):
-        display_fields = _parse_fields_option(fields) or DEFAULT_SEARCH_FIELDS
+        display_fields = _parse_fields_option(fields)
         parsed_output_format = _parse_search_output_format(output_format)
     active_catalog = _open_catalog_or_fail(catalog)
     query = SearchQuery.from_filters(
@@ -474,15 +473,14 @@ def search(
         console.print("No records matched.")
         return
 
-    rows = _search_display_rows(
-        active_catalog.record_set(shown_results),
-        fields=display_fields,
-    )
+    record_set = active_catalog.record_set(shown_results)
+    resolved_display_fields = display_fields or record_set.default_fields()
+    rows = _search_display_rows(record_set, fields=resolved_display_fields)
 
     if parsed_output_format != "table":
         delimiters = {"plain": " ", "csv": ",", "tsv": "\t", "pipe": "|"}
         _print_delimited_search_output(
-            fields=display_fields,
+            fields=resolved_display_fields,
             rows=rows,
             delimiter=delimiters[parsed_output_format],
         )
@@ -499,7 +497,7 @@ def search(
             f"Showing {len(shown_results)} of {len(results)} matches. "
             "Use --limit N, --all, or --json for more."
         )
-    _print_search_table(fields=display_fields, rows=rows)
+    _print_search_table(fields=resolved_display_fields, rows=rows)
 
 
 @app.command()
@@ -663,10 +661,10 @@ def fields(
         return
 
     if not metadata_fields:
-        console.print("No metadata fields are defined in this catalog.")
+        console.print("No schema-declared metadata fields are defined in this catalog.")
         return
 
-    table = Table(title="metadata fields", expand=True)
+    table = Table(title="schema-declared metadata fields", expand=True)
     table.add_column("name")
     table.add_column("required")
     table.add_column("type")
@@ -685,6 +683,52 @@ def fields(
             "" if field_description.get("example") is None else json.dumps(field_description["example"]),
         )
 
+    console.print(table)
+
+
+@spec_app.command("show-schema")
+def spec_show_schema(
+    record_type: Annotated[
+        str | None,
+        typer.Argument(help="Record schema name. Omit to show the default schema."),
+    ] = None,
+    catalog: Annotated[Path | None, typer.Option("--catalog", help="Catalog root.")] = None,
+    json_mode: Annotated[
+        bool,
+        typer.Option("--json", help="Print the schema as JSON."),
+    ] = False,
+) -> None:
+    """Show a full record schema."""
+    active_catalog = _open_catalog_or_fail(catalog)
+    try:
+        schema = active_catalog.get_schema(record_type)
+    except ValueError as exc:
+        _fail(str(exc))
+
+    if json_mode:
+        _print_json(schema)
+        return
+
+    metadata_fields = schema.get("metadata_fields", [])
+    if not isinstance(metadata_fields, list):
+        metadata_fields = []
+    display_fields = schema.get("display_fields", [])
+    if not isinstance(display_fields, list):
+        display_fields = []
+    metadata_field_names = [
+        str(field.get("name", "")) for field in metadata_fields if isinstance(field, dict)
+    ]
+
+    title = "default record schema" if record_type is None else f"record schema: {record_type}"
+    table = Table(title=title, show_header=False)
+    table.add_column("field")
+    table.add_column("value")
+    table.add_row("description", str(schema.get("description", "")))
+    table.add_row("directory template", str(schema.get("directory_template", "")))
+    table.add_row("filename template", str(schema.get("filename_template", "")))
+    table.add_row("display fields", ", ".join(str(field) for field in display_fields))
+    table.add_row("metadata fields", ", ".join(metadata_field_names))
+    table.add_row("allow unknown metadata", str(schema.get("allow_unknown_metadata", True)))
     console.print(table)
 
 

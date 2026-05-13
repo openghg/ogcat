@@ -22,6 +22,7 @@ from ogcat import ArtifactLocator, Catalog, CatalogSpec, MetadataFieldDescriptio
 
 measurement_schema = RecordSchema(
     description="Managed local measurement files.",
+    display_fields=["id", "site", "species", "year", "path"],
     metadata_fields=[
         MetadataFieldDescription(name="title", description="Human-readable title.", required=True),
         MetadataFieldDescription(name="site", description="Site code.", required=True),
@@ -32,6 +33,7 @@ measurement_schema = RecordSchema(
 
 reference_schema = RecordSchema(
     description="References to external artifacts that ogcat does not copy.",
+    display_fields=["id", "kind", "topic", "locator.uri"],
     metadata_fields=[
         MetadataFieldDescription(name="title", description="Reference title.", required=True),
         MetadataFieldDescription(name="kind", description="Reference kind.", required=True),
@@ -92,14 +94,25 @@ with TemporaryDirectory(prefix="ogcat-tutorial-") as tmp:
 ```python
     ch4_records = catalog.search(where={"species": "CH4"})
     topic_matches = catalog.search(contains={"topic": "methane"}, ignore_case=True)
+    selected = catalog.get_one(where={"site": "MHD", "species": "CH4"})
+    record_ids = catalog.find_ids(where={"species": "CH4"})
+    display_df = catalog.search(where={"species": "CH4"}, as_record_set=True).to_dataframe(fields="default")
 
     print(ch4_records[0].path())
     print(topic_matches[0].locator.value)
+    print(selected.path())
+    print(record_ids)
+    print(display_df)
 ```
 
 Unqualified fields such as `species` and `topic` are resolved across top-level
 record fields, `user_metadata`, and `derived_metadata`. Use dotted paths such as
 `user_metadata.species` when you need to be explicit.
+
+When a `RecordSchema` defines `display_fields`, record-set previews and
+`to_dataframe(fields="default")` use those compact fields for notebook-style
+inspection. `to_dataframe()` with no fields still returns full record
+dictionaries.
 
 ## Modify metadata with the repository
 
@@ -126,4 +139,7 @@ intentionally changing them.
 uv run ogcat init /tmp/tutorial-catalog --name tutorial
 uv run ogcat add ./mhd_ch4_2024.txt --catalog /tmp/tutorial-catalog --meta title="MHD methane observations" site=MHD species=CH4 year=2024
 uv run ogcat search --catalog /tmp/tutorial-catalog species=CH4 --fields id,title,species,path
+uv run ogcat search --catalog /tmp/tutorial-catalog species=CH4 --ids
+uv run ogcat fields --catalog /tmp/tutorial-catalog --stored
+uv run ogcat fields --catalog /tmp/tutorial-catalog --values species
 ```
