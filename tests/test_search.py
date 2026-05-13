@@ -244,8 +244,8 @@ def test_get_and_path_return_none_for_missing_record(tmp_path: Path) -> None:
     assert catalog.path("missing") is None
 
 
-def test_find_and_find_ids_use_search_filters(tmp_path: Path) -> None:
-    """Selection helpers return records and stable string ids in search order."""
+def test_record_set_ids_use_search_filters(tmp_path: Path) -> None:
+    """Record-set IDs are stable strings in search order."""
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
     co2 = catalog.add_artifact(
         record_type="external_reference",
@@ -258,18 +258,29 @@ def test_find_and_find_ids_use_search_filters(tmp_path: Path) -> None:
         metadata={"species": "ch4", "provenance": "derived", "keywords": ["baseline"]},
     )
 
-    records = catalog.find(
-        where={"provenance": "derived", "species": "co2"},
-        contains={"keywords": "paris_verification_games"},
-    )
-    ids = catalog.find_ids(
+    results = catalog.search(
         where={"provenance": "derived", "species": "co2"},
         contains={"keywords": "paris_verification_games"},
     )
 
-    assert records == [co2]
-    assert ids == [co2.id]
-    assert all(isinstance(record_id, str) for record_id in ids)
+    assert list(results) == [co2]
+    assert results.ids == [co2.id]
+    assert all(isinstance(record_id, str) for record_id in results.ids)
+
+
+def test_search_can_return_plain_list_when_requested(tmp_path: Path) -> None:
+    """Callers can opt out of the default record-set wrapper."""
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
+    record = catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/co2.zarr"),
+        metadata={"species": "co2"},
+    )
+
+    results = catalog.search(where={"species": "co2"}, as_record_set=False)
+
+    assert results == [record]
+    assert isinstance(results, list)
 
 
 def test_get_one_returns_record_for_exactly_one_match(tmp_path: Path) -> None:

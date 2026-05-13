@@ -89,10 +89,12 @@ spec = CatalogSpec(
 and notebook dataframes:
 
 ```python
-results = catalog.search(where={"species": "CO2"}, as_record_set=True)
+results = catalog.search(where={"species": "CO2"})
+rows = results.rows()
 df = results.to_dataframe(fields="default")
 ```
 
+`to_dataframe()` requires pandas to be installed in the active environment.
 Calling `results.to_dataframe()` with no fields still returns full record
 dictionaries for compatibility.
 

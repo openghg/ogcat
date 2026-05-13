@@ -443,6 +443,7 @@ def search(
     results = active_catalog.search(
         query=query,
         ignore_case=ignore_case,
+        as_record_set=False,
     )
 
     if json_mode:

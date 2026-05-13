@@ -95,24 +95,28 @@ with TemporaryDirectory(prefix="ogcat-tutorial-") as tmp:
     ch4_records = catalog.search(where={"species": "CH4"})
     topic_matches = catalog.search(contains={"topic": "methane"}, ignore_case=True)
     selected = catalog.get_one(where={"site": "MHD", "species": "CH4"})
-    record_ids = catalog.find_ids(where={"species": "CH4"})
-    display_df = catalog.search(where={"species": "CH4"}, as_record_set=True).to_dataframe(fields="default")
+    record_ids = ch4_records.ids
+    display_rows = ch4_records.rows()
 
     print(ch4_records[0].path())
     print(topic_matches[0].locator.value)
     print(selected.path())
     print(record_ids)
-    print(display_df)
+    print(display_rows)
 ```
 
 Unqualified fields such as `species` and `topic` are resolved across top-level
 record fields, `user_metadata`, and `derived_metadata`. Use dotted paths such as
 `user_metadata.species` when you need to be explicit.
 
+`search()` returns a `CatalogRecordSet` by default. It behaves like a sequence
+of records and also provides helpers such as `ids`, `rows()`, `preview()`, and
+`select(...)`.
+
 When a `RecordSchema` defines `display_fields`, record-set previews and
-`to_dataframe(fields="default")` use those compact fields for notebook-style
-inspection. `to_dataframe()` with no fields still returns full record
-dictionaries.
+`rows()` use those compact fields for notebook-style inspection. If pandas is
+available, `to_dataframe(fields="default")` uses the same fields.
+`to_dataframe()` with no fields still returns full record dictionaries.
 
 ## Modify metadata with the repository
 

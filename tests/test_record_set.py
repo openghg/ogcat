@@ -27,10 +27,11 @@ def _create_catalog(tmp_path: Path) -> Catalog:
     return catalog
 
 
-def test_search_can_return_record_set_with_cli_style_field_selection(tmp_path: Path) -> None:
+def test_search_returns_record_set_with_cli_style_field_selection_by_default(tmp_path: Path) -> None:
+    """Search returns a record set with field-selection helpers by default."""
     catalog = _create_catalog(tmp_path)
 
-    results = catalog.search(where={"species": "CO2"}, as_record_set=True)
+    results = catalog.search(where={"species": "CO2"})
 
     assert isinstance(results, CatalogRecordSet)
     assert len(results) == 1
@@ -83,6 +84,15 @@ def test_record_set_to_dataframe_uses_selected_rows_when_pandas_is_available(
     frame = results.to_dataframe(fields=["id", "species"])
 
     assert frame == [{"id": results[0].id, "species": "CO2"}]
+
+
+def test_record_set_ids_returns_stable_string_ids(tmp_path: Path) -> None:
+    """Record-set IDs are convenient for show/path follow-up operations."""
+    catalog = _create_catalog(tmp_path)
+    results = catalog.search(as_record_set=True)
+
+    assert results.ids == [results[0].id]
+    assert all(isinstance(record_id, str) for record_id in results.ids)
 
 
 def test_record_set_to_dataframe_without_fields_keeps_full_records(

@@ -647,14 +647,14 @@ class Catalog:
         exists: Sequence[str] | None = None,
         missing: Sequence[str] | None = None,
         ignore_case: bool = False,
-        as_record_set: Literal[False] = False,
-    ) -> list[CatalogRecord]: ...
+        as_record_set: Literal[True] = True,
+    ) -> CatalogRecordSet: ...
 
     @overload
     def search(
         self,
-        *,
         query: SearchQuery | None = None,
+        *,
         where: Mapping[str, object] | None = None,
         contains: Mapping[str, object] | None = None,
         regex: Mapping[str, str] | None = None,
@@ -662,8 +662,8 @@ class Catalog:
         exists: Sequence[str] | None = None,
         missing: Sequence[str] | None = None,
         ignore_case: bool = False,
-        as_record_set: Literal[True],
-    ) -> CatalogRecordSet: ...
+        as_record_set: Literal[False],
+    ) -> list[CatalogRecord]: ...
 
     def search(
         self,
@@ -676,7 +676,7 @@ class Catalog:
         exists: Sequence[str] | None = None,
         missing: Sequence[str] | None = None,
         ignore_case: bool = False,
-        as_record_set: bool = False,
+        as_record_set: bool = True,
     ) -> list[CatalogRecord] | CatalogRecordSet:
         """Search catalog records using backend-neutral query semantics.
 
@@ -689,10 +689,10 @@ class Catalog:
             exists: Fields that must be present.
             missing: Fields that must be absent.
             ignore_case: Whether string comparisons should be case-insensitive.
-            as_record_set: Return a ``CatalogRecordSet`` instead of a list.
+            as_record_set: Return a ``CatalogRecordSet``. Pass ``False`` for a list.
 
         Returns:
-            Matching records, either as a list or record-set view.
+            Matching records, as a record-set view by default or a list when requested.
         """
         results = self.repository.search(
             query=query,
@@ -709,58 +709,6 @@ class Catalog:
             return self.record_set(results)
         return results
 
-    def find(
-        self,
-        query: SearchQuery | None = None,
-        *,
-        where: Mapping[str, object] | None = None,
-        contains: Mapping[str, object] | None = None,
-        regex: Mapping[str, str] | None = None,
-        match: Mapping[str, str] | None = None,
-        exists: Sequence[str] | None = None,
-        missing: Sequence[str] | None = None,
-        ignore_case: bool = False,
-    ) -> list[CatalogRecord]:
-        """Return matching records using the same filters as ``search``."""
-        return self.search(
-            query=query,
-            where=where,
-            contains=contains,
-            regex=regex,
-            match=match,
-            exists=exists,
-            missing=missing,
-            ignore_case=ignore_case,
-        )
-
-    def find_ids(
-        self,
-        query: SearchQuery | None = None,
-        *,
-        where: Mapping[str, object] | None = None,
-        contains: Mapping[str, object] | None = None,
-        regex: Mapping[str, str] | None = None,
-        match: Mapping[str, str] | None = None,
-        exists: Sequence[str] | None = None,
-        missing: Sequence[str] | None = None,
-        ignore_case: bool = False,
-    ) -> list[str]:
-        """Return stable string IDs for records matching the search filters."""
-        return [
-            str(record.id)
-            for record in self.find(
-                query=query,
-                where=where,
-                contains=contains,
-                regex=regex,
-                match=match,
-                exists=exists,
-                missing=missing,
-                ignore_case=ignore_case,
-            )
-            if record.id is not None
-        ]
-
     def get_one(
         self,
         query: SearchQuery | None = None,
@@ -775,7 +723,7 @@ class Catalog:
         allow_many: bool = False,
     ) -> CatalogRecord:
         """Return one matching record, raising clear errors for ambiguous searches."""
-        records = self.find(
+        records = self.search(
             query=query,
             where=where,
             contains=contains,

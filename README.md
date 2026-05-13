@@ -107,6 +107,10 @@ matches = catalog.search(where={"species": "CO2"})
 regex_matches = catalog.search(regex={"version": r"^v4\.[0-9]+$"})
 ```
 
+`search()` returns a `CatalogRecordSet` by default, so results can be indexed,
+iterated, previewed, or narrowed to selected fields. Pass `as_record_set=False`
+when you explicitly need a plain list.
+
 For selection-heavy workflows, use the small helpers around search:
 
 ```python
@@ -122,10 +126,12 @@ record = catalog.get_one(
 # For URI/urlpath records, use the locator value.
 # ds = xr.open_dataset(record.locator.value)
 
-ids = catalog.find_ids(
+results = catalog.search(
     where={"provenance": "derived", "species": "co2"},
     contains={"keywords": "paris_verification_games"},
 )
+ids = results.ids
+summary = results.select("id", "product", "species")
 ```
 
 Field lookup supports both flattened names and explicit dotted paths:

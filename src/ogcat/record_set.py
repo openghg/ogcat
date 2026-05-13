@@ -95,6 +95,19 @@ class CatalogRecordSet(Sequence[CatalogRecord]):
         """Iterate over records in insertion order."""
         return iter(self._records)
 
+    def __eq__(self, other: object) -> bool:
+        """Return whether this record set contains the same records as another sequence."""
+        if isinstance(other, CatalogRecordSet):
+            return self._records == other._records
+        if isinstance(other, Sequence) and not isinstance(other, str | bytes | bytearray):
+            return list(self._records) == list(other)
+        return NotImplemented
+
+    @property
+    def ids(self) -> list[str]:
+        """Return stable string IDs for records in this set."""
+        return [str(record.id) for record in self._records if record.id is not None]
+
     def select(self, *fields: str) -> list[dict[str, JsonValue]]:
         """Return JSON-friendly rows for the selected fields."""
         return self.rows(fields)
