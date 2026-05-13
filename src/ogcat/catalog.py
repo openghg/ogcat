@@ -12,7 +12,14 @@ from typing import Any, Literal, cast, overload
 from uuid import uuid4
 
 from ogcat.extractors import extract_derived_metadata
-from ogcat.hooks import HOOK_METHOD_NAMES, ArtifactWriter, HookManager, OperationContext, OperationSource
+from ogcat.hooks import (
+    ArtifactWriter,
+    HookManager,
+    OperationContext,
+    OperationSource,
+    coerce_hook_iterable,
+    validate_hook_objects,
+)
 from ogcat.models import ArtifactLocator, CatalogRecord, JsonValue, MetadataDict, normalize_metadata
 from ogcat.naming import build_naming_context, render_storage_location
 from ogcat.plugins import PluginRegistry
@@ -1233,57 +1240,16 @@ def _coerce_hook_manager(
         raise ValueError("Pass either plugins or hooks, not both.")
     if hooks is not None:
         if isinstance(hooks, HookManager):
-            _validate_hook_objects(hooks.hooks, label="hooks")
+            validate_hook_objects(hooks.hooks, label="hooks")
             return hooks
-        return HookManager(_coerce_hook_iterable(hooks, label="hooks"))
+        return HookManager(coerce_hook_iterable(hooks, label="hooks"))
     if plugins is not None:
         if isinstance(plugins, PluginRegistry):
-            _validate_hook_objects(plugins.hooks, label="plugins")
+            validate_hook_objects(plugins.hooks, label="plugins")
             return plugins.hook_manager()
-        registry = PluginRegistry(_coerce_hook_iterable(plugins, label="plugins"))
+        registry = PluginRegistry(coerce_hook_iterable(plugins, label="plugins"))
         return registry.hook_manager()
     return HookManager()
-
-
-def _coerce_hook_iterable(value: object, *, label: str) -> list[object]:
-    """Return a validated list of hooks from an iterable input."""
-    expected = (
-        "a HookManager or iterable of hook objects"
-        if label == "hooks"
-        else "a PluginRegistry or iterable of hook objects"
-    )
-    if isinstance(value, str | bytes):
-        raise TypeError(f"{label} must be {expected}, got {type(value).__name__}")
-    try:
-        hooks = iter(cast(Iterable[object], value))
-    except TypeError as exc:
-        raise TypeError(f"{label} must be {expected}, got {type(value).__name__}") from exc
-    return _validate_hook_objects(hooks, label=label)
-
-
-def _validate_hook_objects(hooks: Iterable[object], *, label: str) -> list[object]:
-    """Validate hook objects and return a defensive list copy."""
-    validated = list(hooks)
-    method_list = ", ".join(HOOK_METHOD_NAMES)
-    missing = object()
-    for index, hook in enumerate(validated):
-        implemented_methods: list[str] = []
-        for method_name in HOOK_METHOD_NAMES:
-            method = getattr(hook, method_name, missing)
-            if method is missing:
-                continue
-            if not callable(method):
-                raise TypeError(
-                    f"{label} item {index} has non-callable hook method "
-                    f"{method_name!r}; got {type(method).__name__}"
-                )
-            implemented_methods.append(method_name)
-        if not implemented_methods:
-            raise TypeError(
-                f"{label} item {index} must provide at least one callable hook method "
-                f"({method_list}); got {type(hook).__name__}"
-            )
-    return validated
 
 
 def _coerce_record_id(record_id: object) -> str:

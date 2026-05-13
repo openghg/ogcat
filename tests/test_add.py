@@ -770,6 +770,8 @@ def test_add_artifact_supports_non_path_locator_records(tmp_path: Path) -> None:
 
 
 def test_catalog_get_and_path_accept_stringable_record_ids(tmp_path: Path) -> None:
+    """Record lookup should coerce public record-id inputs with str()."""
+
     class RecordId:
         def __str__(self) -> str:
             return "50"
@@ -795,6 +797,8 @@ def test_catalog_get_and_path_accept_stringable_record_ids(tmp_path: Path) -> No
 
 
 def test_add_reference_records_local_path_without_copying_or_moving(tmp_path: Path) -> None:
+    """Local references should record path metadata without file side effects."""
+
     source_dir = tmp_path / "source"
     source_dir.mkdir()
     source = source_dir / "archive.tar.gz"
@@ -819,6 +823,8 @@ def test_add_reference_resolves_relative_path_locators(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Path locators should be normalized like direct local path inputs."""
+
     source = tmp_path / "relative.nc"
     source.write_text("raw", encoding="utf-8")
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
@@ -835,6 +841,8 @@ def test_add_reference_resolves_relative_path_locators(
 
 
 def test_add_reference_records_uri_locator_references(tmp_path: Path) -> None:
+    """URI locators should be recorded as reference records without path metadata."""
+
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
     locator = ArtifactLocator(kind="uri", value="https://example.org/data/example.nc")
 
@@ -849,6 +857,8 @@ def test_add_reference_records_uri_locator_references(tmp_path: Path) -> None:
 
 
 def test_add_reference_records_uri_string_references(tmp_path: Path) -> None:
+    """URI-looking strings should be recorded as URI reference locators."""
+
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
 
     record = catalog.add_reference("https://example.org/data/example.nc")
@@ -859,6 +869,8 @@ def test_add_reference_records_uri_string_references(tmp_path: Path) -> None:
 
 
 def test_add_reference_records_uri_keyword_references(tmp_path: Path) -> None:
+    """The uri keyword should record an explicit URI reference locator."""
+
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
 
     record = catalog.add_reference(uri="https://example.org/data/example.nc")
@@ -868,6 +880,8 @@ def test_add_reference_records_uri_keyword_references(tmp_path: Path) -> None:
 
 
 def test_add_reference_records_urlpath_locator_references(tmp_path: Path) -> None:
+    """URL-path locators should be recorded unchanged as reference records."""
+
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
     locator = ArtifactLocator.from_urlpath("s3://bucket/data/example.zarr")
 
@@ -878,6 +892,8 @@ def test_add_reference_records_urlpath_locator_references(tmp_path: Path) -> Non
 
 
 def test_add_reference_records_urlpath_keyword_references(tmp_path: Path) -> None:
+    """The urlpath keyword should record an fsspec URL-path reference locator."""
+
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
 
     record = catalog.add_reference(urlpath="s3://bucket/data/example.zarr")
@@ -887,6 +903,8 @@ def test_add_reference_records_urlpath_keyword_references(tmp_path: Path) -> Non
 
 
 def test_add_reference_requires_one_reference_input(tmp_path: Path) -> None:
+    """Reference creation should reject missing or ambiguous locator inputs."""
+
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
 
     with pytest.raises(ValueError, match="Pass exactly one of reference, uri, or urlpath"):
@@ -896,6 +914,8 @@ def test_add_reference_requires_one_reference_input(tmp_path: Path) -> None:
 
 
 def test_add_reference_allows_explicit_local_path_metadata(tmp_path: Path) -> None:
+    """Explicit local reference metadata should override inferred metadata."""
+
     source = tmp_path / "raw" / "example.nc"
     source.parent.mkdir()
     source.write_text("raw", encoding="utf-8")

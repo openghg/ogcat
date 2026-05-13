@@ -41,6 +41,8 @@ def test_direct_registration_invokes_hook(tmp_path: Path) -> None:
 
 
 def test_hook_iterable_convenience_invokes_hooks(tmp_path: Path) -> None:
+    """Hook generator inputs should be accepted and dispatched."""
+
     calls: list[str] = []
 
     class Hook:
@@ -61,6 +63,8 @@ def test_hook_iterable_convenience_invokes_hooks(tmp_path: Path) -> None:
 
 
 def test_hook_list_convenience_invokes_hooks(tmp_path: Path) -> None:
+    """Hook list inputs should be accepted and dispatched."""
+
     calls: list[str] = []
 
     class Hook:
@@ -77,6 +81,8 @@ def test_hook_list_convenience_invokes_hooks(tmp_path: Path) -> None:
 
 
 def test_plugin_iterable_convenience_invokes_hooks_on_open(tmp_path: Path) -> None:
+    """Plugin iterable inputs should build a hook manager on open."""
+
     calls: list[str] = []
 
     class Hook:
@@ -92,6 +98,8 @@ def test_plugin_iterable_convenience_invokes_hooks_on_open(tmp_path: Path) -> No
 
 
 def test_create_rejects_invalid_hook_inputs_immediately(tmp_path: Path) -> None:
+    """Invalid hooks inputs should fail before catalog files are created."""
+
     with pytest.raises(TypeError, match="hooks must be a HookManager or iterable of hook objects"):
         Catalog.create(
             tmp_path / "catalog",
@@ -103,6 +111,8 @@ def test_create_rejects_invalid_hook_inputs_immediately(tmp_path: Path) -> None:
 
 
 def test_open_rejects_invalid_plugin_inputs_immediately(tmp_path: Path) -> None:
+    """Invalid plugins inputs should fail while opening the catalog."""
+
     created = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
 
     with pytest.raises(TypeError, match="plugins must be a PluginRegistry or iterable of hook objects"):
@@ -110,6 +120,8 @@ def test_open_rejects_invalid_plugin_inputs_immediately(tmp_path: Path) -> None:
 
 
 def test_open_rejects_non_hook_objects_in_hook_manager_immediately(tmp_path: Path) -> None:
+    """Hook managers should reject entries with no supported hook methods."""
+
     created = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
 
     with pytest.raises(TypeError, match="hooks item 0 must provide at least one callable hook method"):
@@ -117,6 +129,8 @@ def test_open_rejects_non_hook_objects_in_hook_manager_immediately(tmp_path: Pat
 
 
 def test_create_rejects_both_plugins_and_hooks(tmp_path: Path) -> None:
+    """Catalog creation should preserve the plugins-or-hooks exclusivity rule."""
+
     class Hook:
         def before_validate_metadata(self, context: OperationContext) -> None:
             pass

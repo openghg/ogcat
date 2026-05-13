@@ -463,6 +463,8 @@ def test_show_json_output(tmp_path: Path) -> None:
 
 
 def test_show_and_path_commands_handle_numeric_looking_ids(tmp_path: Path) -> None:
+    """Show and path commands should handle TinyDB numeric-looking record ids."""
+
     catalog = _create_catalog(tmp_path)
     record = catalog.search()[0]
     record_id = _record_id(record)

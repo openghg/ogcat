@@ -56,6 +56,8 @@ Use whichever of these is available and configured. Do not add a new type checke
 
 ## Tests
 
+- New tests should include a short docstring describing the behavior or
+  regression they cover.
 - Run focused tests while developing.
 - Before pushing or opening a PR, run the full test suite if it is reasonably quick.
 - If the full suite takes more than about a minute, use judgement: run the relevant subset and explain what was not run.
