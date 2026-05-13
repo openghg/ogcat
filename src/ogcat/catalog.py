@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Literal, cast, overload
 from uuid import uuid4
 
+from ogcat.classification import CLASSIFICATION_METADATA_KEY, classify_artifact
 from ogcat.extractors import extract_derived_metadata
 from ogcat.hooks import (
     ArtifactWriter,
@@ -1223,6 +1224,7 @@ class Catalog:
                     )
             else:
                 artifact_writer.write(hook_context, hook_context.source, canonical_locator)
+            _add_classification_metadata(hook_context, canonical_locator)
             if derived_metadata_collector is not None:
                 derived_metadata_collector(hook_context, canonical_locator)
             self.hook_manager.extract_metadata(hook_context)
@@ -1504,6 +1506,24 @@ def _metadata_with_hook_warnings(context: OperationContext) -> MetadataDict:
         warnings_metadata: list[JsonValue] = [warning.to_metadata() for warning in context.warnings]
         metadata["hook_warnings"] = warnings_metadata
     return normalize_metadata(metadata, field_name="derived_metadata")
+
+
+def _add_classification_metadata(context: OperationContext, locator: ArtifactLocator) -> None:
+    """Add cheap artifact classification metadata without overwriting caller values."""
+    classification = classify_artifact(
+        locator,
+        original_path=context.original_path,
+        original_filename=context.original_filename,
+        suffixes=context.suffixes,
+    )
+    existing = context.derived_metadata.get(CLASSIFICATION_METADATA_KEY)
+    if isinstance(existing, Mapping):
+        context.derived_metadata[CLASSIFICATION_METADATA_KEY] = {
+            **classification,
+            **existing,
+        }
+    elif existing is None:
+        context.derived_metadata[CLASSIFICATION_METADATA_KEY] = classification
 
 
 def _storage_plan_with_locator(plan: StoragePlan, locator: ArtifactLocator) -> StoragePlan:

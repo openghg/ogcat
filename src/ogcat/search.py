@@ -9,6 +9,7 @@ from enum import StrEnum
 from fnmatch import fnmatchcase
 from typing import Any
 
+from ogcat.classification import CLASSIFICATION_METADATA_KEY, CLASSIFICATION_SEARCH_FIELDS
 from ogcat.models import CatalogRecord
 
 _RESERVED_FIELDS = {
@@ -338,8 +339,22 @@ def resolve_field(
             continue
         if field in namespace:
             return FieldLookup(found=True, value=namespace[field])
+        if namespace_name == "derived_metadata":
+            classification_lookup = _resolve_classification_field(namespace, field)
+            if classification_lookup.found:
+                return classification_lookup
 
     return FieldLookup(found=False)
+
+
+def _resolve_classification_field(derived_metadata: Mapping[str, Any], field: str) -> FieldLookup:
+    """Resolve selected flattened fields from derived classification metadata."""
+    if field not in CLASSIFICATION_SEARCH_FIELDS:
+        return FieldLookup(found=False)
+    classification = derived_metadata.get(CLASSIFICATION_METADATA_KEY)
+    if not isinstance(classification, Mapping) or field not in classification:
+        return FieldLookup(found=False)
+    return FieldLookup(found=True, value=classification[field])
 
 
 def _stringify(value: Any) -> str:

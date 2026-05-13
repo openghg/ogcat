@@ -31,7 +31,25 @@ fixed set of reserved fields plus three metadata namespaces.
     netCDF files this includes dimension names and sizes when ``xarray`` is
     installed. Derived metadata is normalized with the same JSON-compatible
     rules before storage. Do not rely on derived metadata being present for
-    every file type.
+    every file type. New records include a cheap
+    ``derived_metadata.classification`` namespace with normalized artifact
+    fields such as ``artifact_kind``, ``format``, ``archive_format``, and
+    ``inner_format``. This classification is based on locators, path suffixes,
+    local directory shape, and safe archive member names; it is separate from
+    content metadata extraction.
+
+    Classification uses this initial vocabulary:
+
+    | Field | Values |
+    |-------|--------|
+    | ``artifact_kind`` | ``file``, ``directory``, ``zarr_store``, ``archive``, ``remote_resource``, ``opaque`` |
+    | ``format`` | ``netcdf``, ``zarr``, ``zip``, ``gzip``, ``tar``, ``text``, ``unknown`` |
+    | ``archive_format`` | ``zip``, ``gzip``, or ``tar`` when the artifact is an archive or compressed file |
+    | ``inner_format`` | The safely inferred inner format for simple suffix chains such as ``.nc.gz`` or local zip archives with one file |
+
+    Text-like suffixes such as ``.txt``, ``.csv``, ``.tsv``, and ``.json`` are
+    intentionally classified as the broad ``text`` format until ogcat needs a
+    more detailed text subtype vocabulary.
 
 ``naming_metadata``
 :   Internal metadata used to evaluate directory and filename templates.  You
@@ -49,6 +67,13 @@ looks in this order:
 Use an explicit dotted path to target a specific namespace:
 ``user_metadata.species``, ``derived_metadata.netcdf.dims.time``, or the
 short aliases ``user.species`` and ``derived.netcdf.dims.time``.
+
+Selected classification fields also have a flattened fallback after ordinary
+``derived_metadata`` lookup, so searches such as ``where={"format": "zip"}``
+and ``where={"artifact_kind": "zarr_store"}`` work for classified records.
+Use dotted paths such as
+``derived_metadata.classification.inner_format`` when you need to bypass normal
+namespace precedence.
 
 ## Python API
 
