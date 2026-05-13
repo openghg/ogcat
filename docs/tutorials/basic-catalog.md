@@ -2,7 +2,7 @@
 
 This tutorial builds a small catalog with two named schemas, adds both managed
 files and external references, searches across records, and updates metadata
-through the repository API.
+through the catalog API.
 
 ## Setup
 
@@ -118,24 +118,50 @@ When a `RecordSchema` defines `display_fields`, record-set previews and
 available, `to_dataframe(fields="default")` uses the same fields.
 `to_dataframe()` with no fields still returns full record dictionaries.
 
-## Modify metadata with the repository
+## Repair metadata through the catalog API
 
-`Catalog.repository` is the low-level record store. Use it when you need to
-update an existing record in place.
+Use `Catalog.update_metadata()` when you need to repair or annotate user
+metadata after ingest. The update is normalized, validated against the record's
+schema, and written through the catalog transaction helpers.
 
 ```python
-    saved = catalog.get(measurement.id)
-    assert saved is not None
-    saved.user_metadata["quality_flag"] = "reviewed"
-    catalog.repository.update(saved)
+    updated_measurement = catalog.update_metadata(
+        measurement.id,
+        {"quality_flag": "reviewed"},
+        mode="shallow_merge",
+    )
 
     reviewed = catalog.search(where={"quality_flag": "reviewed"})
     assert reviewed[0].id == measurement.id
+    assert updated_measurement.user_metadata["quality_flag"] == "reviewed"
 ```
 
-Repository updates replace the stored record with the modified
-`CatalogRecord`. Keep record IDs and reserved fields intact unless you are
-intentionally changing them.
+Use `mode="replace"` when the new metadata should replace the whole
+`user_metadata` dictionary. Use `mode="shallow_merge"` when you want a
+top-level dictionary update that keeps existing top-level keys. Shallow merge
+does not recursively merge nested dictionaries; nested dictionaries supplied in
+the update replace existing nested dictionary values. Recursive or deep merge
+support is intentionally deferred.
+
+```python
+    corrected = catalog.update_metadata(
+        measurement.id,
+        {
+            "title": "Corrected MHD methane observations",
+            "site": "MHD",
+            "species": "CH4",
+            "year": 2024,
+            "quality_flag": "reviewed",
+        },
+        mode="replace",
+    )
+    assert corrected.user_metadata["title"] == "Corrected MHD methane observations"
+```
+
+Derived metadata can be repaired separately with
+`Catalog.update_derived_metadata()`, using the same replace and shallow-merge
+mode names. Prefer these public methods over mutating a `CatalogRecord` and
+calling `catalog.repository.update(...)` directly.
 
 ## CLI equivalents
 
