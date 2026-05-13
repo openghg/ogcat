@@ -7,8 +7,9 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from operator import index as operator_index
 from pathlib import Path
-from typing import Any, Literal, cast, overload
+from typing import Any, Literal, SupportsIndex, cast, overload
 from uuid import uuid4
 
 from ogcat.extractors import extract_derived_metadata
@@ -36,6 +37,9 @@ ArtifactLocatorFactory = Callable[[OperationContext], ArtifactLocator]
 StoragePlanFactory = Callable[[OperationContext, ArtifactLocator], StoragePlan | None]
 DerivedMetadataCollector = Callable[[OperationContext, ArtifactLocator], None]
 PlannedLocatorResult = tuple[ArtifactLocator, str | None, str | None, str | None]
+PluginInput = PluginRegistry | list[object] | tuple[object, ...] | None
+HookInput = HookManager | list[object] | tuple[object, ...] | None
+RecordIdInput = str | SupportsIndex
 
 
 @dataclass(slots=True)
@@ -61,16 +65,18 @@ class Catalog:
         root: str | Path,
         spec: CatalogSpec,
         *,
-        plugins: PluginRegistry | None = None,
-        hooks: HookManager | None = None,
+        plugins: PluginInput = None,
+        hooks: HookInput = None,
     ) -> Catalog:
         """Create a catalog directory and write its specification.
 
         Args:
             root: Directory to create or reuse for the catalog.
             spec: Catalog specification to persist.
-            plugins: Optional plugin registry used to build a hook manager.
-            hooks: Optional hook manager. Pass either ``plugins`` or ``hooks``.
+            plugins: Optional plugin registry, or list/tuple of hook objects,
+                used to build a hook manager.
+            hooks: Optional hook manager, or list/tuple of hook objects. Pass
+                either ``plugins`` or ``hooks``.
 
         Returns:
             Open catalog instance bound to ``root``.
@@ -79,6 +85,7 @@ class Catalog:
             ValueError: If the configured backend is unsupported, or both
                 ``plugins`` and ``hooks`` are supplied.
         """
+        hook_manager = _coerce_hook_manager(plugins=plugins, hooks=hooks)
         root_path = Path(root).expanduser().resolve()
         root_path.mkdir(parents=True, exist_ok=True)
         spec.write(root_path / "catalog.json")
@@ -88,7 +95,7 @@ class Catalog:
             root=root_path,
             spec=spec,
             repository=repository,
-            hook_manager=_coerce_hook_manager(plugins=plugins, hooks=hooks),
+            hook_manager=hook_manager,
         )
 
     @classmethod
@@ -96,15 +103,17 @@ class Catalog:
         cls,
         root: str | Path,
         *,
-        plugins: PluginRegistry | None = None,
-        hooks: HookManager | None = None,
+        plugins: PluginInput = None,
+        hooks: HookInput = None,
     ) -> Catalog:
         """Open an existing catalog from disk.
 
         Args:
             root: Existing catalog root containing ``catalog.json``.
-            plugins: Optional plugin registry used to build a hook manager.
-            hooks: Optional hook manager. Pass either ``plugins`` or ``hooks``.
+            plugins: Optional plugin registry, or list/tuple of hook objects,
+                used to build a hook manager.
+            hooks: Optional hook manager, or list/tuple of hook objects. Pass
+                either ``plugins`` or ``hooks``.
 
         Returns:
             Open catalog instance bound to ``root``.
@@ -114,6 +123,7 @@ class Catalog:
             ValueError: If the configured backend is unsupported, or both
                 ``plugins`` and ``hooks`` are supplied.
         """
+        hook_manager = _coerce_hook_manager(plugins=plugins, hooks=hooks)
         root_path = Path(root).expanduser().resolve()
         spec = CatalogSpec.read(root_path / "catalog.json")
         repository = _open_repository(root_path, spec)
@@ -121,7 +131,7 @@ class Catalog:
             root=root_path,
             spec=spec,
             repository=repository,
-            hook_manager=_coerce_hook_manager(plugins=plugins, hooks=hooks),
+            hook_manager=hook_manager,
         )
 
     def add_file(
@@ -470,6 +480,74 @@ class Catalog:
                 schema=schema,
             )
 
+    def add_reference(
+        self,
+        reference: str | Path | ArtifactLocator,
+        *,
+        record_type: str = "external_reference",
+        metadata: Mapping[Any, Any] | None = None,
+        original_path: str | Path | None = None,
+        original_filename: str | None = None,
+        suffixes: list[str] | None = None,
+        derived_metadata: Mapping[Any, Any] | None = None,
+        naming_metadata: Mapping[Any, Any] | None = None,
+        time_added: str | None = None,
+        source: OperationSource | None = None,
+        transaction: UnitOfWork | None = None,
+    ) -> CatalogRecord:
+        """Record an existing path or locator without materialising storage.
+
+        ``add_reference()`` is a convenience wrapper around ``add_artifact()``
+        for artifacts that already exist. It records a reference only: no file
+        is copied, moved, created, or required to live under the catalog's
+        managed files root.
+
+        Args:
+            reference: Local filesystem path or explicit artifact locator.
+            record_type: Logical type of record to create.
+            metadata: JSON-compatible user metadata.
+            original_path: Optional source path or URI override. Inferred for
+                local path references when omitted.
+            original_filename: Optional source filename override. Inferred for
+                local path references when omitted.
+            suffixes: Optional source suffix list override. Inferred for local
+                path references when omitted.
+            derived_metadata: Optional derived metadata to persist.
+            naming_metadata: Optional naming metadata to persist.
+            time_added: Optional timestamp override.
+            source: Optional operation source for hooks.
+            transaction: Optional caller-owned unit of work.
+
+        Returns:
+            Persisted or staged reference record.
+        """
+        locator, local_path = _reference_locator_and_path(reference)
+        resolved_original_path = original_path
+        resolved_original_filename = original_filename
+        resolved_suffixes = suffixes
+        if local_path is not None:
+            if resolved_original_path is None:
+                resolved_original_path = local_path
+            if resolved_original_filename is None:
+                resolved_original_filename = local_path.name
+            if resolved_suffixes is None:
+                resolved_suffixes = local_path.suffixes
+
+        return self.add_artifact(
+            record_type=record_type,
+            locator=locator,
+            metadata=metadata,
+            storage_mode="reference",
+            original_path=resolved_original_path,
+            original_filename=resolved_original_filename,
+            suffixes=resolved_suffixes,
+            derived_metadata=derived_metadata,
+            naming_metadata=naming_metadata,
+            time_added=time_added,
+            source=source,
+            transaction=transaction,
+        )
+
     @contextmanager
     def transaction(self) -> Iterator[UnitOfWork]:
         """Create a best-effort unit of work for composed catalog operations.
@@ -671,11 +749,11 @@ class Catalog:
         """Return available named record schema names."""
         return self.spec.list_record_schemas()
 
-    def get(self, record_id: str) -> CatalogRecord | None:
-        """Get a record by id."""
-        return self.repository.get(record_id)
+    def get(self, record_id: RecordIdInput) -> CatalogRecord | None:
+        """Get a record by string or integer-like id."""
+        return self.repository.get(_coerce_record_id(record_id))
 
-    def path(self, record_id: str) -> Path | None:
+    def path(self, record_id: RecordIdInput) -> Path | None:
         """Return the stored path for a path-backed record, if present."""
         record = self.get(record_id)
         if record is None:
@@ -1140,19 +1218,105 @@ def _open_repository(root: Path, spec: CatalogSpec) -> CatalogRepository:
     return TinyDbCatalogRepository(root / spec.db_path)
 
 
+_HOOK_METHOD_NAMES = (
+    "before_validate_metadata",
+    "after_validate_metadata",
+    "resolve_artifact_locator",
+    "before_record_write",
+    "after_record_write",
+    "extract_metadata",
+    "before_commit",
+    "after_commit",
+    "on_error",
+    "on_rollback",
+)
+
+
 def _coerce_hook_manager(
     *,
-    plugins: PluginRegistry | None,
-    hooks: HookManager | None,
+    plugins: PluginInput,
+    hooks: HookInput,
 ) -> HookManager:
     """Resolve optional plugin or hook registration inputs."""
     if hooks is not None and plugins is not None:
         raise ValueError("Pass either plugins or hooks, not both.")
     if hooks is not None:
-        return hooks
+        if isinstance(hooks, HookManager):
+            _validate_hook_objects(hooks.hooks, label="hooks")
+            return hooks
+        if isinstance(hooks, (list, tuple)):
+            return HookManager(_validate_hook_objects(hooks, label="hooks"))
+        raise TypeError(
+            f"hooks must be a HookManager or a list/tuple of hook objects, got {type(hooks).__name__}"
+        )
     if plugins is not None:
-        return plugins.hook_manager()
+        if isinstance(plugins, PluginRegistry):
+            _validate_hook_objects(plugins.hooks, label="plugins")
+            return plugins.hook_manager()
+        if isinstance(plugins, (list, tuple)):
+            registry = PluginRegistry(_validate_hook_objects(plugins, label="plugins"))
+            return registry.hook_manager()
+        raise TypeError(
+            f"plugins must be a PluginRegistry or a list/tuple of hook objects, got {type(plugins).__name__}"
+        )
     return HookManager()
+
+
+def _validate_hook_objects(hooks: Sequence[object], *, label: str) -> list[object]:
+    """Validate hook objects and return a defensive list copy."""
+    validated = list(hooks)
+    method_list = ", ".join(_HOOK_METHOD_NAMES)
+    missing = object()
+    for index, hook in enumerate(validated):
+        implemented_methods: list[str] = []
+        for method_name in _HOOK_METHOD_NAMES:
+            method = getattr(hook, method_name, missing)
+            if method is missing:
+                continue
+            if not callable(method):
+                raise TypeError(
+                    f"{label} item {index} has non-callable hook method "
+                    f"{method_name!r}; got {type(method).__name__}"
+                )
+            implemented_methods.append(method_name)
+        if not implemented_methods:
+            raise TypeError(
+                f"{label} item {index} must provide at least one callable hook method "
+                f"({method_list}); got {type(hook).__name__}"
+            )
+    return validated
+
+
+def _coerce_record_id(record_id: RecordIdInput) -> str:
+    """Return a repository id string from public record-id input."""
+    if isinstance(record_id, str):
+        return record_id
+    if isinstance(record_id, bool):
+        raise TypeError("record_id must be a string or integer-like value, got bool")
+    try:
+        return str(operator_index(record_id))
+    except TypeError as exc:
+        raise TypeError(
+            f"record_id must be a string or integer-like value, got {type(record_id).__name__}"
+        ) from exc
+
+
+def _reference_locator_and_path(
+    reference: str | Path | ArtifactLocator,
+) -> tuple[ArtifactLocator, Path | None]:
+    """Return the locator and local path metadata for a reference input."""
+    if isinstance(reference, ArtifactLocator):
+        return reference, reference.as_path()
+    if isinstance(reference, str):
+        if "://" in reference:
+            raise ValueError(
+                "URI references must be passed as an ArtifactLocator, for example "
+                "ArtifactLocator(kind='uri', value=...) or ArtifactLocator.from_urlpath(...)."
+            )
+        path = Path(reference).expanduser().resolve()
+        return ArtifactLocator.from_path(path), path
+    path = Path(reference).expanduser().resolve()
+    return ArtifactLocator.from_path(path), path
 
 
 def _metadata_with_hook_warnings(context: OperationContext) -> MetadataDict:

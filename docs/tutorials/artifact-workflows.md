@@ -113,18 +113,15 @@ locator and metadata but does not copy or inspect the archive.
 from datetime import date
 from pathlib import Path
 
-from ogcat import ArtifactLocator
-
 downloaded_zip = Path("~/Downloads/bab75005df9571750d518b0aacdedb35.zip").expanduser()
 ads_dataset = (
     "https://ads.atmosphere.copernicus.eu/datasets/"
     "cams-global-greenhouse-gas-inversion?tab=overview"
 )
 
-raw_zip_record = catalog.add_artifact(
+raw_zip_record = catalog.add_reference(
+    downloaded_zip,
     record_type="raw_download",
-    locator=ArtifactLocator.from_path(downloaded_zip),
-    storage_mode="external",
     metadata={
         "species": "co2",
         "product": "cams",

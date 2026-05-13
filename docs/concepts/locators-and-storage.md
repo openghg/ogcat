@@ -28,6 +28,19 @@ the file ended up there.
 Other project-specific kinds can be stored using :meth:`ogcat.ArtifactLocator`
 directly, but ogcat does not interpret them beyond recording the string value.
 
+## Choosing an add method
+
+Use the three catalog add methods for different storage responsibilities:
+
+- ``Catalog.add_file(...)`` is for managed local ingest. It copies or moves a
+  local source into the catalog's ``files/`` tree.
+- ``Catalog.add_reference(...)`` is for artifacts that already exist. It records
+  a local path, URI locator, or URL-path locator without copying, moving, or
+  writing artifact data.
+- ``Catalog.add_artifact(...)`` with a ``StoragePlan`` and an artifact writer is
+  for workflow outputs. ogcat plans and records the artifact, while the writer
+  performs the actual filesystem or storage operation.
+
 ## Managed files
 
 ``catalog.add_file()`` copies or moves the source file into the catalog's
@@ -122,35 +135,32 @@ filesystem side effects and rollback registration.
 
 ## External references
 
-To catalog a file that should stay in place, use ``add_artifact()`` with a
-path locator and ``record_type="external_reference"``.
+To catalog a file that should stay in place, use ``add_reference()``. For local
+paths, ogcat infers the path locator, original filename, suffixes, and original
+path. The file is not copied or moved, and it does not need to be under the
+catalog's managed ``files/`` root.
 
 ```python
-from ogcat import ArtifactLocator
-
-catalog.add_artifact(
-    record_type="external_reference",
-    locator=ArtifactLocator.from_path("/data/shared/flux.nc"),
+catalog.add_reference(
+    "/data/shared/flux.nc",
     metadata={"species": "CO2"},
 )
 ```
-
-The file is not copied or moved.  ogcat records only the path and the
-metadata.
 
 For non-local references, use a ``uri`` locator when ogcat should not check or
 manage the target:
 
 ```python
-catalog.add_artifact(
-    record_type="external_reference",
-    locator=ArtifactLocator(kind="uri", value="ftp://example.org/data/file.nc"),
-    storage_mode="external",
+from ogcat import ArtifactLocator
+
+catalog.add_reference(
+    ArtifactLocator(kind="uri", value="ftp://example.org/data/file.nc"),
 )
 ```
 
-Use ``ArtifactLocator.from_urlpath(...)`` when the location should be interpreted
-by fsspec-backed storage adapters.  Install the optional dependency with
+Use ``ArtifactLocator.from_urlpath(...)`` with ``add_reference(...)`` when the
+location should be interpreted by fsspec-backed storage adapters. Install the
+optional dependency with
 ``ogcat[fsspec]`` before a writer performs fsspec-backed storage work.
 
 ## Catalog layout

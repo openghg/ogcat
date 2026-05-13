@@ -769,6 +769,87 @@ def test_add_artifact_supports_non_path_locator_records(tmp_path: Path) -> None:
     assert catalog.path(_record_id(record)) is None
 
 
+def test_catalog_get_and_path_accept_integer_like_record_ids(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+    records = catalog.add_artifacts(
+        [
+            {
+                "record_type": "external_reference",
+                "locator": ArtifactLocator.path(tmp_path / "references" / f"record-{index}.nc"),
+            }
+            for index in range(50)
+        ]
+    )
+    record = records[-1]
+
+    assert _record_id(record) == "50"
+    assert catalog.get(50) == catalog.get("50") == record
+    assert catalog.path(50) == catalog.path("50") == tmp_path / "references" / "record-49.nc"
+
+
+def test_add_reference_records_local_path_without_copying_or_moving(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "archive.tar.gz"
+    source.write_text("raw", encoding="utf-8")
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+
+    record = catalog.add_reference(source, metadata={"species": "CO2"})
+
+    resolved_source = source.resolve()
+    assert record.record_type == "external_reference"
+    assert record.storage_mode == "reference"
+    assert record.locator == ArtifactLocator.path(resolved_source)
+    assert record.path() == resolved_source
+    assert record.original_path == str(resolved_source)
+    assert record.original_filename == "archive.tar.gz"
+    assert record.suffixes == [".tar", ".gz"]
+    assert source.read_text(encoding="utf-8") == "raw"
+    assert list((catalog.root / catalog.spec.files_root).rglob("archive.tar.gz")) == []
+
+
+def test_add_reference_records_uri_locator_references(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+    locator = ArtifactLocator(kind="uri", value="https://example.org/data/example.nc")
+
+    record = catalog.add_reference(locator, metadata={"title": "remote data"})
+
+    assert record.locator == locator
+    assert record.storage_mode == "reference"
+    assert record.path() is None
+    assert record.original_path is None
+    assert record.original_filename is None
+    assert record.suffixes == []
+
+
+def test_add_reference_records_urlpath_locator_references(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+    locator = ArtifactLocator.from_urlpath("s3://bucket/data/example.zarr")
+
+    record = catalog.add_reference(locator)
+
+    assert record.locator == locator
+    assert record.storage_mode == "reference"
+
+
+def test_add_reference_allows_explicit_local_path_metadata(tmp_path: Path) -> None:
+    source = tmp_path / "raw" / "example.nc"
+    source.parent.mkdir()
+    source.write_text("raw", encoding="utf-8")
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+
+    record = catalog.add_reference(
+        source,
+        original_path="logical://source/example",
+        original_filename="renamed.dat",
+        suffixes=[".dat"],
+    )
+
+    assert record.original_path == "logical://source/example"
+    assert record.original_filename == "renamed.dat"
+    assert record.suffixes == [".dat"]
+
+
 def test_add_artifacts_supports_batch_artifact_creation(tmp_path: Path) -> None:
     root = tmp_path / "catalog"
     catalog = Catalog.create(root, CatalogSpec(catalog_name="artifacts"))

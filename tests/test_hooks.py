@@ -10,6 +10,7 @@ from ogcat import (
     ArtifactLocator,
     Catalog,
     CatalogSpec,
+    HookManager,
     HookWarning,
     MetadataFieldDescription,
     PluginRegistry,
@@ -37,6 +38,76 @@ def test_direct_registration_invokes_hook(tmp_path: Path) -> None:
     catalog.add_file(source)
 
     assert calls == ["add_file"]
+
+
+def test_hook_sequence_convenience_invokes_hooks(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    class Hook:
+        def before_validate_metadata(self, context: OperationContext) -> None:
+            calls.append(context.operation_type)
+
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"), hooks=[Hook()])
+    source = tmp_path / "example.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    catalog.add_file(source)
+
+    assert calls == ["add_file"]
+
+
+def test_plugin_sequence_convenience_invokes_hooks_on_open(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    class Hook:
+        def before_validate_metadata(self, context: OperationContext) -> None:
+            calls.append(context.operation_type)
+
+    created = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+    catalog = Catalog.open(created.root, plugins=(Hook(),))
+
+    catalog.add_reference(ArtifactLocator(kind="uri", value="https://example.org/data.nc"))
+
+    assert calls == ["add_artifact"]
+
+
+def test_create_rejects_invalid_hook_inputs_immediately(tmp_path: Path) -> None:
+    with pytest.raises(TypeError, match="hooks must be a HookManager or a list/tuple of hook objects"):
+        Catalog.create(
+            tmp_path / "catalog",
+            CatalogSpec(catalog_name="files"),
+            hooks="not hooks",  # type: ignore[arg-type]
+        )
+
+    assert not (tmp_path / "catalog" / "catalog.json").exists()
+
+
+def test_open_rejects_invalid_plugin_inputs_immediately(tmp_path: Path) -> None:
+    created = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+
+    with pytest.raises(TypeError, match="plugins must be a PluginRegistry or a list/tuple of hook objects"):
+        Catalog.open(created.root, plugins="not plugins")  # type: ignore[arg-type]
+
+
+def test_open_rejects_non_hook_objects_in_hook_manager_immediately(tmp_path: Path) -> None:
+    created = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+
+    with pytest.raises(TypeError, match="hooks item 0 must provide at least one callable hook method"):
+        Catalog.open(created.root, hooks=HookManager([object()]))
+
+
+def test_create_rejects_both_plugins_and_hooks(tmp_path: Path) -> None:
+    class Hook:
+        def before_validate_metadata(self, context: OperationContext) -> None:
+            pass
+
+    with pytest.raises(ValueError, match="Pass either plugins or hooks, not both"):
+        Catalog.create(
+            tmp_path / "catalog",
+            CatalogSpec(catalog_name="files"),
+            plugins=PluginRegistry([Hook()]),
+            hooks=HookManager([Hook()]),
+        )
 
 
 def test_hooks_run_in_registration_order(tmp_path: Path) -> None:

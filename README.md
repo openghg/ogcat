@@ -4,13 +4,15 @@
 
 `ogcat` is a lightweight artifact catalog with a managed-file MVP. Today it provides a
 self-describing on-disk catalog layout, a small Python API, and a CLI for creating catalogs,
-adding files by copy or move, listing metadata field descriptions, and locating stored paths.
+adding files by copy or move, recording existing artifact references, listing metadata field
+descriptions, and locating stored paths.
 
 ## Scope
 
 - local catalogs centred on managed file ingest
 - a self-describing catalog layout with `catalog.json`, `db.json`, and `files/`
 - path-based managed ingest using `copy` or `move`
+- reference records for existing local paths and explicit URI/urlpath locators
 - flexible JSON-serialisable user metadata
 - simple derived metadata extraction for supported file types
 - template-based storage naming
@@ -146,10 +148,10 @@ catalog = Catalog.create("example-catalog", spec, plugins=plugins)
 See [docs/design-note-hooks-plugins.md](docs/design-note-hooks-plugins.md) for hook lifecycle,
 rollback, and transaction examples.
 
-In this hook model, `add_artifact()` records an artifact locator but does not write artifact data by
-default. Pass an `OperationSource` and artifact writer to `add_artifact()` when a plugin or helper
-should materialise data before the record is written. `add_file()` is the bundled local-file
-operation that uses the same writer path to copy or move data before writing the record.
+Use `add_file()` when ogcat should manage a local copy or move into the catalog's `files/` tree.
+Use `add_reference()` when the artifact already exists and ogcat should only record a local path or
+explicit `ArtifactLocator`. Use `add_artifact()` with an `OperationSource` and artifact writer when
+a plugin or helper should materialise new data before the record is written.
 See `ogcat.writers` for small helper wrappers around in-memory data, path-backed transforms, and zip
 extraction examples.
 
@@ -253,9 +255,10 @@ uv run python -m http.server 8000
 
 ## Storage Model
 
-Current storage is still path-based managed ingest for the MVP. Files are copied or moved into the
-catalog's `files/` tree, and the resulting stored path is recorded in the catalog database
-alongside metadata and naming information.
+Current storage is still centred on path-based managed ingest for the MVP. Files added with
+`add_file()` are copied or moved into the catalog's `files/` tree, and the resulting stored path is
+recorded in the catalog database alongside metadata and naming information. Existing paths and
+explicit URI/urlpath locators can be recorded with `add_reference()` without copying or moving data.
 
 Records now also include a minimal locator block:
 
