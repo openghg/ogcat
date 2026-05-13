@@ -12,7 +12,7 @@ descriptions, and locating stored paths.
 - local catalogs centred on managed file ingest
 - a self-describing catalog layout with `catalog.json`, `db.json`, and `files/`
 - path-based managed ingest using `copy` or `move`
-- reference records for existing local paths and explicit URI/urlpath locators
+- reference records for existing local paths, URIs, and explicit URI/urlpath locators
 - flexible JSON-serialisable user metadata
 - simple derived metadata extraction for supported file types
 - template-based storage naming
@@ -149,9 +149,9 @@ See [docs/design-note-hooks-plugins.md](docs/design-note-hooks-plugins.md) for h
 rollback, and transaction examples.
 
 Use `add_file()` when ogcat should manage a local copy or move into the catalog's `files/` tree.
-Use `add_reference()` when the artifact already exists and ogcat should only record a local path or
-explicit `ArtifactLocator`. Use `add_artifact()` with an `OperationSource` and artifact writer when
-a plugin or helper should materialise new data before the record is written.
+Use `add_reference()` when the artifact already exists and ogcat should only record a local path,
+URI, URL path, or explicit `ArtifactLocator`. Use `add_artifact()` with an `OperationSource` and
+artifact writer when a plugin or helper should materialise new data before the record is written.
 See `ogcat.writers` for small helper wrappers around in-memory data, path-backed transforms, and zip
 extraction examples.
 
@@ -257,8 +257,9 @@ uv run python -m http.server 8000
 
 Current storage is still centred on path-based managed ingest for the MVP. Files added with
 `add_file()` are copied or moved into the catalog's `files/` tree, and the resulting stored path is
-recorded in the catalog database alongside metadata and naming information. Existing paths and
-explicit URI/urlpath locators can be recorded with `add_reference()` without copying or moving data.
+recorded in the catalog database alongside metadata and naming information. Existing paths, URIs,
+and explicit URI/urlpath locators can be recorded with `add_reference()` without copying or moving
+data.
 
 Records now also include a minimal locator block:
 

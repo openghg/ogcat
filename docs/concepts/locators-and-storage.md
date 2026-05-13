@@ -35,8 +35,8 @@ Use the three catalog add methods for different storage responsibilities:
 - ``Catalog.add_file(...)`` is for managed local ingest. It copies or moves a
   local source into the catalog's ``files/`` tree.
 - ``Catalog.add_reference(...)`` is for artifacts that already exist. It records
-  a local path, URI locator, or URL-path locator without copying, moving, or
-  writing artifact data.
+  a local path, URI, URI locator, or URL-path locator without copying, moving,
+  or writing artifact data.
 - ``Catalog.add_artifact(...)`` with a ``StoragePlan`` and an artifact writer is
   for workflow outputs. ogcat plans and records the artifact, while the writer
   performs the actual filesystem or storage operation.
@@ -148,19 +148,16 @@ catalog.add_reference(
 ```
 
 For non-local references, use a ``uri`` locator when ogcat should not check or
-manage the target:
+manage the target. URI-looking strings are recorded as ``uri`` references; use
+``uri=`` when that is clearer at the call site:
 
 ```python
-from ogcat import ArtifactLocator
-
-catalog.add_reference(
-    ArtifactLocator(kind="uri", value="ftp://example.org/data/file.nc"),
-)
+catalog.add_reference(uri="ftp://example.org/data/file.nc")
 ```
 
-Use ``ArtifactLocator.from_urlpath(...)`` with ``add_reference(...)`` when the
-location should be interpreted by fsspec-backed storage adapters. Install the
-optional dependency with
+Use ``ArtifactLocator.from_urlpath(...)`` or ``urlpath=`` with
+``add_reference(...)`` when the location should be interpreted by fsspec-backed
+storage adapters. Install the optional dependency with
 ``ogcat[fsspec]`` before a writer performs fsspec-backed storage work.
 
 ## Catalog layout

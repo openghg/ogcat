@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 import importlib.util
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
-from operator import index as operator_index
 from pathlib import Path
-from typing import Any, Literal, SupportsIndex, cast, overload
+from typing import Any, Literal, cast, overload
 from uuid import uuid4
 
 from ogcat.extractors import extract_derived_metadata
-from ogcat.hooks import ArtifactWriter, HookManager, OperationContext, OperationSource
+from ogcat.hooks import HOOK_METHOD_NAMES, ArtifactWriter, HookManager, OperationContext, OperationSource
 from ogcat.models import ArtifactLocator, CatalogRecord, JsonValue, MetadataDict, normalize_metadata
 from ogcat.naming import build_naming_context, render_storage_location
 from ogcat.plugins import PluginRegistry
@@ -37,9 +36,8 @@ ArtifactLocatorFactory = Callable[[OperationContext], ArtifactLocator]
 StoragePlanFactory = Callable[[OperationContext, ArtifactLocator], StoragePlan | None]
 DerivedMetadataCollector = Callable[[OperationContext, ArtifactLocator], None]
 PlannedLocatorResult = tuple[ArtifactLocator, str | None, str | None, str | None]
-PluginInput = PluginRegistry | list[object] | tuple[object, ...] | None
-HookInput = HookManager | list[object] | tuple[object, ...] | None
-RecordIdInput = str | SupportsIndex
+PluginInput = PluginRegistry | Iterable[object] | None
+HookInput = HookManager | Iterable[object] | None
 
 
 @dataclass(slots=True)
@@ -73,9 +71,9 @@ class Catalog:
         Args:
             root: Directory to create or reuse for the catalog.
             spec: Catalog specification to persist.
-            plugins: Optional plugin registry, or list/tuple of hook objects,
+            plugins: Optional plugin registry, or iterable of hook objects,
                 used to build a hook manager.
-            hooks: Optional hook manager, or list/tuple of hook objects. Pass
+            hooks: Optional hook manager, or iterable of hook objects. Pass
                 either ``plugins`` or ``hooks``.
 
         Returns:
@@ -110,9 +108,9 @@ class Catalog:
 
         Args:
             root: Existing catalog root containing ``catalog.json``.
-            plugins: Optional plugin registry, or list/tuple of hook objects,
+            plugins: Optional plugin registry, or iterable of hook objects,
                 used to build a hook manager.
-            hooks: Optional hook manager, or list/tuple of hook objects. Pass
+            hooks: Optional hook manager, or iterable of hook objects. Pass
                 either ``plugins`` or ``hooks``.
 
         Returns:
@@ -482,8 +480,10 @@ class Catalog:
 
     def add_reference(
         self,
-        reference: str | Path | ArtifactLocator,
+        reference: str | Path | ArtifactLocator | None = None,
         *,
+        uri: str | None = None,
+        urlpath: str | None = None,
         record_type: str = "external_reference",
         metadata: Mapping[Any, Any] | None = None,
         original_path: str | Path | None = None,
@@ -503,7 +503,12 @@ class Catalog:
         managed files root.
 
         Args:
-            reference: Local filesystem path or explicit artifact locator.
+            reference: Local filesystem path, URI-like string, or explicit
+                artifact locator.
+            uri: Optional explicit URI reference. Pass exactly one of
+                ``reference``, ``uri``, or ``urlpath``.
+            urlpath: Optional explicit fsspec-style URL-path reference. Pass
+                exactly one of ``reference``, ``uri``, or ``urlpath``.
             record_type: Logical type of record to create.
             metadata: JSON-compatible user metadata.
             original_path: Optional source path or URI override. Inferred for
@@ -521,7 +526,7 @@ class Catalog:
         Returns:
             Persisted or staged reference record.
         """
-        locator, local_path = _reference_locator_and_path(reference)
+        locator, local_path = _reference_locator_and_path(reference, uri=uri, urlpath=urlpath)
         resolved_original_path = original_path
         resolved_original_filename = original_filename
         resolved_suffixes = suffixes
@@ -749,11 +754,11 @@ class Catalog:
         """Return available named record schema names."""
         return self.spec.list_record_schemas()
 
-    def get(self, record_id: RecordIdInput) -> CatalogRecord | None:
-        """Get a record by string or integer-like id."""
+    def get(self, record_id: object) -> CatalogRecord | None:
+        """Get a record by id after coercing public input with ``str()``."""
         return self.repository.get(_coerce_record_id(record_id))
 
-    def path(self, record_id: RecordIdInput) -> Path | None:
+    def path(self, record_id: object) -> Path | None:
         """Return the stored path for a path-backed record, if present."""
         record = self.get(record_id)
         if record is None:
@@ -1218,20 +1223,6 @@ def _open_repository(root: Path, spec: CatalogSpec) -> CatalogRepository:
     return TinyDbCatalogRepository(root / spec.db_path)
 
 
-_HOOK_METHOD_NAMES = (
-    "before_validate_metadata",
-    "after_validate_metadata",
-    "resolve_artifact_locator",
-    "before_record_write",
-    "after_record_write",
-    "extract_metadata",
-    "before_commit",
-    "after_commit",
-    "on_error",
-    "on_rollback",
-)
-
-
 def _coerce_hook_manager(
     *,
     plugins: PluginInput,
@@ -1244,32 +1235,40 @@ def _coerce_hook_manager(
         if isinstance(hooks, HookManager):
             _validate_hook_objects(hooks.hooks, label="hooks")
             return hooks
-        if isinstance(hooks, (list, tuple)):
-            return HookManager(_validate_hook_objects(hooks, label="hooks"))
-        raise TypeError(
-            f"hooks must be a HookManager or a list/tuple of hook objects, got {type(hooks).__name__}"
-        )
+        return HookManager(_coerce_hook_iterable(hooks, label="hooks"))
     if plugins is not None:
         if isinstance(plugins, PluginRegistry):
             _validate_hook_objects(plugins.hooks, label="plugins")
             return plugins.hook_manager()
-        if isinstance(plugins, (list, tuple)):
-            registry = PluginRegistry(_validate_hook_objects(plugins, label="plugins"))
-            return registry.hook_manager()
-        raise TypeError(
-            f"plugins must be a PluginRegistry or a list/tuple of hook objects, got {type(plugins).__name__}"
-        )
+        registry = PluginRegistry(_coerce_hook_iterable(plugins, label="plugins"))
+        return registry.hook_manager()
     return HookManager()
 
 
-def _validate_hook_objects(hooks: Sequence[object], *, label: str) -> list[object]:
+def _coerce_hook_iterable(value: object, *, label: str) -> list[object]:
+    """Return a validated list of hooks from an iterable input."""
+    expected = (
+        "a HookManager or iterable of hook objects"
+        if label == "hooks"
+        else "a PluginRegistry or iterable of hook objects"
+    )
+    if isinstance(value, str | bytes):
+        raise TypeError(f"{label} must be {expected}, got {type(value).__name__}")
+    try:
+        hooks = iter(cast(Iterable[object], value))
+    except TypeError as exc:
+        raise TypeError(f"{label} must be {expected}, got {type(value).__name__}") from exc
+    return _validate_hook_objects(hooks, label=label)
+
+
+def _validate_hook_objects(hooks: Iterable[object], *, label: str) -> list[object]:
     """Validate hook objects and return a defensive list copy."""
     validated = list(hooks)
-    method_list = ", ".join(_HOOK_METHOD_NAMES)
+    method_list = ", ".join(HOOK_METHOD_NAMES)
     missing = object()
     for index, hook in enumerate(validated):
         implemented_methods: list[str] = []
-        for method_name in _HOOK_METHOD_NAMES:
+        for method_name in HOOK_METHOD_NAMES:
             method = getattr(hook, method_name, missing)
             if method is missing:
                 continue
@@ -1287,32 +1286,37 @@ def _validate_hook_objects(hooks: Sequence[object], *, label: str) -> list[objec
     return validated
 
 
-def _coerce_record_id(record_id: RecordIdInput) -> str:
+def _coerce_record_id(record_id: object) -> str:
     """Return a repository id string from public record-id input."""
-    if isinstance(record_id, str):
-        return record_id
-    if isinstance(record_id, bool):
-        raise TypeError("record_id must be a string or integer-like value, got bool")
-    try:
-        return str(operator_index(record_id))
-    except TypeError as exc:
-        raise TypeError(
-            f"record_id must be a string or integer-like value, got {type(record_id).__name__}"
-        ) from exc
+    if record_id is None:
+        raise TypeError("record_id must not be None")
+    return str(record_id)
 
 
 def _reference_locator_and_path(
-    reference: str | Path | ArtifactLocator,
+    reference: str | Path | ArtifactLocator | None,
+    *,
+    uri: str | None,
+    urlpath: str | None,
 ) -> tuple[ArtifactLocator, Path | None]:
     """Return the locator and local path metadata for a reference input."""
+    supplied = [value is not None for value in (reference, uri, urlpath)]
+    if sum(supplied) != 1:
+        raise ValueError("Pass exactly one of reference, uri, or urlpath.")
+    if uri is not None:
+        return ArtifactLocator(kind="uri", value=str(uri)), None
+    if urlpath is not None:
+        return ArtifactLocator.from_urlpath(str(urlpath)), None
+    assert reference is not None
     if isinstance(reference, ArtifactLocator):
-        return reference, reference.as_path()
+        path = reference.as_path()
+        if path is None:
+            return reference, None
+        resolved_path = path.expanduser().resolve()
+        return ArtifactLocator.from_path(resolved_path, relative_path=reference.relative_path), resolved_path
     if isinstance(reference, str):
         if "://" in reference:
-            raise ValueError(
-                "URI references must be passed as an ArtifactLocator, for example "
-                "ArtifactLocator(kind='uri', value=...) or ArtifactLocator.from_urlpath(...)."
-            )
+            return ArtifactLocator(kind="uri", value=reference), None
         path = Path(reference).expanduser().resolve()
         return ArtifactLocator.from_path(path), path
     path = Path(reference).expanduser().resolve()

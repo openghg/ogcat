@@ -33,6 +33,19 @@ from ogcat.storage import StoragePlan
 from ogcat.transactions import RollbackAction
 from ogcat.validation import ValidationReport
 
+HOOK_METHOD_NAMES = (
+    "before_validate_metadata",
+    "after_validate_metadata",
+    "resolve_artifact_locator",
+    "before_record_write",
+    "after_record_write",
+    "extract_metadata",
+    "before_commit",
+    "after_commit",
+    "on_error",
+    "on_rollback",
+)
+
 
 @dataclass(slots=True)
 class HookWarning:
@@ -383,6 +396,7 @@ __all__ = [
     "BeforeRecordWriteHook",
     "ErrorHook",
     "ExtractMetadataHook",
+    "HOOK_METHOD_NAMES",
     "HookManager",
     "HookWarning",
     "OperationContext",

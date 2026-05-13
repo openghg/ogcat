@@ -769,7 +769,11 @@ def test_add_artifact_supports_non_path_locator_records(tmp_path: Path) -> None:
     assert catalog.path(_record_id(record)) is None
 
 
-def test_catalog_get_and_path_accept_integer_like_record_ids(tmp_path: Path) -> None:
+def test_catalog_get_and_path_accept_stringable_record_ids(tmp_path: Path) -> None:
+    class RecordId:
+        def __str__(self) -> str:
+            return "50"
+
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
     records = catalog.add_artifacts(
         [
@@ -785,6 +789,9 @@ def test_catalog_get_and_path_accept_integer_like_record_ids(tmp_path: Path) -> 
     assert _record_id(record) == "50"
     assert catalog.get(50) == catalog.get("50") == record
     assert catalog.path(50) == catalog.path("50") == tmp_path / "references" / "record-49.nc"
+    assert catalog.get(RecordId()) == record
+    with pytest.raises(TypeError, match="record_id must not be None"):
+        catalog.get(None)
 
 
 def test_add_reference_records_local_path_without_copying_or_moving(tmp_path: Path) -> None:
@@ -808,6 +815,25 @@ def test_add_reference_records_local_path_without_copying_or_moving(tmp_path: Pa
     assert list((catalog.root / catalog.spec.files_root).rglob("archive.tar.gz")) == []
 
 
+def test_add_reference_resolves_relative_path_locators(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "relative.nc"
+    source.write_text("raw", encoding="utf-8")
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+    monkeypatch.chdir(tmp_path)
+
+    record = catalog.add_reference(ArtifactLocator.path("relative.nc"))
+
+    resolved_source = source.resolve()
+    assert record.locator == ArtifactLocator.path(resolved_source)
+    assert record.path() == resolved_source
+    assert record.original_path == str(resolved_source)
+    assert record.original_filename == "relative.nc"
+    assert record.suffixes == [".nc"]
+
+
 def test_add_reference_records_uri_locator_references(tmp_path: Path) -> None:
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
     locator = ArtifactLocator(kind="uri", value="https://example.org/data/example.nc")
@@ -822,6 +848,25 @@ def test_add_reference_records_uri_locator_references(tmp_path: Path) -> None:
     assert record.suffixes == []
 
 
+def test_add_reference_records_uri_string_references(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+
+    record = catalog.add_reference("https://example.org/data/example.nc")
+
+    assert record.locator == ArtifactLocator(kind="uri", value="https://example.org/data/example.nc")
+    assert record.storage_mode == "reference"
+    assert record.path() is None
+
+
+def test_add_reference_records_uri_keyword_references(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+
+    record = catalog.add_reference(uri="https://example.org/data/example.nc")
+
+    assert record.locator == ArtifactLocator(kind="uri", value="https://example.org/data/example.nc")
+    assert record.storage_mode == "reference"
+
+
 def test_add_reference_records_urlpath_locator_references(tmp_path: Path) -> None:
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
     locator = ArtifactLocator.from_urlpath("s3://bucket/data/example.zarr")
@@ -830,6 +875,24 @@ def test_add_reference_records_urlpath_locator_references(tmp_path: Path) -> Non
 
     assert record.locator == locator
     assert record.storage_mode == "reference"
+
+
+def test_add_reference_records_urlpath_keyword_references(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+
+    record = catalog.add_reference(urlpath="s3://bucket/data/example.zarr")
+
+    assert record.locator == ArtifactLocator.from_urlpath("s3://bucket/data/example.zarr")
+    assert record.storage_mode == "reference"
+
+
+def test_add_reference_requires_one_reference_input(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+
+    with pytest.raises(ValueError, match="Pass exactly one of reference, uri, or urlpath"):
+        catalog.add_reference()
+    with pytest.raises(ValueError, match="Pass exactly one of reference, uri, or urlpath"):
+        catalog.add_reference("local.nc", uri="https://example.org/data/example.nc")
 
 
 def test_add_reference_allows_explicit_local_path_metadata(tmp_path: Path) -> None:
