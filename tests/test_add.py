@@ -1,5 +1,6 @@
+from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -312,6 +313,143 @@ def test_add_file_uses_readable_list_metadata_in_naming_templates(tmp_path: Path
     record = catalog.add_file(source, metadata={"tags": ["a", "b", "c"]})
 
     assert _stored_path(record) == root / "files" / "a-b-c" / "a-b-c.nc"
+
+
+def test_add_file_normalizes_path_metadata_before_tinydb_insert(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "pathmeta.nc"
+    source.write_text("dummy", encoding="utf-8")
+    metadata_path = tmp_path / "metadata" / "config.json"
+
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="files"))
+    db = cast(Any, catalog.repository)._db
+    original_insert = db.insert
+    captured_payloads: list[dict[str, Any]] = []
+
+    def capture_insert(payload: dict[str, Any]) -> int:
+        captured_payloads.append(payload)
+        user_metadata = payload["user_metadata"]
+        assert isinstance(user_metadata, dict)
+        assert isinstance(user_metadata["source_path"], str)
+        return original_insert(payload)
+
+    monkeypatch.setattr(db, "insert", capture_insert)
+
+    record = catalog.add_file(source, metadata={"source_path": metadata_path})
+
+    assert record.user_metadata["source_path"] == str(metadata_path)
+    assert captured_payloads[0]["user_metadata"]["source_path"] == str(metadata_path)
+
+
+def test_add_artifact_normalizes_nested_metadata_values(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="artifacts"))
+
+    record = catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/example.zarr"),
+        metadata={
+            "source_path": Path("raw") / "example.nc",
+            "nested": {
+                "tuple": ("co2", Path("sites") / "mhd"),
+                "set": {"z", "a"},
+                "frozenset": frozenset({2, 1}),
+                1: "integer key",
+            },
+        },
+        derived_metadata={"shape": (12, 4), "path": Path("derived.nc")},
+        naming_metadata={"parts": frozenset({"b", "a"})},
+    )
+
+    assert record.user_metadata == {
+        "source_path": "raw/example.nc",
+        "nested": {
+            "tuple": ["co2", "sites/mhd"],
+            "set": ["a", "z"],
+            "frozenset": [1, 2],
+            "1": "integer key",
+        },
+    }
+    assert record.derived_metadata["shape"] == [12, 4]
+    assert record.derived_metadata["path"] == "derived.nc"
+    assert record.naming_metadata["parts"] == ["a", "b"]
+
+
+def test_add_artifact_normalizes_date_datetime_metadata(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="artifacts"))
+
+    record = catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/example.zarr"),
+        metadata={
+            "published": date(2024, 1, 2),
+            "observed_at": datetime(2024, 1, 2, 3, 4, 5, tzinfo=UTC),
+        },
+    )
+
+    assert record.user_metadata["published"] == "2024-01-02"
+    assert record.user_metadata["observed_at"] == "2024-01-02T03:04:05+00:00"
+
+
+def test_add_artifact_rejects_unsupported_metadata_objects(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="artifacts"))
+
+    with pytest.raises(TypeError, match="metadata.unsupported must be JSON-compatible; got object"):
+        catalog.add_artifact(
+            record_type="external_reference",
+            locator=ArtifactLocator(kind="uri", value="s3://bucket/example.zarr"),
+            metadata={"unsupported": object()},
+        )
+
+
+def test_plan_artifact_storage_normalizes_metadata_before_naming(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "planned.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(
+        root,
+        CatalogSpec(
+            catalog_name="files",
+            default_schema=RecordSchema(
+                directory_template="{tags}",
+                filename_template="{source_path}{original_suffix}",
+            ),
+        ),
+    )
+
+    plan = catalog.plan_artifact_storage(
+        path=source,
+        metadata={"tags": ("a", "b"), "source_path": Path("named")},
+    )
+
+    assert plan.resolved_directory == "a-b"
+    assert plan.resolved_filename == "named.nc"
+
+
+def test_metadata_normalization_accepts_numpy_scalars_when_available(tmp_path: Path) -> None:
+    numpy = cast(Any, pytest.importorskip("numpy"))
+    scalar = numpy.int64(5)
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="artifacts"))
+
+    record = catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/example.zarr"),
+        metadata={"count": scalar},
+    )
+
+    assert record.user_metadata["count"] == 5
+    assert type(record.user_metadata["count"]) is int
 
 
 @pytest.mark.parametrize("field_name", ["id", "uuid", "operation_id"])

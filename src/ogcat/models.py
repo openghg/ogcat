@@ -2,13 +2,112 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
+from datetime import date, datetime
+from pathlib import Path, PurePath
 from typing import TypeAlias, cast
 
 JsonScalar: TypeAlias = str | int | float | bool | None
 JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 MetadataDict: TypeAlias = dict[str, JsonValue]
+
+
+def normalize_metadata(
+    metadata: object,
+    *,
+    field_name: str = "metadata",
+    label: str | None = None,
+) -> MetadataDict:
+    """Return metadata as a JSON-compatible dictionary.
+
+    Args:
+        metadata: Mapping to normalize recursively.
+        field_name: Path used in nested error messages.
+        label: Optional user-facing label used for the top-level mapping error.
+
+    Returns:
+        Normalized metadata with string keys and JSON-compatible values.
+
+    Raises:
+        TypeError: If metadata is not a mapping or contains unsupported values.
+        ValueError: If two keys collide after string normalization.
+    """
+    if not isinstance(metadata, Mapping):
+        error_label = label or field_name
+        raise TypeError(f"{error_label} must be a dictionary, got {type(metadata).__name__}")
+
+    normalized: MetadataDict = {}
+    for key, value in metadata.items():
+        normalized_key = str(key)
+        if normalized_key in normalized:
+            raise ValueError(
+                f"{field_name} contains duplicate key after string normalization: {normalized_key!r}"
+            )
+        normalized[normalized_key] = normalize_metadata_value(
+            value,
+            field_name=f"{field_name}.{normalized_key}",
+        )
+    return normalized
+
+
+def normalize_metadata_value(value: object, *, field_name: str = "metadata") -> JsonValue:
+    """Return one metadata value as a JSON-compatible value.
+
+    Args:
+        value: Value to normalize recursively.
+        field_name: Path used in error messages.
+
+    Returns:
+        JSON-compatible normalized value.
+
+    Raises:
+        TypeError: If the value cannot be represented safely as JSON metadata.
+        ValueError: If nested mapping keys collide after string normalization.
+    """
+    if value is None or isinstance(value, str | int | float | bool):
+        return cast(JsonValue, value)
+    if isinstance(value, date | datetime):
+        return value.isoformat()
+    if isinstance(value, PurePath):
+        return str(value)
+    if isinstance(value, Mapping):
+        return normalize_metadata(value, field_name=field_name)
+    if isinstance(value, list | tuple):
+        return [
+            normalize_metadata_value(item, field_name=f"{field_name}[{index}]")
+            for index, item in enumerate(value)
+        ]
+    if isinstance(value, set | frozenset):
+        normalized_items = [
+            normalize_metadata_value(item, field_name=f"{field_name}[{index}]")
+            for index, item in enumerate(value)
+        ]
+        return sorted(normalized_items, key=_json_sort_key)
+
+    item = getattr(value, "item", None)
+    if callable(item):
+        try:
+            item_value = item()
+        except Exception as exc:
+            raise TypeError(
+                f"{field_name} must be JSON-compatible; {type(value).__name__}.item() "
+                f"could not produce a scalar value"
+            ) from exc
+        if item_value is not value:
+            return normalize_metadata_value(item_value, field_name=field_name)
+
+    raise TypeError(
+        f"{field_name} must be JSON-compatible; got {type(value).__name__}. "
+        "Supported values are scalars, dates, datetimes, pathlib paths, mappings, "
+        "lists, tuples, sets, frozensets, and objects with item() returning a supported scalar."
+    )
+
+
+def _json_sort_key(value: JsonValue) -> str:
+    """Return a deterministic sort key for normalized set members."""
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
 @dataclass(slots=True)
@@ -28,6 +127,14 @@ class MetadataFieldDescription:
     example: JsonValue | None = None
     required: bool = False
     value_types: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        """Normalize schema example metadata when supplied directly."""
+        if self.example is not None:
+            self.example = normalize_metadata_value(
+                self.example,
+                field_name=f"metadata_fields.{self.name}.example",
+            )
 
     def to_dict(self) -> dict[str, JsonValue]:
         """Convert the field description to a plain dictionary."""
@@ -173,6 +280,15 @@ class CatalogRecord:
 
     def __post_init__(self) -> None:
         """Keep compatibility path fields aligned with the locator when possible."""
+        self.user_metadata = normalize_metadata(self.user_metadata, field_name="user_metadata")
+        self.derived_metadata = normalize_metadata(
+            self.derived_metadata,
+            field_name="derived_metadata",
+        )
+        self.naming_metadata = normalize_metadata(
+            self.naming_metadata,
+            field_name="naming_metadata",
+        )
         if not self.locator.value and self.stored_abspath is not None:
             self.locator = ArtifactLocator.path(
                 self.stored_abspath,
@@ -194,6 +310,9 @@ class CatalogRecord:
 
     def to_dict(self) -> dict[str, JsonValue]:
         """Convert the record to a plain dictionary."""
+        user_metadata = normalize_metadata(self.user_metadata, field_name="user_metadata")
+        derived_metadata = normalize_metadata(self.derived_metadata, field_name="derived_metadata")
+        naming_metadata = normalize_metadata(self.naming_metadata, field_name="naming_metadata")
         return cast(
             dict[str, JsonValue],
             {
@@ -208,9 +327,9 @@ class CatalogRecord:
                 "original_path": self.original_path,
                 "original_filename": self.original_filename,
                 "suffixes": self.suffixes,
-                "user_metadata": self.user_metadata,
-                "derived_metadata": self.derived_metadata,
-                "naming_metadata": self.naming_metadata,
+                "user_metadata": user_metadata,
+                "derived_metadata": derived_metadata,
+                "naming_metadata": naming_metadata,
             },
         )
 
@@ -275,4 +394,4 @@ def _coerce_metadata_dict(value: JsonValue) -> MetadataDict:
     """Coerce a JSON object value to metadata."""
     if not isinstance(value, dict):
         return {}
-    return dict(value)
+    return normalize_metadata(value)

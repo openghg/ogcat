@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import importlib.util
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, cast, overload
+from typing import Any, Literal, cast, overload
 from uuid import uuid4
 
 from ogcat.extractors import extract_derived_metadata
 from ogcat.hooks import ArtifactWriter, HookManager, OperationContext, OperationSource
-from ogcat.models import ArtifactLocator, CatalogRecord, JsonValue, MetadataDict
+from ogcat.models import ArtifactLocator, CatalogRecord, JsonValue, MetadataDict, normalize_metadata
 from ogcat.naming import build_naming_context, render_storage_location
 from ogcat.plugins import PluginRegistry
 from ogcat.record_set import CatalogRecordSet
@@ -127,7 +127,7 @@ class Catalog:
     def add_file(
         self,
         path: str | Path,
-        metadata: MetadataDict | None = None,
+        metadata: Mapping[Any, Any] | None = None,
         operation: str | None = None,
         record_type: str | None = None,
     ) -> CatalogRecord:
@@ -241,7 +241,7 @@ class Catalog:
         path: str | Path | None = None,
         *,
         record_type: str | None = None,
-        metadata: MetadataDict | None = None,
+        metadata: Mapping[Any, Any] | None = None,
         locator: ArtifactLocator | None = None,
         target_kind: TargetKind = "file",
         write_mode: WriteMode | None = None,
@@ -297,6 +297,10 @@ class Catalog:
         )
 
         self.hook_manager.before_validate_metadata(context)
+        context.user_metadata = _normalize_metadata_for_schema(
+            context.user_metadata,
+            schema_name=schema_name,
+        )
         validation_report = self._metadata_validation_report(
             schema=schema,
             metadata=context.user_metadata,
@@ -351,13 +355,13 @@ class Catalog:
         record_type: str,
         locator: ArtifactLocator | None = None,
         storage_plan: StoragePlan | None = None,
-        metadata: MetadataDict | None = None,
+        metadata: Mapping[Any, Any] | None = None,
         storage_mode: str | None = None,
         original_path: str | Path | None = None,
         original_filename: str | None = None,
         suffixes: list[str] | None = None,
-        derived_metadata: MetadataDict | None = None,
-        naming_metadata: MetadataDict | None = None,
+        derived_metadata: Mapping[Any, Any] | None = None,
+        naming_metadata: Mapping[Any, Any] | None = None,
         time_added: str | None = None,
         source: OperationSource | None = None,
         artifact_writer: ArtifactWriter | None = None,
@@ -410,7 +414,16 @@ class Catalog:
                 naming_metadata = _naming_metadata_from_storage_plan(storage_plan)
         assert locator is not None
         metadata_input = {} if metadata is None else metadata
-        derived_metadata = {} if derived_metadata is None else dict(derived_metadata)
+        derived_metadata = (
+            {}
+            if derived_metadata is None
+            else normalize_metadata(derived_metadata, field_name="derived_metadata")
+        )
+        naming_metadata = (
+            None
+            if naming_metadata is None
+            else normalize_metadata(naming_metadata, field_name="naming_metadata")
+        )
         schema = self._select_schema(record_type, require_known=False)
         schema_name = self._schema_name(record_type)
         metadata = _coerce_metadata_input(metadata_input, schema_name=schema_name)
@@ -537,10 +550,10 @@ class Catalog:
         self,
         query: SearchQuery | None = None,
         *,
-        where: dict[str, object] | None = None,
-        contains: dict[str, object] | None = None,
-        regex: dict[str, str] | None = None,
-        match: dict[str, str] | None = None,
+        where: Mapping[str, object] | None = None,
+        contains: Mapping[str, object] | None = None,
+        regex: Mapping[str, str] | None = None,
+        match: Mapping[str, str] | None = None,
         exists: Sequence[str] | None = None,
         missing: Sequence[str] | None = None,
         ignore_case: bool = False,
@@ -552,10 +565,10 @@ class Catalog:
         self,
         *,
         query: SearchQuery | None = None,
-        where: dict[str, object] | None = None,
-        contains: dict[str, object] | None = None,
-        regex: dict[str, str] | None = None,
-        match: dict[str, str] | None = None,
+        where: Mapping[str, object] | None = None,
+        contains: Mapping[str, object] | None = None,
+        regex: Mapping[str, str] | None = None,
+        match: Mapping[str, str] | None = None,
         exists: Sequence[str] | None = None,
         missing: Sequence[str] | None = None,
         ignore_case: bool = False,
@@ -566,10 +579,10 @@ class Catalog:
         self,
         query: SearchQuery | None = None,
         *,
-        where: dict[str, object] | None = None,
-        contains: dict[str, object] | None = None,
-        regex: dict[str, str] | None = None,
-        match: dict[str, str] | None = None,
+        where: Mapping[str, object] | None = None,
+        contains: Mapping[str, object] | None = None,
+        regex: Mapping[str, str] | None = None,
+        match: Mapping[str, str] | None = None,
         exists: Sequence[str] | None = None,
         missing: Sequence[str] | None = None,
         ignore_case: bool = False,
@@ -754,8 +767,8 @@ class Catalog:
         original_path: str | Path | None = None,
         original_filename: str | None = None,
         suffixes: list[str] | None = None,
-        derived_metadata: MetadataDict | None = None,
-        naming_metadata: MetadataDict | None = None,
+        derived_metadata: Mapping[Any, Any] | None = None,
+        naming_metadata: Mapping[Any, Any] | None = None,
         time_added: str | None = None,
     ) -> CatalogRecord:
         """Build an artifact record without persisting it."""
@@ -767,6 +780,17 @@ class Catalog:
         else:
             resolved_original_path = original_path
         locator_path = locator.as_path()
+        user_metadata = {} if metadata is None else normalize_metadata(metadata, field_name="metadata")
+        normalized_derived_metadata = (
+            {}
+            if derived_metadata is None
+            else normalize_metadata(derived_metadata, field_name="derived_metadata")
+        )
+        normalized_naming_metadata = (
+            {}
+            if naming_metadata is None
+            else normalize_metadata(naming_metadata, field_name="naming_metadata")
+        )
 
         return CatalogRecord(
             id=record_id,
@@ -780,9 +804,9 @@ class Catalog:
             original_path=resolved_original_path,
             original_filename=original_filename,
             suffixes=[] if suffixes is None else list(suffixes),
-            user_metadata={} if metadata is None else dict(metadata),
-            derived_metadata={} if derived_metadata is None else dict(derived_metadata),
-            naming_metadata={} if naming_metadata is None else dict(naming_metadata),
+            user_metadata=user_metadata,
+            derived_metadata=normalized_derived_metadata,
+            naming_metadata=normalized_naming_metadata,
         )
 
     def _render_planned_locator(
@@ -949,6 +973,10 @@ class Catalog:
         )
         try:
             self.hook_manager.before_validate_metadata(hook_context)
+            hook_context.user_metadata = _normalize_metadata_for_schema(
+                hook_context.user_metadata,
+                schema_name=self._schema_name(schema_record_type),
+            )
             validation_report = self._metadata_validation_report(
                 schema=schema,
                 metadata=hook_context.user_metadata,
@@ -990,7 +1018,19 @@ class Catalog:
             if derived_metadata_collector is not None:
                 derived_metadata_collector(hook_context, canonical_locator)
             self.hook_manager.extract_metadata(hook_context)
+            hook_context.derived_metadata = normalize_metadata(
+                hook_context.derived_metadata,
+                field_name="derived_metadata",
+            )
             self.hook_manager.before_record_write(hook_context)
+            hook_context.user_metadata = _normalize_metadata_for_schema(
+                hook_context.user_metadata,
+                schema_name=self._schema_name(schema_record_type),
+            )
+            hook_context.derived_metadata = normalize_metadata(
+                hook_context.derived_metadata,
+                field_name="derived_metadata",
+            )
             record = self._build_artifact_record(
                 record_type=record_type,
                 locator=canonical_locator,
@@ -1117,11 +1157,11 @@ def _coerce_hook_manager(
 
 def _metadata_with_hook_warnings(context: OperationContext) -> MetadataDict:
     """Return derived metadata with non-fatal hook warnings included."""
-    metadata = dict(context.derived_metadata)
+    metadata = normalize_metadata(context.derived_metadata, field_name="derived_metadata")
     if context.warnings:
         warnings_metadata: list[JsonValue] = [warning.to_metadata() for warning in context.warnings]
         metadata["hook_warnings"] = warnings_metadata
-    return metadata
+    return normalize_metadata(metadata, field_name="derived_metadata")
 
 
 def _storage_plan_with_locator(plan: StoragePlan, locator: ArtifactLocator) -> StoragePlan:
@@ -1217,9 +1257,16 @@ def _coerce_metadata_input(
     schema_name: str,
 ) -> MetadataDict:
     """Copy user metadata after preserving existing non-dictionary errors."""
-    if isinstance(metadata, dict):
-        return dict(metadata)
-    raise TypeError(f"Metadata for schema {schema_name} must be a dictionary, got {type(metadata).__name__}")
+    return _normalize_metadata_for_schema(metadata, schema_name=schema_name)
+
+
+def _normalize_metadata_for_schema(metadata: object, *, schema_name: str) -> MetadataDict:
+    """Normalize user metadata with the existing schema-aware error prefix."""
+    return normalize_metadata(
+        metadata,
+        field_name="metadata",
+        label=f"Metadata for schema {schema_name}",
+    )
 
 
 def _artifact_locator_from_context(context: OperationContext) -> ArtifactLocator:
@@ -1279,9 +1326,7 @@ def _optional_metadata(value: object) -> MetadataDict | None:
     """Return optional metadata for artifact batch forwarding."""
     if value is None:
         return None
-    if isinstance(value, dict):
-        return dict(value)
-    raise TypeError(f"optional metadata value must be a dictionary, got {type(value).__name__}")
+    return normalize_metadata(value, field_name="metadata", label="optional metadata value")
 
 
 def _optional_string_list(value: object) -> list[str] | None:
