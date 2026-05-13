@@ -20,6 +20,7 @@ Keys and values must be JSON-compatible. ogcat normalizes common Python values
 before validation, naming, and storage:
 
 - `pathlib.Path` values become strings.
+- `datetime.date` and `datetime.datetime` values become ISO 8601 strings.
 - Mapping keys become strings and mapping values are normalized recursively.
 - Tuples and lists become JSON lists.
 - Sets and frozensets become deterministic lists where their normalized values

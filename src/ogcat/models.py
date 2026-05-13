@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from pathlib import Path, PurePath
 from typing import TypeAlias, cast
 
@@ -67,6 +68,8 @@ def normalize_metadata_value(value: object, *, field_name: str = "metadata") -> 
     """
     if value is None or isinstance(value, str | int | float | bool):
         return cast(JsonValue, value)
+    if isinstance(value, date | datetime):
+        return value.isoformat()
     if isinstance(value, PurePath):
         return str(value)
     if isinstance(value, Mapping):
@@ -97,8 +100,8 @@ def normalize_metadata_value(value: object, *, field_name: str = "metadata") -> 
 
     raise TypeError(
         f"{field_name} must be JSON-compatible; got {type(value).__name__}. "
-        "Supported values are scalars, pathlib paths, mappings, lists, tuples, sets, "
-        "frozensets, and objects with item() returning a supported scalar."
+        "Supported values are scalars, dates, datetimes, pathlib paths, mappings, "
+        "lists, tuples, sets, frozensets, and objects with item() returning a supported scalar."
     )
 
 

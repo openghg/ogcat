@@ -21,9 +21,10 @@ fixed set of reserved fields plus three metadata namespaces.
 ``user_metadata``
 :   Key–value pairs supplied by the caller at ingest time.  Any
     JSON-compatible value is accepted. Common Python values such as
-    `pathlib.Path`, tuples, sets, and NumPy scalar-like values are normalized
-    before the record is validated and stored. This is the primary place to
-    store domain metadata such as species, year, or instrument.
+    `pathlib.Path`, `datetime.date`, `datetime.datetime`, tuples, sets, and
+    NumPy scalar-like values are normalized before the record is validated and
+    stored. This is the primary place to store domain metadata such as species,
+    year, or instrument.
 
 ``derived_metadata``
 :   Metadata added automatically during ingest by extractors and hooks.  For

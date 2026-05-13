@@ -1,3 +1,4 @@
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -133,11 +134,22 @@ def test_validate_metadata_normalizes_values_before_type_checks() -> None:
         metadata_fields=[
             MetadataFieldDescription(name="path", description="Source path.", value_types=["str"]),
             MetadataFieldDescription(name="tags", description="Tags.", value_types=["list[str]"]),
+            MetadataFieldDescription(name="published", description="Publication date.", value_types=["date"]),
+            MetadataFieldDescription(
+                name="observed_at",
+                description="Observation time.",
+                value_types=["datetime"],
+            ),
         ]
     )
 
     report = validate_metadata(
-        {"path": Path("raw/example.nc"), "tags": ("co2", "mhd")},
+        {
+            "path": Path("raw/example.nc"),
+            "tags": ("co2", "mhd"),
+            "published": date(2024, 1, 2),
+            "observed_at": datetime(2024, 1, 2, 3, 4, 5, tzinfo=UTC),
+        },
         schema,
     )
 

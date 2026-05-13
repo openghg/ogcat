@@ -1,3 +1,4 @@
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -377,6 +378,23 @@ def test_add_artifact_normalizes_nested_metadata_values(tmp_path: Path) -> None:
     assert record.derived_metadata["shape"] == [12, 4]
     assert record.derived_metadata["path"] == "derived.nc"
     assert record.naming_metadata["parts"] == ["a", "b"]
+
+
+def test_add_artifact_normalizes_date_datetime_metadata(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="artifacts"))
+
+    record = catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/example.zarr"),
+        metadata={
+            "published": date(2024, 1, 2),
+            "observed_at": datetime(2024, 1, 2, 3, 4, 5, tzinfo=UTC),
+        },
+    )
+
+    assert record.user_metadata["published"] == "2024-01-02"
+    assert record.user_metadata["observed_at"] == "2024-01-02T03:04:05+00:00"
 
 
 def test_add_artifact_rejects_unsupported_metadata_objects(tmp_path: Path) -> None:
