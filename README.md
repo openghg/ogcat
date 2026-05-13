@@ -107,6 +107,33 @@ matches = catalog.search(where={"species": "CO2"})
 regex_matches = catalog.search(regex={"version": r"^v4\.[0-9]+$"})
 ```
 
+`search()` returns a `CatalogRecordSet` by default, so results can be indexed,
+iterated, previewed, or narrowed to selected fields. Pass `as_record_set=False`
+when you explicitly need a plain list.
+
+For selection-heavy workflows, use the small helpers around search:
+
+```python
+record = catalog.get_one(
+    where={
+        "product": "GridFED",
+        "sector": "TOTAL",
+        "species": "co2",
+    }
+)
+
+# For local paths, record.path() is often the easiest value to open.
+# For URI/urlpath records, use the locator value.
+# ds = xr.open_dataset(record.locator.value)
+
+results = catalog.search(
+    where={"provenance": "derived", "species": "co2"},
+    contains={"keywords": "paris_verification_games"},
+)
+ids = results.ids
+summary = results.select("id", "product", "species")
+```
+
 Field lookup supports both flattened names and explicit dotted paths:
 
 ```python
@@ -125,6 +152,10 @@ The CLI accepts both explicit flags and simple positional expressions:
 uv run ogcat search --catalog example-catalog species=CO2
 uv run ogcat search --catalog example-catalog tags:paris user.site.code? --json
 uv run ogcat search --catalog example-catalog 'locator.uri~s3://bucket/*.zarr' --match title=paris --ids
+uv run ogcat show "$(uv run ogcat search --catalog example-catalog species=CO2 --ids --limit 1)" --catalog example-catalog
+uv run ogcat path "$(uv run ogcat search --catalog example-catalog species=CO2 --ids --limit 1)" --catalog example-catalog
+uv run ogcat fields --catalog example-catalog --stored
+uv run ogcat fields --catalog example-catalog --values species
 ```
 
 Register simple hooks directly in Python:

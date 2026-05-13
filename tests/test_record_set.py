@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from rich.table import Table
 
 import ogcat.record_set as record_set_module
-from ogcat import ArtifactLocator, Catalog, CatalogRecordSet, CatalogSpec
+from ogcat import ArtifactLocator, Catalog, CatalogRecordSet, CatalogSpec, RecordSchema
 
 
 def _create_catalog(tmp_path: Path) -> Catalog:
@@ -27,10 +27,11 @@ def _create_catalog(tmp_path: Path) -> Catalog:
     return catalog
 
 
-def test_search_can_return_record_set_with_cli_style_field_selection(tmp_path: Path) -> None:
+def test_search_returns_record_set_with_cli_style_field_selection_by_default(tmp_path: Path) -> None:
+    """Search returns a record set with field-selection helpers by default."""
     catalog = _create_catalog(tmp_path)
 
-    results = catalog.search(where={"species": "CO2"}, as_record_set=True)
+    results = catalog.search(where={"species": "CO2"})
 
     assert isinstance(results, CatalogRecordSet)
     assert len(results) == 1
@@ -83,6 +84,157 @@ def test_record_set_to_dataframe_uses_selected_rows_when_pandas_is_available(
     frame = results.to_dataframe(fields=["id", "species"])
 
     assert frame == [{"id": results[0].id, "species": "CO2"}]
+
+
+def test_record_set_ids_returns_stable_string_ids(tmp_path: Path) -> None:
+    """Record-set IDs are convenient for show/path follow-up operations."""
+    catalog = _create_catalog(tmp_path)
+    results = catalog.search(as_record_set=True)
+
+    assert results.ids == [results[0].id]
+    assert all(isinstance(record_id, str) for record_id in results.ids)
+
+
+def test_record_set_to_dataframe_without_fields_keeps_full_records(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """to_dataframe() without fields keeps the existing full-record behavior."""
+    catalog = _create_catalog(tmp_path)
+    results = catalog.search(as_record_set=True)
+
+    class FakeDataFrame:
+        @classmethod
+        def from_records(cls, records: list[dict[str, object]]) -> list[dict[str, object]]:
+            return records
+
+    monkeypatch.setattr(
+        record_set_module,
+        "import_module",
+        lambda name: SimpleNamespace(DataFrame=FakeDataFrame),
+    )
+
+    frame = results.to_dataframe()
+
+    assert "user_metadata" in frame[0]
+    assert "locator" in frame[0]
+
+
+def test_record_set_uses_schema_display_defaults_for_homogeneous_results(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Homogeneous record sets use their schema display fields by default."""
+    catalog = Catalog.create(
+        tmp_path / "catalog",
+        CatalogSpec(
+            catalog_name="fluxes",
+            record_schemas={
+                "flux": RecordSchema(display_fields=["id", "product", "species", "domain", "path"])
+            },
+        ),
+    )
+    record = catalog.add_artifact(
+        record_type="flux",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/flux.zarr"),
+        metadata={"product": "GridFED", "species": "co2", "domain": "EUROPE"},
+    )
+    results = catalog.search(where={"record_type": "flux"}, as_record_set=True)
+
+    class FakeDataFrame:
+        @classmethod
+        def from_records(cls, records: list[dict[str, object]]) -> list[dict[str, object]]:
+            return records
+
+    monkeypatch.setattr(
+        record_set_module,
+        "import_module",
+        lambda name: SimpleNamespace(DataFrame=FakeDataFrame),
+    )
+
+    frame = results.to_dataframe(fields="default")
+    preview = results.preview()
+
+    assert list(frame[0]) == ["id", "product", "species", "domain", "path"]
+    assert frame == [
+        {
+            "id": record.id,
+            "product": "GridFED",
+            "species": "co2",
+            "domain": "EUROPE",
+            "path": None,
+        }
+    ]
+    assert [column.header for column in preview.columns] == [
+        "id",
+        "product",
+        "species",
+        "domain",
+        "path",
+    ]
+
+
+def test_record_set_uses_deterministic_defaults_for_heterogeneous_results(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Heterogeneous defaults merge schema display fields and preserve missing values."""
+    catalog = Catalog.create(
+        tmp_path / "catalog",
+        CatalogSpec(
+            catalog_name="mixed",
+            record_schemas={
+                "surface": RecordSchema(display_fields=["id", "site", "species", "path"]),
+                "flux": RecordSchema(display_fields=["id", "product", "species", "domain", "path"]),
+            },
+        ),
+    )
+    surface = catalog.add_artifact(
+        record_type="surface",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/surface.zarr"),
+        metadata={"site": "MHD", "species": "co2"},
+    )
+    flux = catalog.add_artifact(
+        record_type="flux",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/flux.zarr"),
+        metadata={"product": "GridFED", "species": "co2", "domain": "EUROPE"},
+    )
+    results = catalog.search(as_record_set=True)
+
+    class FakeDataFrame:
+        @classmethod
+        def from_records(cls, records: list[dict[str, object]]) -> list[dict[str, object]]:
+            return records
+
+    monkeypatch.setattr(
+        record_set_module,
+        "import_module",
+        lambda name: SimpleNamespace(DataFrame=FakeDataFrame),
+    )
+
+    rows = results.rows()
+    frame = results.to_display_dataframe()
+
+    assert list(rows[0]) == ["id", "record_type", "path", "product", "species", "domain", "site"]
+    assert rows == frame
+    assert rows[0] == {
+        "id": surface.id,
+        "record_type": "surface",
+        "path": None,
+        "product": None,
+        "species": "co2",
+        "domain": None,
+        "site": "MHD",
+    }
+    assert rows[1] == {
+        "id": flux.id,
+        "record_type": "flux",
+        "path": None,
+        "product": "GridFED",
+        "species": "co2",
+        "domain": "EUROPE",
+        "site": None,
+    }
 
 
 def test_record_set_rich_preview_returns_table(tmp_path: Path) -> None:

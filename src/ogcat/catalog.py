@@ -647,14 +647,14 @@ class Catalog:
         exists: Sequence[str] | None = None,
         missing: Sequence[str] | None = None,
         ignore_case: bool = False,
-        as_record_set: Literal[False] = False,
-    ) -> list[CatalogRecord]: ...
+        as_record_set: Literal[True] = True,
+    ) -> CatalogRecordSet: ...
 
     @overload
     def search(
         self,
-        *,
         query: SearchQuery | None = None,
+        *,
         where: Mapping[str, object] | None = None,
         contains: Mapping[str, object] | None = None,
         regex: Mapping[str, str] | None = None,
@@ -662,8 +662,8 @@ class Catalog:
         exists: Sequence[str] | None = None,
         missing: Sequence[str] | None = None,
         ignore_case: bool = False,
-        as_record_set: Literal[True],
-    ) -> CatalogRecordSet: ...
+        as_record_set: Literal[False],
+    ) -> list[CatalogRecord]: ...
 
     def search(
         self,
@@ -676,7 +676,7 @@ class Catalog:
         exists: Sequence[str] | None = None,
         missing: Sequence[str] | None = None,
         ignore_case: bool = False,
-        as_record_set: bool = False,
+        as_record_set: bool = True,
     ) -> list[CatalogRecord] | CatalogRecordSet:
         """Search catalog records using backend-neutral query semantics.
 
@@ -689,10 +689,10 @@ class Catalog:
             exists: Fields that must be present.
             missing: Fields that must be absent.
             ignore_case: Whether string comparisons should be case-insensitive.
-            as_record_set: Return a ``CatalogRecordSet`` instead of a list.
+            as_record_set: Return a ``CatalogRecordSet``. Pass ``False`` for a list.
 
         Returns:
-            Matching records, either as a list or record-set view.
+            Matching records, as a record-set view by default or a list when requested.
         """
         results = self.repository.search(
             query=query,
@@ -709,6 +709,39 @@ class Catalog:
             return self.record_set(results)
         return results
 
+    def get_one(
+        self,
+        query: SearchQuery | None = None,
+        *,
+        where: Mapping[str, object] | None = None,
+        contains: Mapping[str, object] | None = None,
+        regex: Mapping[str, str] | None = None,
+        match: Mapping[str, str] | None = None,
+        exists: Sequence[str] | None = None,
+        missing: Sequence[str] | None = None,
+        ignore_case: bool = False,
+        allow_many: bool = False,
+    ) -> CatalogRecord:
+        """Return one matching record, raising clear errors for ambiguous searches."""
+        records = self.search(
+            query=query,
+            where=where,
+            contains=contains,
+            regex=regex,
+            match=match,
+            exists=exists,
+            missing=missing,
+            ignore_case=ignore_case,
+        )
+        if not records:
+            raise ValueError("get_one found no records matching the search filters.")
+        if len(records) > 1 and not allow_many:
+            raise ValueError(
+                f"get_one found multiple records ({len(records)}) matching the search filters. "
+                "Refine the filters or pass allow_many=True."
+            )
+        return records[0]
+
     def record_set(self, records: Sequence[CatalogRecord]) -> CatalogRecordSet:
         """Wrap records in a sequence-like container.
 
@@ -718,7 +751,16 @@ class Catalog:
         Returns:
             Record set using this catalog's field resolution order.
         """
-        return CatalogRecordSet(records, resolution_order=self.spec.field_resolution_order)
+        schema_display_fields = {
+            record_type: self.spec.get_schema(record_type).display_fields
+            for record_type in self.spec.list_record_schemas()
+        }
+        return CatalogRecordSet(
+            records,
+            resolution_order=self.spec.field_resolution_order,
+            schema_display_fields=schema_display_fields,
+            default_display_fields=self.spec.get_schema().display_fields,
+        )
 
     def describe(self) -> dict[str, object]:
         """Return a serialisable summary of catalog configuration and contents."""
@@ -741,7 +783,7 @@ class Catalog:
         }
 
     def list_metadata_fields(self, record_type: str | None = None) -> list[dict[str, JsonValue]]:
-        """Return serialisable metadata field descriptions for a schema."""
+        """Return serialisable schema-declared metadata field descriptions."""
         schema = self._select_schema(record_type, require_known=record_type is not None)
         return [field_description.to_dict() for field_description in schema.metadata_fields]
 

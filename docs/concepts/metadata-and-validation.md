@@ -66,6 +66,7 @@ from ogcat import CatalogSpec, RecordSchema, MetadataFieldDescription
 spec = CatalogSpec(
     catalog_name="fluxes",
     default_schema=RecordSchema(
+        display_fields=["id", "species", "year", "path"],
         metadata_fields=[
             MetadataFieldDescription(
                 name="species",
@@ -83,6 +84,19 @@ spec = CatalogSpec(
     ),
 )
 ```
+
+`display_fields` declares the compact fields to show in search result previews
+and notebook dataframes:
+
+```python
+results = catalog.search(where={"species": "CO2"})
+rows = results.rows()
+df = results.to_dataframe(fields="default")
+```
+
+`to_dataframe()` requires pandas to be installed in the active environment.
+Calling `results.to_dataframe()` with no fields still returns full record
+dictionaries for compatibility.
 
 Named schemas let one catalog hold different record types with different
 metadata expectations:
@@ -133,7 +147,7 @@ ogcat fields --catalog ./my-catalog --record-type surface
 ogcat fields --catalog ./my-catalog --json
 ```
 
-This prints the declared metadata fields from the catalog spec.
+This prints the schema-declared metadata fields from the catalog spec.
 
 To discover fields actually present in stored records, use:
 
