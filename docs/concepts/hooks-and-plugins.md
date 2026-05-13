@@ -43,6 +43,19 @@ plugins = PluginRegistry([TitleFromFilenameHook()])
 catalog = Catalog.create("./my-catalog", spec, plugins=plugins)
 ```
 
+For ad hoc notebook workflows, you can also pass any iterable of hook objects
+directly as ``hooks=`` or ``plugins=``:
+
+```python
+catalog = Catalog.open("./my-catalog", hooks=[TitleFromFilenameHook()])
+```
+
+``Catalog.open()`` and ``Catalog.create()`` validate hook inputs immediately.
+Each supplied hook object must implement at least one supported hook method
+listed above, and any matching hook method must be callable. This stricter
+validation means inert sentinel objects and no-op objects with no hook methods
+are rejected instead of being silently skipped.
+
 You can also register hooks after catalog creation:
 
 ```python

@@ -462,6 +462,22 @@ def test_show_json_output(tmp_path: Path) -> None:
     assert payload["user_metadata"]["title"] == "Anthropogenic test flux"
 
 
+def test_show_and_path_commands_handle_numeric_looking_ids(tmp_path: Path) -> None:
+    """Show and path commands should handle TinyDB numeric-looking record ids."""
+
+    catalog = _create_catalog(tmp_path)
+    record = catalog.search()[0]
+    record_id = _record_id(record)
+
+    show_result = runner.invoke(app, ["show", record_id, "--catalog", str(catalog.root), "--json"])
+    path_result = runner.invoke(app, ["path", record_id, "--catalog", str(catalog.root)])
+
+    assert show_result.exit_code == 0
+    assert json.loads(strip_ansi(show_result.stdout))["id"] == record_id
+    assert path_result.exit_code == 0
+    assert strip_ansi(path_result.stdout).strip() == str(record.path())
+
+
 def test_info_human_output(tmp_path: Path) -> None:
     catalog = _create_catalog(tmp_path)
 

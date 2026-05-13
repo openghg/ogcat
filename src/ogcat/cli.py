@@ -554,7 +554,7 @@ def path(
     resolved = record.path()
     if resolved is None:
         _fail(f"Record is not path-backed: {record_id}")
-    console.print(str(resolved))
+    typer.echo(str(resolved))
 
 
 @app.command()

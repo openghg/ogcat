@@ -15,6 +15,11 @@ merges returned derived metadata, records non-fatal after-commit failures as
 warnings, and preserves the original exception when error or rollback hooks
 fail.
 
+``HOOK_METHOD_NAMES`` is the validation source of truth for ad hoc hook object
+inputs. When adding a lifecycle protocol to this module, add its method name to
+that tuple so ``Catalog.open()`` and ``Catalog.create()`` accept hooks that only
+implement the new stage.
+
 Artifact writers use the same context model. Any object satisfying
 :class:`ArtifactWriter` can materialise an :class:`ogcat.models.ArtifactLocator`
 from an :class:`OperationSource` before the catalog record is committed.
@@ -32,6 +37,81 @@ from ogcat.models import ArtifactLocator, MetadataDict
 from ogcat.storage import StoragePlan
 from ogcat.transactions import RollbackAction
 from ogcat.validation import ValidationReport
+
+HOOK_METHOD_NAMES = (
+    "before_validate_metadata",
+    "after_validate_metadata",
+    "resolve_artifact_locator",
+    "before_record_write",
+    "after_record_write",
+    "extract_metadata",
+    "before_commit",
+    "after_commit",
+    "on_error",
+    "on_rollback",
+)
+
+
+def coerce_hook_iterable(value: object, *, label: str) -> list[object]:
+    """Return a validated list of hooks from an iterable input.
+
+    Args:
+        value: Candidate iterable of hook objects.
+        label: User-facing input name used in error messages.
+
+    Returns:
+        Validated hook objects as a defensive list copy.
+
+    Raises:
+        TypeError: If the value is not an iterable of hook objects.
+    """
+    expected = (
+        "a HookManager or iterable of hook objects"
+        if label == "hooks"
+        else "a PluginRegistry or iterable of hook objects"
+    )
+    if isinstance(value, str | bytes):
+        raise TypeError(f"{label} must be {expected}, got {type(value).__name__}")
+    if not isinstance(value, Iterable):
+        raise TypeError(f"{label} must be {expected}, got {type(value).__name__}")
+    return validate_hook_objects(value, label=label)
+
+
+def validate_hook_objects(hooks: Iterable[object], *, label: str) -> list[object]:
+    """Validate hook objects and return a defensive list copy.
+
+    Args:
+        hooks: Hook objects to validate.
+        label: User-facing input name used in error messages.
+
+    Returns:
+        Validated hook objects as a defensive list copy.
+
+    Raises:
+        TypeError: If any hook object has no supported hook methods or a
+            matching hook method is not callable.
+    """
+    validated = list(hooks)
+    method_list = ", ".join(HOOK_METHOD_NAMES)
+    missing = object()
+    for index, hook in enumerate(validated):
+        implemented_methods: list[str] = []
+        for method_name in HOOK_METHOD_NAMES:
+            method = getattr(hook, method_name, missing)
+            if method is missing:
+                continue
+            if not callable(method):
+                raise TypeError(
+                    f"{label} item {index} has non-callable hook method "
+                    f"{method_name!r}; got {type(method).__name__}"
+                )
+            implemented_methods.append(method_name)
+        if not implemented_methods:
+            raise TypeError(
+                f"{label} item {index} must provide at least one callable hook method "
+                f"({method_list}); got {type(hook).__name__}"
+            )
+    return validated
 
 
 @dataclass(slots=True)
@@ -383,6 +463,7 @@ __all__ = [
     "BeforeRecordWriteHook",
     "ErrorHook",
     "ExtractMetadataHook",
+    "HOOK_METHOD_NAMES",
     "HookManager",
     "HookWarning",
     "OperationContext",
@@ -390,4 +471,6 @@ __all__ = [
     "ResolveArtifactLocatorHook",
     "RollbackHook",
     "RollbackRegistrar",
+    "coerce_hook_iterable",
+    "validate_hook_objects",
 ]
