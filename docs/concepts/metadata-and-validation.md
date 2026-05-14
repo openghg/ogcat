@@ -43,6 +43,20 @@ all_tags = catalog.search(contains={"tags": ["paris", "europe"]})
 site = catalog.search(contains={"site": {"code": "MHD"}})
 ```
 
+For list-valued fields, membership is exact. This matters for suffixes:
+
+```python
+# Does not match a stored suffix list such as [".zip"].
+catalog.search(contains={"suffixes": "zip"})
+
+# Does match, because ".zip" is the exact stored list member.
+catalog.search(contains={"suffixes": ".zip"})
+```
+
+For file extensions and formats, prefer normalized metadata such as
+`format="zip"` or `derived_metadata.classification.format="zip"` over fuzzy
+suffix matching.
+
 The equivalent CLI forms are:
 
 ```bash
