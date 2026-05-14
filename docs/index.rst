@@ -29,6 +29,7 @@ searching records.
    :caption: Tutorials
 
    tutorials/basic-catalog
+   tutorials/verification-games-recipes
    tutorials/intermediate
    tutorials/advanced-real-world
    tutorials/artifact-workflows

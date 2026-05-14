@@ -157,6 +157,21 @@ def test_search_supports_list_membership_and_contains(tmp_path: Path) -> None:
     assert [r.id for r in by_title_substring] == [tagged.id]
 
 
+def test_search_contains_suffixes_requires_exact_list_member(tmp_path: Path) -> None:
+    """Suffix contains searches require the exact stored suffix string."""
+    archive = tmp_path / "gridfed.zip"
+    archive.write_text("not a real archive", encoding="utf-8")
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
+    record = catalog.add_reference(
+        archive,
+        metadata={"product": "GridFED", "format": "zip"},
+    )
+
+    assert catalog.search(contains={"suffixes": "zip"}) == []
+    assert [r.id for r in catalog.search(contains={"suffixes": ".zip"})] == [record.id]
+    assert [r.id for r in catalog.search(where={"format": "zip"})] == [record.id]
+
+
 def test_search_contains_supports_mapping_subset_and_unhashable_values(tmp_path: Path) -> None:
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
     record = catalog.add_artifact(
