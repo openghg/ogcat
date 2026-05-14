@@ -255,6 +255,21 @@ Unqualified field names are resolved in this order:
 
 If you need to bypass flattened lookup, use an explicit dotted path such as `user_metadata.species` or `derived_metadata.netcdf.dims.time`. The shorter `user.species` and `derived.netcdf.dims.time` aliases are also accepted.
 
+Newly added records also store cheap artifact classification under
+`derived_metadata.classification`. It is inferred from locator/path shape,
+suffixes, and safe local archive member names, not from expensive data reads.
+The normalized `format` value is intentionally not the same thing as the file
+suffix. For example, `.csv`, `.json`, `.md`, `.tsv`, and `.txt` are all
+classified as `format="text"`; use `suffixes` when you need the literal suffix
+list. Selected classification fields can be searched unqualified:
+
+```python
+catalog.search(where={"format": "zip"})
+catalog.search(where={"format": "text"})
+catalog.search(where={"artifact_kind": "zarr_store"})
+catalog.search(where={"derived_metadata.classification.inner_format": "netcdf"})
+```
+
 Current search is intentionally small. It does not support numeric range queries or richer expressions such as `>`, `<`, `>=`, `<=`, or boolean query composition.
 
 ## Development

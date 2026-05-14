@@ -195,7 +195,10 @@ def test_build_catalog_from_listing_creates_external_reference_records(
     assert records[0].record_type == "external_reference"
     assert records[0].storage_mode == "external"
     assert records[0].user_metadata["discovery_mode"] == "listing"
-    assert records[0].derived_metadata == {}
+    classification = records[0].derived_metadata["classification"]
+    assert isinstance(classification, dict)
+    assert classification["format"] == "netcdf"
+    assert classification["artifact_kind"] == "file"
 
 
 def test_build_catalog_from_mounted_scan_adds_filesystem_metadata(

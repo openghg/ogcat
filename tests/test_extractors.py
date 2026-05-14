@@ -72,7 +72,10 @@ def test_add_file_keeps_working_for_netcdf_suffix_without_xarray(
 
     record = catalog.add_file(source)
 
-    assert record.derived_metadata == {}
+    assert "netcdf" not in record.derived_metadata
+    classification = record.derived_metadata["classification"]
+    assert isinstance(classification, dict)
+    assert classification["format"] == "netcdf"
 
 
 def test_add_file_extracts_small_netcdf_metadata_when_xarray_is_available(tmp_path: Path) -> None:

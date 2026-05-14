@@ -1,6 +1,7 @@
 """Public package interface for ogcat."""
 
 from ogcat.catalog import Catalog
+from ogcat.classification import classify_artifact
 from ogcat.hooks import ArtifactWriter, HookManager, HookWarning, OperationContext, OperationSource
 from ogcat.models import ArtifactLocator, CatalogRecord, MetadataFieldDescription
 from ogcat.plugins import PluginRegistry
@@ -49,6 +50,7 @@ __all__ = [
     "CatalogRecord",
     "CatalogRecordSet",
     "CatalogSpec",
+    "classify_artifact",
     "CopyArtifactWriter",
     "FsspecStorageAdapter",
     "FunctionArtifactWriter",
