@@ -47,9 +47,12 @@ fixed set of reserved fields plus three metadata namespaces.
     | ``archive_format`` | ``zip``, ``gzip``, or ``tar`` when the artifact is an archive or compressed file |
     | ``inner_format`` | The safely inferred inner format for simple suffix chains such as ``.nc.gz`` or local zip archives with one file |
 
-    Text-like suffixes such as ``.txt``, ``.csv``, ``.tsv``, and ``.json`` are
+    ``format`` is a normalized class, not the literal suffix. Text-like
+    suffixes such as ``.csv``, ``.json``, ``.md``, ``.tsv``, and ``.txt`` are
     intentionally classified as the broad ``text`` format until ogcat needs a
-    more detailed text subtype vocabulary.
+    more detailed text subtype vocabulary. Use the classification ``suffixes``
+    field or the record's top-level ``suffixes`` field when you need to search
+    or display the literal suffix list.
 
 ``naming_metadata``
 :   Internal metadata used to evaluate directory and filename templates.  You
