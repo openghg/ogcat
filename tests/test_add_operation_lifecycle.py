@@ -1,11 +1,9 @@
 """Regression tests for the internal add-operation lifecycle phases."""
 
 from pathlib import Path
-from typing import Any
 
 import pytest
 
-import ogcat.catalog as catalog_module
 from ogcat import (
     ArtifactLocator,
     Catalog,
@@ -19,6 +17,7 @@ from ogcat import (
     RecordSchema,
     ValidationReport,
 )
+from ogcat.operation_runner import AddOperationRequest, OperationRunner
 
 
 def test_run_add_operation_delegates_to_operation_runner(
@@ -26,24 +25,29 @@ def test_run_add_operation_delegates_to_operation_runner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Catalog add setup delegates the lifecycle to OperationRunner."""
-    captured: dict[str, Any] = {}
+    requests: list[AddOperationRequest] = []
+    runners: list[OperationRunner] = []
 
-    class FakeRunner:
-        def __init__(self, *, dependencies: object, request: object) -> None:
-            captured["dependencies"] = dependencies
-            captured["request"] = request
+    class FakeRunner(OperationRunner):
+        def __init__(self, request: AddOperationRequest) -> None:
+            self.request = request
 
         def run(self) -> CatalogRecord:
-            request = captured["request"]
             return CatalogRecord(
                 catalog="artifacts",
                 time_added="2026-05-14T00:00:00+00:00",
                 id="runner",
-                record_type=request.record_type,
+                record_type=self.request.record_type,
                 locator=ArtifactLocator(kind="uri", value="s3://bucket/delegated.zarr"),
             )
 
-    monkeypatch.setattr(catalog_module, "OperationRunner", FakeRunner)
+    def build_fake_runner(self: Catalog, request: AddOperationRequest) -> OperationRunner:
+        requests.append(request)
+        runner = FakeRunner(request)
+        runners.append(runner)
+        return runner
+
+    monkeypatch.setattr(Catalog, "_build_add_operation_runner", build_fake_runner)
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
 
     record = catalog.add_artifact(
@@ -52,10 +56,10 @@ def test_run_add_operation_delegates_to_operation_runner(
         metadata={"title": "Delegated"},
     )
 
-    dependencies = captured["dependencies"]
-    request = captured["request"]
-    assert dependencies.catalog_root == catalog.root
-    assert dependencies.hook_manager is catalog.hook_manager
+    assert len(requests) == 1
+    assert len(runners) == 1
+    request = requests[0]
+    assert isinstance(runners[0], OperationRunner)
     assert request.transaction.repository is catalog.repository
     assert request.commit is True
     assert request.operation_type == "add_artifact"

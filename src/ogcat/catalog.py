@@ -31,17 +31,21 @@ from ogcat.hooks import (
 )
 from ogcat.models import ArtifactLocator, CatalogRecord, JsonValue, MetadataDict, normalize_metadata
 from ogcat.naming import build_naming_context, render_storage_location
+from ogcat.operation_helpers import (
+    adapter_name,
+    artifact_locator_from_context,
+    directory_from_locator,
+    directory_from_relative_path,
+    filename_from_locator,
+    naming_metadata_from_storage_plan,
+    normalize_metadata_for_schema,
+    storage_plan_with_locator,
+)
 from ogcat.operation_runner import (
+    AddOperationRequest,
+    AddOperationRunner,
     OperationRunner,
-    _adapter_name,
-    _AddOperationRequest,
-    _artifact_locator_from_context,
-    _directory_from_locator,
-    _directory_from_relative_path,
-    _filename_from_locator,
-    _naming_metadata_from_storage_plan,
-    _OperationRunnerDependencies,
-    _storage_plan_with_locator,
+    OperationServices,
 )
 from ogcat.plugins import PluginRegistry
 from ogcat.record_set import CatalogRecordSet
@@ -252,10 +256,10 @@ class Catalog:
                 target_kind="file",
                 write_mode=cast(WriteMode, chosen_operation),
                 ogcat_owned=True,
-                adapter=_adapter_name(locator),
+                adapter=adapter_name(locator),
                 storage_relative_path=locator.relative_path,
-                resolved_directory=_directory_from_relative_path(locator.relative_path),
-                resolved_filename=_filename_from_locator(locator),
+                resolved_directory=directory_from_relative_path(locator.relative_path),
+                resolved_filename=filename_from_locator(locator),
             )
 
         def collect_file_metadata(context: OperationContext, locator: ArtifactLocator) -> None:
@@ -353,7 +357,7 @@ class Catalog:
 
         hook_dispatcher = self.hook_manager.dispatcher()
         hook_dispatcher.before_validate_metadata(context)
-        context.user_metadata = _normalize_metadata_for_schema(
+        context.user_metadata = normalize_metadata_for_schema(
             context.user_metadata,
             schema_name=schema_name,
         )
@@ -382,21 +386,21 @@ class Catalog:
         else:
             planned_locator = locator
             storage_relative_path = locator.relative_path
-            resolved_directory = _directory_from_locator(locator)
-            resolved_filename = _filename_from_locator(locator)
+            resolved_directory = directory_from_locator(locator)
+            resolved_filename = filename_from_locator(locator)
         context.planned_locators = [planned_locator]
         hook_dispatcher.resolve_artifact_locator(context)
-        canonical_locator = _artifact_locator_from_context(context)
+        canonical_locator = artifact_locator_from_context(context)
         if canonical_locator != planned_locator:
             storage_relative_path = canonical_locator.relative_path
-            resolved_directory = _directory_from_locator(canonical_locator)
-            resolved_filename = _filename_from_locator(canonical_locator)
+            resolved_directory = directory_from_locator(canonical_locator)
+            resolved_filename = filename_from_locator(canonical_locator)
         plan = plan_storage(
             canonical_locator,
             target_kind=target_kind,
             write_mode=resolved_write_mode,
             ogcat_owned=ogcat_owned,
-            adapter=_adapter_name(canonical_locator),
+            adapter=adapter_name(canonical_locator),
             time_added=timestamp,
             storage_relative_path=storage_relative_path,
             resolved_directory=resolved_directory,
@@ -467,7 +471,7 @@ class Catalog:
             if time_added is None:
                 time_added = storage_plan.time_added
             if naming_metadata is None:
-                naming_metadata = _naming_metadata_from_storage_plan(storage_plan)
+                naming_metadata = naming_metadata_from_storage_plan(storage_plan)
         assert locator is not None
         metadata_input = {} if metadata is None else metadata
         derived_metadata = (
@@ -1216,7 +1220,7 @@ class Catalog:
             storage_plan_factory=(
                 None
                 if storage_plan is None
-                else lambda context, canonical_locator: _storage_plan_with_locator(
+                else lambda context, canonical_locator: storage_plan_with_locator(
                     storage_plan,
                     canonical_locator,
                 )
@@ -1347,16 +1351,7 @@ class Catalog:
         derived_metadata_collector: DerivedMetadataCollector | None = None,
     ) -> CatalogRecord:
         """Run the shared add operation lifecycle for file and record-only adds."""
-        dependencies = _OperationRunnerDependencies(
-            catalog_root=self.root,
-            hook_manager=self.hook_manager,
-            schema_name=self._schema_name,
-            metadata_validation_report=self._metadata_validation_report,
-            build_artifact_record=self._build_artifact_record,
-            emit_operation_audit=self._emit_operation_audit,
-            emit_hook_lifecycle_audit=self._emit_hook_lifecycle_audit,
-        )
-        request = _AddOperationRequest(
+        request = AddOperationRequest(
             transaction=transaction,
             commit=commit,
             operation_type=operation_type,
@@ -1377,7 +1372,23 @@ class Catalog:
             artifact_writer=artifact_writer,
             derived_metadata_collector=derived_metadata_collector,
         )
-        return OperationRunner(dependencies=dependencies, request=request).run()
+        return self._build_add_operation_runner(request).run()
+
+    def _build_add_operation_runner(self, request: AddOperationRequest) -> OperationRunner:
+        """Build the runner used for one internal add operation."""
+        return AddOperationRunner(dependencies=self._operation_runner_dependencies(), request=request)
+
+    def _operation_runner_dependencies(self) -> OperationServices:
+        """Build catalog-owned dependencies for an internal operation runner."""
+        return OperationServices(
+            catalog_root=self.root,
+            hook_manager=self.hook_manager,
+            schema_name=self._schema_name,
+            metadata_validation_report=self._metadata_validation_report,
+            build_artifact_record=self._build_artifact_record,
+            emit_operation_audit=self._emit_operation_audit,
+            emit_hook_lifecycle_audit=self._emit_hook_lifecycle_audit,
+        )
 
     def _select_schema(self, record_type: str | None, *, require_known: bool) -> RecordSchema:
         """Select the schema that applies to a record."""
@@ -1423,7 +1434,7 @@ class Catalog:
                 updates=normalized_input,
                 mode=update_mode,
             )
-            updated_metadata = _normalize_metadata_for_schema(
+            updated_metadata = normalize_metadata_for_schema(
                 updated_metadata,
                 schema_name=schema_name,
             )
@@ -1666,16 +1677,7 @@ def _coerce_metadata_input(
     schema_name: str,
 ) -> MetadataDict:
     """Copy user metadata after preserving existing non-dictionary errors."""
-    return _normalize_metadata_for_schema(metadata, schema_name=schema_name)
-
-
-def _normalize_metadata_for_schema(metadata: object, *, schema_name: str) -> MetadataDict:
-    """Normalize user metadata with the existing schema-aware error prefix."""
-    return normalize_metadata(
-        metadata,
-        field_name="metadata",
-        label=f"Metadata for schema {schema_name}",
-    )
+    return normalize_metadata_for_schema(metadata, schema_name=schema_name)
 
 
 def _path_from_locator(locator: ArtifactLocator) -> Path:

@@ -140,6 +140,13 @@ is intentionally being used as an artifact writer.
 hook, writer, and commit lifecycle independently; if a later item fails, earlier successful items
 remain committed.
 
+Internally, `Catalog` prepares an `AddOperationRequest` and delegates the ordered lifecycle to an
+`AddOperationRunner`. The runner is not public API, but the boundary matters for plugin behavior:
+hooks and artifact writers see the same `OperationContext`, hook ordering, rollback behavior, and
+audit events whether the operation started from `add_file()` or `add_artifact()`. The generic
+`OperationRunner` interface is intentionally broader than add operations so future operation
+families can use the same command boundary without changing the public hook API.
+
 The same wrapper pattern works for path-backed transforms:
 
 ```python

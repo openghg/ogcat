@@ -1,9 +1,23 @@
-"""Internal coordinator for catalog add operations."""
+"""Internal operation runner interfaces and the add-operation implementation.
+
+``Catalog`` owns public API argument handling, schema selection, and transaction
+creation. Operation runners own the operation lifecycle once those inputs are
+prepared. The module-level ``OperationRunner`` ABC is intentionally generic so
+future operation families, such as artifact updates, can implement the same
+``run()`` command interface without pretending they are add operations.
+
+``AddOperationRunner`` is the concrete runner for the current add lifecycle. It
+uses a template-style flow: ``run()`` fixes the ordering of validation, locator
+resolution, storage planning, artifact writing, metadata collection, record
+staging, commit, and rollback, while private phase methods keep each step
+separately testable and replaceable by future sibling runners.
+"""
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -19,6 +33,14 @@ from ogcat.hooks import (
     OperationSource,
 )
 from ogcat.models import ArtifactLocator, CatalogRecord, JsonValue, MetadataDict, normalize_metadata
+from ogcat.operation_helpers import (
+    adapter_name,
+    artifact_locator_from_context,
+    directory_from_locator,
+    filename_from_locator,
+    naming_metadata_from_storage_plan,
+    normalize_metadata_for_schema,
+)
 from ogcat.spec import RecordSchema
 from ogcat.storage import StoragePlan, TargetKind, WriteMode, plan_storage
 from ogcat.transactions import OperationState, RollbackFailure, UnitOfWork
@@ -30,7 +52,7 @@ DerivedMetadataCollector = Callable[[OperationContext, ArtifactLocator], None]
 _PhaseSetter = Callable[[str], None]
 
 
-class _OperationAuditEmitter(Protocol):
+class OperationAuditEmitter(Protocol):
     """Callable used by the runner to emit catalog operation audit events."""
 
     def __call__(
@@ -48,7 +70,7 @@ class _OperationAuditEmitter(Protocol):
         ...
 
 
-class _MetadataValidationReporter(Protocol):
+class MetadataValidationReporter(Protocol):
     """Callable used by the runner to validate operation metadata."""
 
     def __call__(
@@ -62,7 +84,7 @@ class _MetadataValidationReporter(Protocol):
         ...
 
 
-class _ArtifactRecordBuilder(Protocol):
+class ArtifactRecordBuilder(Protocol):
     """Callable used by the runner to build a catalog record."""
 
     def __call__(
@@ -85,20 +107,20 @@ class _ArtifactRecordBuilder(Protocol):
 
 
 @dataclass(slots=True)
-class _OperationRunnerDependencies:
-    """Catalog-owned collaborators used by an add operation runner."""
+class OperationServices:
+    """Catalog-owned services shared by internal operation runners."""
 
     catalog_root: Path
     hook_manager: HookManager
     schema_name: Callable[[str | None], str]
-    metadata_validation_report: _MetadataValidationReporter
-    build_artifact_record: _ArtifactRecordBuilder
-    emit_operation_audit: _OperationAuditEmitter
+    metadata_validation_report: MetadataValidationReporter
+    build_artifact_record: ArtifactRecordBuilder
+    emit_operation_audit: OperationAuditEmitter
     emit_hook_lifecycle_audit: HookLifecycleCallback
 
 
 @dataclass(slots=True)
-class _AddOperationRequest:
+class AddOperationRequest:
     """Inputs required to run one catalog add operation."""
 
     transaction: UnitOfWork
@@ -132,12 +154,21 @@ class _AddOperationPlan:
     validation_report: ValidationReport
 
 
-@dataclass(slots=True)
-class OperationRunner:
-    """Internal coordinator for one add-operation lifecycle."""
+class OperationRunner(ABC):
+    """Explicit command interface for internal operation runners."""
 
-    dependencies: _OperationRunnerDependencies
-    request: _AddOperationRequest
+    @abstractmethod
+    def run(self) -> CatalogRecord:
+        """Run the operation and return the persisted or staged record."""
+        ...
+
+
+@dataclass(slots=True)
+class AddOperationRunner(OperationRunner):
+    """Template-method coordinator for one internal add-operation lifecycle."""
+
+    dependencies: OperationServices
+    request: AddOperationRequest
 
     def run(self) -> CatalogRecord:
         """Run the add operation and return the persisted or staged record."""
@@ -229,7 +260,7 @@ class OperationRunner:
         set_phase(HOOK_PHASES["before_validate_metadata"].name)
         hook_dispatcher.before_validate_metadata(context)
         set_phase("validation")
-        context.user_metadata = _normalize_metadata_for_schema(
+        context.user_metadata = normalize_metadata_for_schema(
             context.user_metadata,
             schema_name=self.dependencies.schema_name(self.request.schema_record_type),
         )
@@ -262,7 +293,7 @@ class OperationRunner:
         context.planned_locators = [self.request.locator_factory(context)]
         set_phase(HOOK_PHASES["resolve_artifact_locator"].name)
         hook_dispatcher.resolve_artifact_locator(context)
-        canonical_locator = _artifact_locator_from_context(context)
+        canonical_locator = artifact_locator_from_context(context)
         context.planned_locators[0] = canonical_locator
         return canonical_locator
 
@@ -284,10 +315,10 @@ class OperationRunner:
                 target_kind=_target_kind_from_writer(self.request.artifact_writer),
                 write_mode=_write_mode_from_writer(self.request.artifact_writer),
                 ogcat_owned=self.request.artifact_writer is not None,
-                adapter=_adapter_name(locator),
+                adapter=adapter_name(locator),
                 storage_relative_path=locator.relative_path,
-                resolved_directory=_directory_from_locator(locator),
-                resolved_filename=_filename_from_locator(locator),
+                resolved_directory=directory_from_locator(locator),
+                resolved_filename=filename_from_locator(locator),
             )
         )
         storage_plan = context.storage_plan
@@ -304,7 +335,7 @@ class OperationRunner:
             locator=locator,
         )
         if self.request.naming_metadata is not None:
-            self.request.naming_metadata.update(_naming_metadata_from_storage_plan(storage_plan))
+            self.request.naming_metadata.update(naming_metadata_from_storage_plan(storage_plan))
         return _AddOperationPlan(
             context=context,
             locator=locator,
@@ -380,7 +411,7 @@ class OperationRunner:
         """Stage the catalog record and run record-write hooks."""
         set_phase(HOOK_PHASES["before_record_write"].name)
         hook_dispatcher.before_record_write(add_plan.context)
-        add_plan.context.user_metadata = _normalize_metadata_for_schema(
+        add_plan.context.user_metadata = normalize_metadata_for_schema(
             add_plan.context.user_metadata,
             schema_name=self.dependencies.schema_name(self.request.schema_record_type),
         )
@@ -507,22 +538,6 @@ class OperationRunner:
                 )
 
 
-def _normalize_metadata_for_schema(metadata: object, *, schema_name: str) -> MetadataDict:
-    """Normalize user metadata with the existing schema-aware error prefix."""
-    return normalize_metadata(
-        metadata,
-        field_name="metadata",
-        label=f"Metadata for schema {schema_name}",
-    )
-
-
-def _artifact_locator_from_context(context: OperationContext) -> ArtifactLocator:
-    """Return the canonical locator after locator-resolution hooks run."""
-    if not context.planned_locators:
-        raise ValueError("resolve_artifact_locator hook removed the planned artifact locator.")
-    return context.planned_locators[0]
-
-
 def _metadata_with_hook_warnings(context: OperationContext) -> MetadataDict:
     """Return derived metadata with non-fatal hook warnings included."""
     metadata = normalize_metadata(context.derived_metadata, field_name="derived_metadata")
@@ -550,32 +565,6 @@ def _add_classification_metadata(context: OperationContext, locator: ArtifactLoc
         context.derived_metadata[CLASSIFICATION_METADATA_KEY] = classification
 
 
-def _storage_plan_with_locator(plan: StoragePlan, locator: ArtifactLocator) -> StoragePlan:
-    """Return a storage plan adjusted to a hook-resolved canonical locator."""
-    if plan.locator == locator:
-        return plan
-    return replace(
-        plan,
-        locator=locator,
-        adapter=_adapter_name(locator),
-        storage_relative_path=locator.relative_path,
-        resolved_directory=_directory_from_locator(locator),
-        resolved_filename=_filename_from_locator(locator),
-    )
-
-
-def _naming_metadata_from_storage_plan(plan: StoragePlan) -> MetadataDict:
-    """Build record naming metadata from storage planning outputs."""
-    metadata: MetadataDict = {}
-    if plan.storage_relative_path is not None:
-        metadata["storage_relative_path"] = plan.storage_relative_path
-    if plan.resolved_directory is not None:
-        metadata["resolved_directory"] = plan.resolved_directory
-    if plan.resolved_filename is not None:
-        metadata["resolved_filename"] = plan.resolved_filename
-    return metadata
-
-
 def _target_kind_from_writer(artifact_writer: ArtifactWriter | None) -> TargetKind:
     """Infer a storage target kind from a writer when it declares one."""
     if artifact_writer is None:
@@ -594,37 +583,6 @@ def _write_mode_from_writer(artifact_writer: ArtifactWriter | None) -> WriteMode
     if write_mode in {"copy", "move", "write", "reference"}:
         return cast(WriteMode, write_mode)
     return "write"
-
-
-def _adapter_name(locator: ArtifactLocator) -> str | None:
-    """Return the storage adapter name implied by a locator."""
-    if locator.kind == "path":
-        return "local"
-    if locator.kind == "urlpath":
-        return "fsspec"
-    return None
-
-
-def _filename_from_locator(locator: ArtifactLocator) -> str:
-    """Return the final filename-like component from a locator."""
-    if locator.kind == "path":
-        return Path(locator.value).name
-    return locator.value.rstrip("/").rsplit("/", 1)[-1]
-
-
-def _directory_from_locator(locator: ArtifactLocator) -> str:
-    """Return the directory-like component from a locator."""
-    if locator.kind == "path":
-        return Path(locator.value).parent.as_posix()
-    return locator.value.rstrip("/").rsplit("/", 1)[0]
-
-
-def _directory_from_relative_path(relative_path: str | None) -> str | None:
-    """Return the directory component from a storage-relative path."""
-    if relative_path is None:
-        return None
-    directory = Path(relative_path).parent.as_posix()
-    return "" if directory == "." else directory
 
 
 def _validation_audit_level(report: ValidationReport) -> str:
