@@ -2,8 +2,8 @@
 
 These recipes condense common ogcat patterns from the verification-games
 notebooks into small copy/paste examples. They use temporary directories and
-fake local data, so they do not depend on the verification-games repositories
-or shared ACRG data paths.
+tiny synthetic local data, so they do not depend on the verification-games
+repositories or shared ACRG data paths.
 
 The examples are written as notebook-style cells that can be run in order. The
 xarray cells are optional; they require xarray and a local NetCDF or Zarr
@@ -26,6 +26,12 @@ from ogcat import (
     CatalogSpec,
     MetadataFieldDescription,
     RecordSchema,
+)
+from ogcat.example_data import (
+    EXAMPLE_FLUX_FILENAME,
+    example_flux_cdl,
+    example_flux_collection_path,
+    write_example_flux_netcdf_or_placeholder,
 )
 from ogcat.writers import memory_source, source_writer
 
@@ -66,6 +72,7 @@ spec = CatalogSpec(
             metadata_fields=[
                 *common_fields,
                 metadata_field("inputs", "Input record ids or external input labels."),
+                metadata_field("modifications", "Short description of processing changes."),
             ],
         ),
         "verification_games_obs": RecordSchema(
@@ -76,6 +83,7 @@ spec = CatalogSpec(
             metadata_fields=[
                 *common_fields,
                 metadata_field("inputs", "Input record ids or external input labels."),
+                metadata_field("modifications", "Short description of processing changes."),
                 metadata_field("site", "Observation or footprint site code."),
             ],
         ),
@@ -92,6 +100,15 @@ scratch_dir.mkdir()
 catalog = Catalog.create(root / "catalog", spec)
 catalog = Catalog.open(root / "catalog")
 print(catalog.describe()["record_schemas"])
+```
+
+The helper module used below provides a generic HPC-style path and a small
+CDL-style description based on the kinds of `ncdump -h` and `xr.Dataset`
+printouts used in the notebooks:
+
+```python
+print(example_flux_collection_path())
+print(example_flux_cdl())
 ```
 
 ## Choose the right add method
@@ -113,8 +130,7 @@ later. The file below is deliberately tiny; in a real workflow it might be a
 large GridFED zip, NetCDF file, or Zarr directory.
 
 ```python
-raw_path = external_dir / "gridfed_total_2021.nc"
-raw_path.write_text("fake external NetCDF placeholder\n", encoding="utf-8")
+raw_path = write_example_flux_netcdf_or_placeholder(external_dir / EXAMPLE_FLUX_FILENAME)
 
 raw_record = catalog.add_reference(
     raw_path,
@@ -206,23 +222,19 @@ print(selected.id, selected.locator.value)
 ```
 
 If xarray and a NetCDF writer backend are installed, this cell turns the fake
-path into a tiny real NetCDF and opens it through the selected record.
+path into a tiny real NetCDF and opens it through the selected record. If those
+optional pieces are missing, the helper writes a readable `.nc` placeholder and
+this cell reports that xarray cannot open it.
 
 ```python
 try:
-    import numpy as np
     import xarray as xr
 except ImportError:
     xr = None
 
 if xr is not None:
-    tiny = xr.Dataset(
-        {"flux": (("time", "lat", "lon"), np.ones((1, 1, 1), dtype="float32"))},
-        coords={"time": [0], "lat": [51.0], "lon": [-10.0]},
-        attrs={"title": "Tiny fake flux data"},
-    )
     try:
-        tiny.to_netcdf(raw_path)
+        write_example_flux_netcdf_or_placeholder(raw_path)
         with xr.open_dataset(selected.locator.value) as ds:
             print(dict(ds.sizes))
     except Exception as exc:
@@ -250,11 +262,13 @@ zarr_record = catalog.add_reference(
         "format": "zarr",
         "processing_stage": "forward_model_input",
         "inputs": [raw_record.id],
+        "modifications": "Stacked source fluxes and filled missing values before forward modelling.",
     },
     derived_metadata={
         "reader_hint": "xarray.open_zarr",
         "source_record_ids": [raw_record.id],
         "source_paths": [str(raw_record.locator.value)],
+        "modifications": "Stacked source fluxes and filled missing values before forward modelling.",
     },
     naming_metadata={"target_kind": "directory"},
 )
@@ -318,6 +332,7 @@ registered_stage = catalog.add_reference(
         "format": "zarr",
         "processing_stage": "forward_model_input",
         "inputs": [raw_record.id],
+        "modifications": "Stacked source fluxes into a forward-model input store.",
     },
     derived_metadata={
         "reader_hint": "xarray.open_zarr",
@@ -325,6 +340,7 @@ registered_stage = catalog.add_reference(
         "source_paths": [str(raw_record.locator.value)],
         "sizes": {"time": 1, "source": 1},
         "chunks": {"time": 1, "source": 1},
+        "modifications": "Stacked source fluxes into a forward-model input store.",
     },
     naming_metadata={"target_kind": "directory"},
 )
@@ -354,6 +370,7 @@ moved_output = catalog.add_file(
         "format": "text",
         "processing_stage": "raw_forward_model_output",
         "inputs": [registered_stage.id],
+        "modifications": "Computed footprint dot flux for one site-month before baseline correction.",
         "site": "MHD",
     },
 )
@@ -366,59 +383,74 @@ Use writer-backed `add_artifact(...)` when ogcat should plan the target path
 and domain code should create the artifact during the catalog operation.
 
 ```python
-summary_metadata = {
-    "title": "Tiny derived summary",
-    "product": "summary",
+normalised_flux_modifications = (
+    "Normalized the raw CO2 agriculture flux to a single CF-style flux variable "
+    "and preserved coordinate metadata for a small documentation example."
+)
+
+normalised_flux_metadata = {
+    "title": "Tiny normalized CO2 agriculture flux",
+    "product": "EDGAR",
     "species": "co2",
     "domain": "EUROPE",
     "year": 2021,
-    "keywords": ["summary"],
+    "keywords": ["agriculture", "normalized_total_flux"],
     "provenance": "derived",
-    "format": "json",
-    "processing_stage": "summary_statistics",
+    "format": "netcdf",
+    "processing_stage": "normalized_total_flux",
     "inputs": [raw_record.id],
+    "modifications": normalised_flux_modifications,
 }
 
-summary_target = catalog.root / catalog.spec.files_root / "summaries" / "tiny-summary.json"
-summary_plan = catalog.plan_artifact_storage(
+normalised_flux_target = catalog.root / catalog.spec.files_root / "flux" / "derived" / "tiny-normalized-flux.nc"
+normalised_flux_plan = catalog.plan_artifact_storage(
     record_type="derived_flux",
-    locator=ArtifactLocator.from_path(summary_target, relative_path="data/summaries/tiny-summary.json"),
+    locator=ArtifactLocator.from_path(
+        normalised_flux_target,
+        relative_path="data/flux/derived/tiny-normalized-flux.nc",
+    ),
     target_kind="file",
     write_mode="write",
-    metadata=summary_metadata,
+    metadata=normalised_flux_metadata,
 )
 
 
-def write_summary(source, target: Path) -> dict[str, object]:
-    """Write a tiny JSON-like summary and return derived metadata."""
-    target.write_text('{"mean_flux": 1.0}\n', encoding="utf-8")
+def write_normalised_flux(source, target: Path) -> dict[str, object]:
+    """Write a tiny NetCDF-shaped flux artifact and return derived metadata."""
+    write_example_flux_netcdf_or_placeholder(target)
     return {
-        "reader_hint": "pathlib.Path.read_text",
+        "reader_hint": "xarray.open_dataset",
         "source_record_ids": source.metadata["source_record_ids"],
         "source_paths": source.metadata["source_paths"],
-        "processing_stage": "summary_statistics",
+        "output_variables": ["flux"],
+        "sizes": {"time": 1, "lat": 2, "lon": 3},
+        "units": "kg m-2 s-1",
+        "processing_stage": "normalized_total_flux",
+        "history": source.metadata["modifications"],
+        "modifications": source.metadata["modifications"],
     }
 
 
-summary_record = catalog.add_artifact(
+normalised_flux_record = catalog.add_artifact(
     record_type="derived_flux",
-    storage_plan=summary_plan,
-    metadata=summary_metadata,
+    storage_plan=normalised_flux_plan,
+    metadata=normalised_flux_metadata,
     source=memory_source(
-        {"mean_flux": 1.0},
-        kind="summary_payload",
+        {"stage": "normalized_total_flux"},
+        kind="normalised_flux_payload",
         metadata={
             "source_record_ids": [raw_record.id],
             "source_paths": [str(raw_record.locator.value)],
+            "modifications": normalised_flux_modifications,
         },
     ),
     artifact_writer=source_writer(
-        write_summary,
+        write_normalised_flux,
         target_kind="file",
-        source_kind="summary_payload",
+        source_kind="normalised_flux_payload",
     ),
 )
-print(summary_record.path())
+print(normalised_flux_record.path())
 ```
 
 ## Raw and derived metadata conventions
@@ -431,6 +463,7 @@ Use user metadata for fields that users search and select on:
 | `inputs` | Store input record ids, external labels, or both. Keep values JSON-compatible. |
 | `processing_stage` | Name the workflow stage, such as `downloaded`, `normalized_total_flux`, or `forward_model_input`. |
 | `format` | Store the normalised format users search for, such as `netcdf`, `zarr`, `zip`, or `text`. |
+| `modifications` | Store a short, human-readable processing note that explains what changed and why. For NetCDF outputs, also append the same idea to the dataset `history` attribute. |
 | `reader_hint` | Prefer this in derived metadata when it describes how to reopen the artifact, such as `xarray.open_dataset` or `xarray.open_zarr`. |
 
 Use derived metadata for facts extracted from or produced alongside the
@@ -444,6 +477,20 @@ derived_metadata = {
     "output_variables": ["flux"],
     "sizes": {"time": 1, "lat": 1, "lon": 1},
     "chunks": {"time": 1, "lat": 1, "lon": 1},
+    "modifications": "Regridded source fluxes and filled missing values with 0.0.",
+}
+```
+
+For multi-input products, named source paths are often easier to audit months
+later than a bare list:
+
+```python
+scenario_source_paths = {
+    "primary_o2": "/hpc/shared/atmos/verification-games/data/raw/PARIS_ATEN_O2.nc",
+    "FF": str(raw_record.locator.value),
+    "GPP": "/hpc/shared/atmos/some_flux_collection/sib4_gpp_2021.nc",
+    "TER": "/hpc/shared/atmos/some_flux_collection/sib4_ter_2021.nc",
+    "ocean": "/hpc/shared/atmos/some_flux_collection/cesm_scaled_ocean_2021.nc",
 }
 ```
 
