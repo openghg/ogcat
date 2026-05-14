@@ -14,7 +14,7 @@ from ogcat.models import ArtifactLocator, CatalogRecord
 
 runner = CliRunner()
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-RICH_BOX_CHARS = ("╭", "╰", "│", "─")
+RICH_BOX_CHARS = ("╭", "╮", "╰", "╯", "│", "─", "├", "┤", "┬", "┴", "┼")
 
 
 def strip_ansi(text: str) -> str:
