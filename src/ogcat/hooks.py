@@ -198,6 +198,7 @@ class OperationContext:
         operation_type: Catalog operation name, such as ``"add_file"``.
         record_type: Record type being created.
         user_metadata: User-supplied metadata, mutable by hooks before validation.
+        record_id: Persisted record id, set after a record write succeeds.
         derived_metadata: Derived metadata collected during the operation.
         planned_locators: Locators planned or supplied for the operation.
         register_rollback: Low-level rollback registrar. Hook authors should
@@ -215,6 +216,7 @@ class OperationContext:
     operation_type: str
     record_type: str
     user_metadata: MetadataDict
+    record_id: str | None = None
     derived_metadata: MetadataDict = field(default_factory=dict)
     planned_locators: list[ArtifactLocator] = field(default_factory=list)
     register_rollback: RollbackRegistrar | None = None

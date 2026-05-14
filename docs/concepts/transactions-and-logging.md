@@ -16,6 +16,30 @@ The typical lifecycle is:
 If any step raises an exception, registered rollback actions run in reverse
 order to undo any partial writes.
 
+## Audit events
+
+Each catalog writes structured audit events to
+``<catalog-root>/.ogcat/logs/events.jsonl``. The log is append-only during
+normal operation and is intended for maintainers who need to answer which
+operation ran, which user ran it, which record was touched, and where a failure
+occurred.
+
+Add operations emit lifecycle events for operation start, validation, storage
+or record writes, commit, failure, and rollback. Events include an
+``operation_id``; CLI add failures include that id in the user-facing error
+message when available:
+
+```bash
+ogcat logs --catalog ./catalog --operation OPERATION_ID --json
+ogcat logs --catalog ./catalog --user alice --level error
+```
+
+Audit details intentionally avoid recording file contents, in-memory
+``OperationSource.payload`` values, or full user metadata payloads. Metadata key
+names and operation context are logged for diagnostics, and sensitive-looking
+keys such as tokens, passwords, credentials, API keys, and private keys are
+redacted when values are included in audit details.
+
 ## Rollback
 
 Rollback is best-effort.  Each rollback action is tried in turn; if one
