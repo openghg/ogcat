@@ -283,10 +283,27 @@ def test_search_fields_selects_human_output_columns(tmp_path: Path) -> None:
     assert "CO2" in stdout
     resolved_path = record.path()
     assert resolved_path is not None
-    assert resolved_path.name in stdout
     assert "files" in stdout
     assert "product" not in stdout
     assert "CTE-HR" not in stdout
+
+    plain_result = runner.invoke(
+        app,
+        [
+            "search",
+            "--catalog",
+            str(catalog.root),
+            "--where",
+            "species=CO2",
+            "--fields",
+            "id,species,path",
+            "--format",
+            "pipe",
+        ],
+    )
+
+    assert plain_result.exit_code == 0
+    assert str(resolved_path) in strip_ansi(plain_result.stdout)
 
 
 def test_search_uses_schema_display_fields_when_fields_are_omitted(tmp_path: Path) -> None:
