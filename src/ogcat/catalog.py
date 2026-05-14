@@ -18,12 +18,9 @@ from ogcat.audit import (
     AuditEvent,
     AuditSink,
     JsonlAuditSink,
-    add_operation_note,
 )
-from ogcat.classification import CLASSIFICATION_METADATA_KEY, classify_artifact
 from ogcat.extractors import extract_derived_metadata
 from ogcat.hooks import (
-    HOOK_PHASES,
     ArtifactWriter,
     HookLifecycleEvent,
     HookManager,
@@ -34,6 +31,22 @@ from ogcat.hooks import (
 )
 from ogcat.models import ArtifactLocator, CatalogRecord, JsonValue, MetadataDict, normalize_metadata
 from ogcat.naming import build_naming_context, render_storage_location
+from ogcat.operation_helpers import (
+    adapter_name,
+    artifact_locator_from_context,
+    directory_from_locator,
+    directory_from_relative_path,
+    filename_from_locator,
+    naming_metadata_from_storage_plan,
+    normalize_metadata_for_schema,
+    storage_plan_with_locator,
+)
+from ogcat.operation_runner import (
+    AddOperationRequest,
+    AddOperationRunner,
+    OperationRunner,
+    OperationServices,
+)
 from ogcat.plugins import PluginRegistry
 from ogcat.record_set import CatalogRecordSet
 from ogcat.repository import CatalogRepository
@@ -47,7 +60,7 @@ from ogcat.storage import (
     plan_storage,
 )
 from ogcat.tinydb_repository import TinyDbCatalogRepository
-from ogcat.transactions import OperationState, RollbackFailure, UnitOfWork
+from ogcat.transactions import UnitOfWork
 from ogcat.validation import ValidationReport, validate_metadata, validate_spec
 from ogcat.writers import CopyArtifactWriter, MoveArtifactWriter
 
@@ -243,10 +256,10 @@ class Catalog:
                 target_kind="file",
                 write_mode=cast(WriteMode, chosen_operation),
                 ogcat_owned=True,
-                adapter=_adapter_name(locator),
+                adapter=adapter_name(locator),
                 storage_relative_path=locator.relative_path,
-                resolved_directory=_directory_from_relative_path(locator.relative_path),
-                resolved_filename=_filename_from_locator(locator),
+                resolved_directory=directory_from_relative_path(locator.relative_path),
+                resolved_filename=filename_from_locator(locator),
             )
 
         def collect_file_metadata(context: OperationContext, locator: ArtifactLocator) -> None:
@@ -344,7 +357,7 @@ class Catalog:
 
         hook_dispatcher = self.hook_manager.dispatcher()
         hook_dispatcher.before_validate_metadata(context)
-        context.user_metadata = _normalize_metadata_for_schema(
+        context.user_metadata = normalize_metadata_for_schema(
             context.user_metadata,
             schema_name=schema_name,
         )
@@ -373,21 +386,21 @@ class Catalog:
         else:
             planned_locator = locator
             storage_relative_path = locator.relative_path
-            resolved_directory = _directory_from_locator(locator)
-            resolved_filename = _filename_from_locator(locator)
+            resolved_directory = directory_from_locator(locator)
+            resolved_filename = filename_from_locator(locator)
         context.planned_locators = [planned_locator]
         hook_dispatcher.resolve_artifact_locator(context)
-        canonical_locator = _artifact_locator_from_context(context)
+        canonical_locator = artifact_locator_from_context(context)
         if canonical_locator != planned_locator:
             storage_relative_path = canonical_locator.relative_path
-            resolved_directory = _directory_from_locator(canonical_locator)
-            resolved_filename = _filename_from_locator(canonical_locator)
+            resolved_directory = directory_from_locator(canonical_locator)
+            resolved_filename = filename_from_locator(canonical_locator)
         plan = plan_storage(
             canonical_locator,
             target_kind=target_kind,
             write_mode=resolved_write_mode,
             ogcat_owned=ogcat_owned,
-            adapter=_adapter_name(canonical_locator),
+            adapter=adapter_name(canonical_locator),
             time_added=timestamp,
             storage_relative_path=storage_relative_path,
             resolved_directory=resolved_directory,
@@ -458,7 +471,7 @@ class Catalog:
             if time_added is None:
                 time_added = storage_plan.time_added
             if naming_metadata is None:
-                naming_metadata = _naming_metadata_from_storage_plan(storage_plan)
+                naming_metadata = naming_metadata_from_storage_plan(storage_plan)
         assert locator is not None
         metadata_input = {} if metadata is None else metadata
         derived_metadata = (
@@ -1207,7 +1220,7 @@ class Catalog:
             storage_plan_factory=(
                 None
                 if storage_plan is None
-                else lambda context, canonical_locator: _storage_plan_with_locator(
+                else lambda context, canonical_locator: storage_plan_with_locator(
                     storage_plan,
                     canonical_locator,
                 )
@@ -1338,225 +1351,44 @@ class Catalog:
         derived_metadata_collector: DerivedMetadataCollector | None = None,
     ) -> CatalogRecord:
         """Run the shared add operation lifecycle for file and record-only adds."""
-        hook_context = OperationContext(
-            catalog_root=self.root,
-            operation_id=transaction.operation_id,
+        request = AddOperationRequest(
+            transaction=transaction,
+            commit=commit,
             operation_type=operation_type,
             record_type=record_type,
-            user_metadata=metadata,
-            derived_metadata=derived_metadata,
-            register_rollback=transaction.register_rollback,
-            source=source,
+            schema=schema,
+            schema_record_type=schema_record_type,
+            metadata=metadata,
             storage_mode=storage_mode,
             original_path=original_path,
             original_filename=original_filename,
-            suffixes=[] if suffixes is None else list(suffixes),
+            suffixes=suffixes,
+            derived_metadata=derived_metadata,
+            naming_metadata=naming_metadata,
+            time_added=time_added,
+            source=source,
+            locator_factory=locator_factory,
+            storage_plan_factory=storage_plan_factory,
+            artifact_writer=artifact_writer,
+            derived_metadata_collector=derived_metadata_collector,
         )
-        hook_dispatcher = self.hook_manager.dispatcher(notify=self._emit_hook_lifecycle_audit)
-        current_phase = "operation-started"
-        self._emit_operation_audit(
-            hook_context,
-            event_type="operation-started",
-            message=f"Started {operation_type} operation.",
-            details={"caller_owned_transaction": not commit},
+        return self._build_add_operation_runner(request).run()
+
+    def _build_add_operation_runner(self, request: AddOperationRequest) -> OperationRunner:
+        """Build the runner used for one internal add operation."""
+        return AddOperationRunner(dependencies=self._operation_runner_dependencies(), request=request)
+
+    def _operation_runner_dependencies(self) -> OperationServices:
+        """Build catalog-owned dependencies for an internal operation runner."""
+        return OperationServices(
+            catalog_root=self.root,
+            hook_manager=self.hook_manager,
+            schema_name=self._schema_name,
+            metadata_validation_report=self._metadata_validation_report,
+            build_artifact_record=self._build_artifact_record,
+            emit_operation_audit=self._emit_operation_audit,
+            emit_hook_lifecycle_audit=self._emit_hook_lifecycle_audit,
         )
-        try:
-            current_phase = HOOK_PHASES["before_validate_metadata"].name
-            hook_dispatcher.before_validate_metadata(hook_context)
-            current_phase = "validation"
-            hook_context.user_metadata = _normalize_metadata_for_schema(
-                hook_context.user_metadata,
-                schema_name=self._schema_name(schema_record_type),
-            )
-            validation_report = self._metadata_validation_report(
-                schema=schema,
-                metadata=hook_context.user_metadata,
-                record_type=schema_record_type,
-            )
-            current_phase = HOOK_PHASES["after_validate_metadata"].name
-            hook_dispatcher.after_validate_metadata(hook_context, validation_report)
-            self._emit_operation_audit(
-                hook_context,
-                event_type="validation",
-                level=_validation_audit_level(validation_report),
-                message=_validation_audit_message(validation_report),
-                details=_validation_audit_details(validation_report),
-            )
-            validation_report.raise_for_errors()
-            current_phase = "locator-factory"
-            hook_context.planned_locators = [locator_factory(hook_context)]
-            current_phase = HOOK_PHASES["resolve_artifact_locator"].name
-            hook_dispatcher.resolve_artifact_locator(hook_context)
-            canonical_locator = _artifact_locator_from_context(hook_context)
-            hook_context.planned_locators[0] = canonical_locator
-            current_phase = "storage-plan"
-            hook_context.storage_plan = (
-                storage_plan_factory(hook_context, canonical_locator)
-                if storage_plan_factory is not None
-                else plan_storage(
-                    canonical_locator,
-                    target_kind=_target_kind_from_writer(artifact_writer),
-                    write_mode=_write_mode_from_writer(artifact_writer),
-                    ogcat_owned=artifact_writer is not None,
-                    adapter=_adapter_name(canonical_locator),
-                    storage_relative_path=canonical_locator.relative_path,
-                    resolved_directory=_directory_from_locator(canonical_locator),
-                    resolved_filename=_filename_from_locator(canonical_locator),
-                )
-            )
-            storage_plan = hook_context.storage_plan
-            if storage_plan is None:
-                raise RuntimeError("Add operation did not produce a storage plan.")
-            self._emit_operation_audit(
-                hook_context,
-                event_type="write",
-                message="Storage plan prepared.",
-                details={
-                    "write_phase": "storage-plan",
-                    "storage_plan": _storage_plan_audit_details(storage_plan),
-                },
-                locator=canonical_locator,
-            )
-            if naming_metadata is not None:
-                naming_metadata.update(_naming_metadata_from_storage_plan(storage_plan))
-            if artifact_writer is None:
-                if storage_plan.write_mode != "reference":
-                    raise ValueError(
-                        f"Storage plan with write mode {storage_plan.write_mode!r} "
-                        "requires an artifact_writer."
-                    )
-                self._emit_operation_audit(
-                    hook_context,
-                    event_type="write",
-                    message="Artifact write skipped for reference operation.",
-                    details={"write_phase": "artifact-write", "write_mode": storage_plan.write_mode},
-                    locator=canonical_locator,
-                )
-            else:
-                current_phase = "artifact-write"
-                artifact_writer.write(hook_context, hook_context.source, canonical_locator)
-                self._emit_operation_audit(
-                    hook_context,
-                    event_type="write",
-                    message="Artifact write completed.",
-                    details={
-                        "write_phase": "artifact-write",
-                        "writer_type": type(artifact_writer).__name__,
-                        "write_mode": storage_plan.write_mode,
-                    },
-                    locator=canonical_locator,
-                )
-            current_phase = "metadata-extraction"
-            _add_classification_metadata(hook_context, canonical_locator)
-            if derived_metadata_collector is not None:
-                derived_metadata_collector(hook_context, canonical_locator)
-            current_phase = HOOK_PHASES["extract_metadata"].name
-            hook_dispatcher.extract_metadata(hook_context)
-            hook_context.derived_metadata = normalize_metadata(
-                hook_context.derived_metadata,
-                field_name="derived_metadata",
-            )
-            current_phase = HOOK_PHASES["before_record_write"].name
-            hook_dispatcher.before_record_write(hook_context)
-            hook_context.user_metadata = _normalize_metadata_for_schema(
-                hook_context.user_metadata,
-                schema_name=self._schema_name(schema_record_type),
-            )
-            hook_context.derived_metadata = normalize_metadata(
-                hook_context.derived_metadata,
-                field_name="derived_metadata",
-            )
-            record = self._build_artifact_record(
-                record_type=record_type,
-                locator=canonical_locator,
-                metadata=hook_context.user_metadata,
-                storage_mode=storage_mode,
-                original_path=original_path,
-                original_filename=original_filename,
-                suffixes=suffixes,
-                derived_metadata=_metadata_with_hook_warnings(hook_context),
-                naming_metadata=naming_metadata,
-                time_added=time_added,
-            )
-            current_phase = "record-write"
-            persisted = transaction.insert_staged_record(record)
-            hook_context.record_id = _require_record_id(persisted)
-            self._emit_operation_audit(
-                hook_context,
-                event_type="write",
-                message="Record staged.",
-                details={"write_phase": "record-write", "transaction_state": transaction.state.value},
-                locator=canonical_locator,
-            )
-            current_phase = HOOK_PHASES["after_record_write"].name
-            hook_dispatcher.after_record_write(hook_context)
-            if commit:
-                current_phase = HOOK_PHASES["before_commit"].name
-                hook_dispatcher.before_commit(hook_context)
-                current_phase = "commit"
-                transaction.commit()
-                self._emit_operation_audit(
-                    hook_context,
-                    event_type="commit",
-                    message="Commit succeeded.",
-                    details={"transaction_state": transaction.state.value},
-                    locator=canonical_locator,
-                )
-                # After-commit hooks are best-effort: failures warn, but cannot
-                # turn an already-persisted record into an apparent API failure.
-                current_phase = HOOK_PHASES["after_commit"].name
-                hook_dispatcher.after_commit(hook_context)
-            return persisted
-        except Exception as exc:
-            add_operation_note(exc, hook_context.operation_id)
-            hook_dispatcher.on_error(hook_context, exc)
-            self._emit_operation_audit(
-                hook_context,
-                event_type="failure",
-                message=f"{operation_type} operation failed.",
-                details={
-                    "phase": current_phase,
-                    "transaction_state": transaction.state.value,
-                    "caller_owned_transaction": not commit,
-                },
-                exception=exc,
-            )
-            # Caller-supplied transactions stay caller-owned. Internal
-            # transactions commit=True and roll back here before re-raising.
-            if commit and transaction.state is not OperationState.COMMITTED:
-                self._emit_operation_audit(
-                    hook_context,
-                    event_type="rollback",
-                    message="Rollback started.",
-                    details={"rollback_phase": "started", "transaction_state": transaction.state.value},
-                )
-                transaction.rollback(original_exception=exc)
-                hook_dispatcher.on_rollback(hook_context, exc)
-                if transaction.rollback_errors:
-                    rollback_details: dict[str, object] = {
-                        "rollback_phase": "failed",
-                        "transaction_state": transaction.state.value,
-                        "rollback_errors": _rollback_errors_audit_details(transaction.rollback_errors),
-                    }
-                    self._emit_operation_audit(
-                        hook_context,
-                        event_type="rollback",
-                        level="error",
-                        message="Rollback completed with failures.",
-                        details=rollback_details,
-                        exception=transaction.rollback_errors[0].exception,
-                    )
-                else:
-                    self._emit_operation_audit(
-                        hook_context,
-                        event_type="rollback",
-                        message="Rollback completed.",
-                        details={
-                            "rollback_phase": "completed",
-                            "transaction_state": transaction.state.value,
-                        },
-                    )
-            raise
 
     def _select_schema(self, record_type: str | None, *, require_known: bool) -> RecordSchema:
         """Select the schema that applies to a record."""
@@ -1602,7 +1434,7 @@ class Catalog:
                 updates=normalized_input,
                 mode=update_mode,
             )
-            updated_metadata = _normalize_metadata_for_schema(
+            updated_metadata = normalize_metadata_for_schema(
                 updated_metadata,
                 schema_name=schema_name,
             )
@@ -1807,88 +1639,6 @@ def _reference_locator_and_path(
     return ArtifactLocator.from_path(path), path
 
 
-def _metadata_with_hook_warnings(context: OperationContext) -> MetadataDict:
-    """Return derived metadata with non-fatal hook warnings included."""
-    metadata = normalize_metadata(context.derived_metadata, field_name="derived_metadata")
-    if context.warnings:
-        warnings_metadata: list[JsonValue] = [warning.to_metadata() for warning in context.warnings]
-        metadata["hook_warnings"] = warnings_metadata
-    return normalize_metadata(metadata, field_name="derived_metadata")
-
-
-def _add_classification_metadata(context: OperationContext, locator: ArtifactLocator) -> None:
-    """Add cheap artifact classification metadata without overwriting caller values."""
-    classification = classify_artifact(
-        locator,
-        original_path=context.original_path,
-        original_filename=context.original_filename,
-        suffixes=context.suffixes,
-    )
-    existing = context.derived_metadata.get(CLASSIFICATION_METADATA_KEY)
-    if isinstance(existing, Mapping):
-        context.derived_metadata[CLASSIFICATION_METADATA_KEY] = {
-            **classification,
-            **existing,
-        }
-    elif existing is None:
-        context.derived_metadata[CLASSIFICATION_METADATA_KEY] = classification
-
-
-def _storage_plan_with_locator(plan: StoragePlan, locator: ArtifactLocator) -> StoragePlan:
-    """Return a storage plan adjusted to a hook-resolved canonical locator."""
-    if plan.locator == locator:
-        return plan
-    return replace(
-        plan,
-        locator=locator,
-        adapter=_adapter_name(locator),
-        storage_relative_path=locator.relative_path,
-        resolved_directory=_directory_from_locator(locator),
-        resolved_filename=_filename_from_locator(locator),
-    )
-
-
-def _naming_metadata_from_storage_plan(plan: StoragePlan) -> MetadataDict:
-    """Build record naming metadata from storage planning outputs."""
-    metadata: MetadataDict = {}
-    if plan.storage_relative_path is not None:
-        metadata["storage_relative_path"] = plan.storage_relative_path
-    if plan.resolved_directory is not None:
-        metadata["resolved_directory"] = plan.resolved_directory
-    if plan.resolved_filename is not None:
-        metadata["resolved_filename"] = plan.resolved_filename
-    return metadata
-
-
-def _target_kind_from_writer(artifact_writer: ArtifactWriter | None) -> TargetKind:
-    """Infer a storage target kind from a writer when it declares one."""
-    if artifact_writer is None:
-        return "file"
-    target_kind = getattr(artifact_writer, "target_kind", "file")
-    if target_kind in {"file", "directory"}:
-        return cast(TargetKind, target_kind)
-    return "file"
-
-
-def _write_mode_from_writer(artifact_writer: ArtifactWriter | None) -> WriteMode:
-    """Infer a storage write mode from a writer when it declares one."""
-    if artifact_writer is None:
-        return "reference"
-    write_mode = getattr(artifact_writer, "write_mode", "write")
-    if write_mode in {"copy", "move", "write", "reference"}:
-        return cast(WriteMode, write_mode)
-    return "write"
-
-
-def _adapter_name(locator: ArtifactLocator) -> str | None:
-    """Return the storage adapter name implied by a locator."""
-    if locator.kind == "path":
-        return "local"
-    if locator.kind == "urlpath":
-        return "fsspec"
-    return None
-
-
 def _urlpath_exists_if_supported(urlpath: str) -> bool:
     """Return whether a URL path exists when fsspec is installed.
 
@@ -1927,45 +1677,7 @@ def _coerce_metadata_input(
     schema_name: str,
 ) -> MetadataDict:
     """Copy user metadata after preserving existing non-dictionary errors."""
-    return _normalize_metadata_for_schema(metadata, schema_name=schema_name)
-
-
-def _normalize_metadata_for_schema(metadata: object, *, schema_name: str) -> MetadataDict:
-    """Normalize user metadata with the existing schema-aware error prefix."""
-    return normalize_metadata(
-        metadata,
-        field_name="metadata",
-        label=f"Metadata for schema {schema_name}",
-    )
-
-
-def _artifact_locator_from_context(context: OperationContext) -> ArtifactLocator:
-    """Return the canonical locator after locator-resolution hooks run."""
-    if not context.planned_locators:
-        raise ValueError("resolve_artifact_locator hook removed the planned artifact locator.")
-    return context.planned_locators[0]
-
-
-def _filename_from_locator(locator: ArtifactLocator) -> str:
-    """Return the final filename-like component from a locator."""
-    if locator.kind == "path":
-        return Path(locator.value).name
-    return locator.value.rstrip("/").rsplit("/", 1)[-1]
-
-
-def _directory_from_locator(locator: ArtifactLocator) -> str:
-    """Return the directory-like component from a locator."""
-    if locator.kind == "path":
-        return Path(locator.value).parent.as_posix()
-    return locator.value.rstrip("/").rsplit("/", 1)[0]
-
-
-def _directory_from_relative_path(relative_path: str | None) -> str | None:
-    """Return the directory component from a storage-relative path."""
-    if relative_path is None:
-        return None
-    directory = Path(relative_path).parent.as_posix()
-    return "" if directory == "." else directory
+    return normalize_metadata_for_schema(metadata, schema_name=schema_name)
 
 
 def _path_from_locator(locator: ArtifactLocator) -> Path:
@@ -2097,76 +1809,3 @@ def _first_planned_locator(context: OperationContext) -> ArtifactLocator | None:
     if not context.planned_locators:
         return None
     return context.planned_locators[0]
-
-
-def _validation_audit_level(report: ValidationReport) -> str:
-    """Return the audit level for a validation report."""
-    if report.errors:
-        return "error"
-    if report.warnings:
-        return "warning"
-    return "info"
-
-
-def _validation_audit_message(report: ValidationReport) -> str:
-    """Return a concise validation audit message."""
-    if report.errors:
-        return "Metadata validation failed."
-    if report.warnings:
-        return "Metadata validation completed with warnings."
-    return "Metadata validation succeeded."
-
-
-def _validation_audit_details(report: ValidationReport) -> dict[str, object]:
-    """Return validation issue summaries for audit events."""
-    return {
-        "validation": {
-            "error_count": len(report.errors),
-            "warning_count": len(report.warnings),
-            "issues": [
-                {
-                    "path": issue.path,
-                    "message": issue.message,
-                    "severity": issue.severity,
-                    "code": issue.code,
-                    "hint": issue.hint,
-                }
-                for issue in report.issues
-            ],
-        }
-    }
-
-
-def _storage_plan_audit_details(plan: StoragePlan) -> dict[str, object]:
-    """Return storage plan details that are safe for audit logging."""
-    return {
-        "target_kind": plan.target_kind,
-        "write_mode": plan.write_mode,
-        "checksum": plan.checksum,
-        "ogcat_owned": plan.ogcat_owned,
-        "profile": plan.profile,
-        "adapter": plan.adapter,
-        "time_added": plan.time_added,
-        "storage_relative_path": plan.storage_relative_path,
-        "resolved_directory": plan.resolved_directory,
-        "resolved_filename": plan.resolved_filename,
-    }
-
-
-def _rollback_errors_audit_details(rollback_errors: list[RollbackFailure]) -> list[dict[str, str]]:
-    """Return rollback failure summaries for audit events."""
-    return [
-        {
-            "description": failure.description,
-            "exception_type": type(failure.exception).__name__,
-            "exception_message": str(failure.exception),
-        }
-        for failure in rollback_errors
-    ]
-
-
-def _require_record_id(record: CatalogRecord) -> str:
-    """Return a persisted record id."""
-    if record.id is None:
-        raise RuntimeError("Repository returned a persisted record without an id.")
-    return record.id

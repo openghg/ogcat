@@ -16,6 +16,7 @@ The main pieces are:
 - `CatalogRecord`: the stored record model
 - naming helpers: template rendering for managed storage paths
 - extractors: optional post-ingest metadata extraction
+- operation runners: internal coordinators for validated catalog operation lifecycles
 - CLI: a thin wrapper around the catalog API
 
 The catalog root is self-describing:
@@ -74,6 +75,24 @@ step fails. It is not a true database transaction and should not be described as
 Each unit of work exposes an `operation_id` so future audit logging or hooks can correlate staged
 record writes, storage activity, and cleanup. Stronger backends can map the same conceptual API to
 native transaction support later.
+
+## Operation Runners
+
+`Catalog` remains the public API and setup layer: it validates user inputs, selects schemas, opens
+transactions, and prepares operation-specific request objects. Internal operation runners own the
+ordered lifecycle after that setup.
+
+The current concrete runner is `AddOperationRunner`. It implements the add lifecycle for
+`add_file()` and `add_artifact()`: validation, hook dispatch, locator resolution, storage planning,
+artifact writing or reference skipping, derived metadata collection, record staging, commit, audit,
+and rollback. `OperationRunner` is the generic internal command interface with a single `run()`
+method, so future operation families can be represented without overloading add-specific names.
+
+Shared catalog services such as hook management, audit emission, validation, and record building are
+passed through `OperationServices`. Operation-specific data lives in request dataclasses such as
+`AddOperationRequest`. This keeps the public catalog surface narrow while making the internal
+contract explicit enough for future runners, such as an artifact update runner, to reuse the same
+services without sharing add-only request fields.
 
 ## Why Templates and Metadata Live in `catalog.json`
 
