@@ -58,3 +58,26 @@ def test_write_example_flux_netcdf_or_placeholder_falls_back_without_optional_xa
     assert written == target
     assert target.read_text(encoding="utf-8") == example_data.PLACEHOLDER_TEXT
     assert "Dummy .nc placeholder" in example_data.PLACEHOLDER_TEXT
+
+
+def test_netcdf_write_failure_keeps_existing_destination(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A failed optional NetCDF write does not delete an existing file."""
+
+    class FailingDataset:
+        """Dataset double that fails after writing a partial temp file."""
+
+        def to_netcdf(self, path: Path) -> None:
+            path.write_text("partial output\n", encoding="utf-8")
+            raise OSError("backend unavailable")
+
+    monkeypatch.setattr(example_data.importlib, "import_module", lambda name: object())
+    monkeypatch.setattr(example_data, "_tiny_flux_dataset", lambda *, np, xr: FailingDataset())
+
+    target = tmp_path / example_data.EXAMPLE_FLUX_FILENAME
+    target.write_text("pre-existing data\n", encoding="utf-8")
+
+    assert example_data._write_netcdf_if_available(target) is False
+    assert target.read_text(encoding="utf-8") == "pre-existing data\n"
+    assert list(tmp_path.glob(f".{target.stem}.*{target.suffix}")) == []

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -112,12 +113,24 @@ def _write_netcdf_if_available(path: Path) -> bool:
         return False
 
     dataset = _tiny_flux_dataset(np=np, xr=xr)
+    with tempfile.NamedTemporaryFile(
+        dir=path.parent,
+        prefix=f".{path.stem}.",
+        suffix=path.suffix or ".nc",
+        delete=False,
+    ) as temp_file:
+        temp_path = Path(temp_file.name)
+
+    wrote_temp = False
     try:
-        dataset.to_netcdf(path)
-    except Exception:
-        if path.exists():
-            path.unlink()
+        dataset.to_netcdf(temp_path)
+        wrote_temp = True
+    except (ImportError, OSError, RuntimeError, ValueError):
         return False
+    finally:
+        if not wrote_temp:
+            temp_path.unlink(missing_ok=True)
+    temp_path.replace(path)
     return True
 
 
