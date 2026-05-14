@@ -2,6 +2,7 @@
 
 ## Project setup
 
+- These project-local `.venv` instructions are for local/dev agents; cloud agents should ignore the `.venv` requirement and use the provided runtime environment.
 - Prefer `uv` for all Python environment and dependency management.
 - Use the project-local virtual environment at `.venv/`.
 - Do not silently use a global Python, system Python, conda environment, or ad-hoc `pip install`.
