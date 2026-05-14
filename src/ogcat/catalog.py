@@ -25,6 +25,7 @@ from ogcat.extractors import extract_derived_metadata
 from ogcat.hooks import (
     HOOK_PHASES,
     ArtifactWriter,
+    HookDispatcher,
     HookLifecycleEvent,
     HookManager,
     OperationContext,
@@ -58,6 +59,17 @@ PlannedLocatorResult = tuple[ArtifactLocator, str | None, str | None, str | None
 PluginInput = PluginRegistry | Iterable[object] | None
 HookInput = HookManager | Iterable[object] | None
 MetadataUpdateMode = Literal["replace", "shallow_merge"]
+_PhaseSetter = Callable[[str], None]
+
+
+@dataclass(slots=True)
+class _AddOperationPlan:
+    """Validated add-operation storage plan and its mutable hook context."""
+
+    context: OperationContext
+    locator: ArtifactLocator
+    storage_plan: StoragePlan
+    validation_report: ValidationReport
 
 
 @dataclass(slots=True)
@@ -1338,7 +1350,116 @@ class Catalog:
         derived_metadata_collector: DerivedMetadataCollector | None = None,
     ) -> CatalogRecord:
         """Run the shared add operation lifecycle for file and record-only adds."""
-        hook_context = OperationContext(
+        hook_context = self._build_add_operation_context(
+            transaction=transaction,
+            operation_type=operation_type,
+            record_type=record_type,
+            metadata=metadata,
+            storage_mode=storage_mode,
+            original_path=original_path,
+            original_filename=original_filename,
+            suffixes=suffixes,
+            derived_metadata=derived_metadata,
+            source=source,
+        )
+        hook_dispatcher = self.hook_manager.dispatcher(notify=self._emit_hook_lifecycle_audit)
+        current_phase = "operation-started"
+
+        def set_phase(phase: str) -> None:
+            """Track the currently running add-operation phase for failure audit."""
+            nonlocal current_phase
+            current_phase = phase
+
+        self._emit_operation_audit(
+            hook_context,
+            event_type="operation-started",
+            message=f"Started {operation_type} operation.",
+            details={"caller_owned_transaction": not commit},
+        )
+        try:
+            validation_report = self._validate_add_operation_metadata(
+                context=hook_context,
+                hook_dispatcher=hook_dispatcher,
+                schema=schema,
+                schema_record_type=schema_record_type,
+                set_phase=set_phase,
+            )
+            canonical_locator = self._resolve_add_operation_locator(
+                context=hook_context,
+                hook_dispatcher=hook_dispatcher,
+                locator_factory=locator_factory,
+                set_phase=set_phase,
+            )
+            add_plan = self._plan_add_operation_storage(
+                context=hook_context,
+                locator=canonical_locator,
+                validation_report=validation_report,
+                storage_plan_factory=storage_plan_factory,
+                artifact_writer=artifact_writer,
+                naming_metadata=naming_metadata,
+                set_phase=set_phase,
+            )
+            self._write_add_operation_artifact(
+                add_plan=add_plan,
+                artifact_writer=artifact_writer,
+                set_phase=set_phase,
+            )
+            self._collect_add_operation_metadata(
+                add_plan=add_plan,
+                hook_dispatcher=hook_dispatcher,
+                derived_metadata_collector=derived_metadata_collector,
+                set_phase=set_phase,
+            )
+            persisted = self._stage_add_operation_record(
+                add_plan=add_plan,
+                hook_dispatcher=hook_dispatcher,
+                transaction=transaction,
+                record_type=record_type,
+                schema_record_type=schema_record_type,
+                storage_mode=storage_mode,
+                original_path=original_path,
+                original_filename=original_filename,
+                suffixes=suffixes,
+                naming_metadata=naming_metadata,
+                time_added=time_added,
+                set_phase=set_phase,
+            )
+            self._commit_add_operation_if_owned(
+                add_plan=add_plan,
+                hook_dispatcher=hook_dispatcher,
+                transaction=transaction,
+                commit=commit,
+                set_phase=set_phase,
+            )
+            return persisted
+        except Exception as exc:
+            self._handle_add_operation_error(
+                error=exc,
+                context=hook_context,
+                hook_dispatcher=hook_dispatcher,
+                transaction=transaction,
+                commit=commit,
+                operation_type=operation_type,
+                current_phase=current_phase,
+            )
+            raise
+
+    def _build_add_operation_context(
+        self,
+        *,
+        transaction: UnitOfWork,
+        operation_type: str,
+        record_type: str,
+        metadata: MetadataDict,
+        storage_mode: str | None,
+        original_path: str | Path | None,
+        original_filename: str | None,
+        suffixes: list[str] | None,
+        derived_metadata: MetadataDict,
+        source: OperationSource,
+    ) -> OperationContext:
+        """Build the mutable context shared by add-operation hooks and writers."""
+        return OperationContext(
             catalog_root=self.root,
             operation_id=transaction.operation_id,
             operation_type=operation_type,
@@ -1352,211 +1473,308 @@ class Catalog:
             original_filename=original_filename,
             suffixes=[] if suffixes is None else list(suffixes),
         )
-        hook_dispatcher = self.hook_manager.dispatcher(notify=self._emit_hook_lifecycle_audit)
-        current_phase = "operation-started"
-        self._emit_operation_audit(
-            hook_context,
-            event_type="operation-started",
-            message=f"Started {operation_type} operation.",
-            details={"caller_owned_transaction": not commit},
+
+    def _validate_add_operation_metadata(
+        self,
+        *,
+        context: OperationContext,
+        hook_dispatcher: HookDispatcher,
+        schema: RecordSchema,
+        schema_record_type: str | None,
+        set_phase: _PhaseSetter,
+    ) -> ValidationReport:
+        """Run validation hooks and return the add-operation validation report."""
+        set_phase(HOOK_PHASES["before_validate_metadata"].name)
+        hook_dispatcher.before_validate_metadata(context)
+        set_phase("validation")
+        context.user_metadata = _normalize_metadata_for_schema(
+            context.user_metadata,
+            schema_name=self._schema_name(schema_record_type),
         )
-        try:
-            current_phase = HOOK_PHASES["before_validate_metadata"].name
-            hook_dispatcher.before_validate_metadata(hook_context)
-            current_phase = "validation"
-            hook_context.user_metadata = _normalize_metadata_for_schema(
-                hook_context.user_metadata,
-                schema_name=self._schema_name(schema_record_type),
+        validation_report = self._metadata_validation_report(
+            schema=schema,
+            metadata=context.user_metadata,
+            record_type=schema_record_type,
+        )
+        set_phase(HOOK_PHASES["after_validate_metadata"].name)
+        hook_dispatcher.after_validate_metadata(context, validation_report)
+        self._emit_operation_audit(
+            context,
+            event_type="validation",
+            level=_validation_audit_level(validation_report),
+            message=_validation_audit_message(validation_report),
+            details=_validation_audit_details(validation_report),
+        )
+        validation_report.raise_for_errors()
+        return validation_report
+
+    def _resolve_add_operation_locator(
+        self,
+        *,
+        context: OperationContext,
+        hook_dispatcher: HookDispatcher,
+        locator_factory: ArtifactLocatorFactory,
+        set_phase: _PhaseSetter,
+    ) -> ArtifactLocator:
+        """Resolve the canonical artifact locator for an add operation."""
+        set_phase("locator-factory")
+        context.planned_locators = [locator_factory(context)]
+        set_phase(HOOK_PHASES["resolve_artifact_locator"].name)
+        hook_dispatcher.resolve_artifact_locator(context)
+        canonical_locator = _artifact_locator_from_context(context)
+        context.planned_locators[0] = canonical_locator
+        return canonical_locator
+
+    def _plan_add_operation_storage(
+        self,
+        *,
+        context: OperationContext,
+        locator: ArtifactLocator,
+        validation_report: ValidationReport,
+        storage_plan_factory: StoragePlanFactory | None,
+        artifact_writer: ArtifactWriter | None,
+        naming_metadata: MetadataDict | None,
+        set_phase: _PhaseSetter,
+    ) -> _AddOperationPlan:
+        """Build and audit the storage plan for an add operation."""
+        set_phase("storage-plan")
+        context.storage_plan = (
+            storage_plan_factory(context, locator)
+            if storage_plan_factory is not None
+            else plan_storage(
+                locator,
+                target_kind=_target_kind_from_writer(artifact_writer),
+                write_mode=_write_mode_from_writer(artifact_writer),
+                ogcat_owned=artifact_writer is not None,
+                adapter=_adapter_name(locator),
+                storage_relative_path=locator.relative_path,
+                resolved_directory=_directory_from_locator(locator),
+                resolved_filename=_filename_from_locator(locator),
             )
-            validation_report = self._metadata_validation_report(
-                schema=schema,
-                metadata=hook_context.user_metadata,
-                record_type=schema_record_type,
-            )
-            current_phase = HOOK_PHASES["after_validate_metadata"].name
-            hook_dispatcher.after_validate_metadata(hook_context, validation_report)
-            self._emit_operation_audit(
-                hook_context,
-                event_type="validation",
-                level=_validation_audit_level(validation_report),
-                message=_validation_audit_message(validation_report),
-                details=_validation_audit_details(validation_report),
-            )
-            validation_report.raise_for_errors()
-            current_phase = "locator-factory"
-            hook_context.planned_locators = [locator_factory(hook_context)]
-            current_phase = HOOK_PHASES["resolve_artifact_locator"].name
-            hook_dispatcher.resolve_artifact_locator(hook_context)
-            canonical_locator = _artifact_locator_from_context(hook_context)
-            hook_context.planned_locators[0] = canonical_locator
-            current_phase = "storage-plan"
-            hook_context.storage_plan = (
-                storage_plan_factory(hook_context, canonical_locator)
-                if storage_plan_factory is not None
-                else plan_storage(
-                    canonical_locator,
-                    target_kind=_target_kind_from_writer(artifact_writer),
-                    write_mode=_write_mode_from_writer(artifact_writer),
-                    ogcat_owned=artifact_writer is not None,
-                    adapter=_adapter_name(canonical_locator),
-                    storage_relative_path=canonical_locator.relative_path,
-                    resolved_directory=_directory_from_locator(canonical_locator),
-                    resolved_filename=_filename_from_locator(canonical_locator),
+        )
+        storage_plan = context.storage_plan
+        if storage_plan is None:
+            raise RuntimeError("Add operation did not produce a storage plan.")
+        self._emit_operation_audit(
+            context,
+            event_type="write",
+            message="Storage plan prepared.",
+            details={
+                "write_phase": "storage-plan",
+                "storage_plan": _storage_plan_audit_details(storage_plan),
+            },
+            locator=locator,
+        )
+        if naming_metadata is not None:
+            naming_metadata.update(_naming_metadata_from_storage_plan(storage_plan))
+        return _AddOperationPlan(
+            context=context,
+            locator=locator,
+            storage_plan=storage_plan,
+            validation_report=validation_report,
+        )
+
+    def _write_add_operation_artifact(
+        self,
+        *,
+        add_plan: _AddOperationPlan,
+        artifact_writer: ArtifactWriter | None,
+        set_phase: _PhaseSetter,
+    ) -> None:
+        """Materialise or skip the artifact write for an add operation."""
+        if artifact_writer is None:
+            if add_plan.storage_plan.write_mode != "reference":
+                raise ValueError(
+                    f"Storage plan with write mode {add_plan.storage_plan.write_mode!r} "
+                    "requires an artifact_writer."
                 )
-            )
-            storage_plan = hook_context.storage_plan
-            if storage_plan is None:
-                raise RuntimeError("Add operation did not produce a storage plan.")
             self._emit_operation_audit(
-                hook_context,
+                add_plan.context,
                 event_type="write",
-                message="Storage plan prepared.",
+                message="Artifact write skipped for reference operation.",
                 details={
-                    "write_phase": "storage-plan",
-                    "storage_plan": _storage_plan_audit_details(storage_plan),
+                    "write_phase": "artifact-write",
+                    "write_mode": add_plan.storage_plan.write_mode,
                 },
-                locator=canonical_locator,
+                locator=add_plan.locator,
             )
-            if naming_metadata is not None:
-                naming_metadata.update(_naming_metadata_from_storage_plan(storage_plan))
-            if artifact_writer is None:
-                if storage_plan.write_mode != "reference":
-                    raise ValueError(
-                        f"Storage plan with write mode {storage_plan.write_mode!r} "
-                        "requires an artifact_writer."
-                    )
+            return
+
+        set_phase("artifact-write")
+        artifact_writer.write(add_plan.context, add_plan.context.source, add_plan.locator)
+        self._emit_operation_audit(
+            add_plan.context,
+            event_type="write",
+            message="Artifact write completed.",
+            details={
+                "write_phase": "artifact-write",
+                "writer_type": type(artifact_writer).__name__,
+                "write_mode": add_plan.storage_plan.write_mode,
+            },
+            locator=add_plan.locator,
+        )
+
+    def _collect_add_operation_metadata(
+        self,
+        *,
+        add_plan: _AddOperationPlan,
+        hook_dispatcher: HookDispatcher,
+        derived_metadata_collector: DerivedMetadataCollector | None,
+        set_phase: _PhaseSetter,
+    ) -> None:
+        """Collect derived metadata before record staging."""
+        set_phase("metadata-extraction")
+        _add_classification_metadata(add_plan.context, add_plan.locator)
+        if derived_metadata_collector is not None:
+            derived_metadata_collector(add_plan.context, add_plan.locator)
+        set_phase(HOOK_PHASES["extract_metadata"].name)
+        hook_dispatcher.extract_metadata(add_plan.context)
+        add_plan.context.derived_metadata = normalize_metadata(
+            add_plan.context.derived_metadata,
+            field_name="derived_metadata",
+        )
+
+    def _stage_add_operation_record(
+        self,
+        *,
+        add_plan: _AddOperationPlan,
+        hook_dispatcher: HookDispatcher,
+        transaction: UnitOfWork,
+        record_type: str,
+        schema_record_type: str | None,
+        storage_mode: str | None,
+        original_path: str | Path | None,
+        original_filename: str | None,
+        suffixes: list[str] | None,
+        naming_metadata: MetadataDict | None,
+        time_added: str | None,
+        set_phase: _PhaseSetter,
+    ) -> CatalogRecord:
+        """Stage the catalog record and run record-write hooks."""
+        set_phase(HOOK_PHASES["before_record_write"].name)
+        hook_dispatcher.before_record_write(add_plan.context)
+        add_plan.context.user_metadata = _normalize_metadata_for_schema(
+            add_plan.context.user_metadata,
+            schema_name=self._schema_name(schema_record_type),
+        )
+        add_plan.context.derived_metadata = normalize_metadata(
+            add_plan.context.derived_metadata,
+            field_name="derived_metadata",
+        )
+        record = self._build_artifact_record(
+            record_type=record_type,
+            locator=add_plan.locator,
+            metadata=add_plan.context.user_metadata,
+            storage_mode=storage_mode,
+            original_path=original_path,
+            original_filename=original_filename,
+            suffixes=suffixes,
+            derived_metadata=_metadata_with_hook_warnings(add_plan.context),
+            naming_metadata=naming_metadata,
+            time_added=time_added,
+        )
+        set_phase("record-write")
+        persisted = transaction.insert_staged_record(record)
+        add_plan.context.record_id = _require_record_id(persisted)
+        self._emit_operation_audit(
+            add_plan.context,
+            event_type="write",
+            message="Record staged.",
+            details={"write_phase": "record-write", "transaction_state": transaction.state.value},
+            locator=add_plan.locator,
+        )
+        set_phase(HOOK_PHASES["after_record_write"].name)
+        hook_dispatcher.after_record_write(add_plan.context)
+        return persisted
+
+    def _commit_add_operation_if_owned(
+        self,
+        *,
+        add_plan: _AddOperationPlan,
+        hook_dispatcher: HookDispatcher,
+        transaction: UnitOfWork,
+        commit: bool,
+        set_phase: _PhaseSetter,
+    ) -> None:
+        """Commit internal add-operation transactions and run commit hooks."""
+        if not commit:
+            return
+        set_phase(HOOK_PHASES["before_commit"].name)
+        hook_dispatcher.before_commit(add_plan.context)
+        set_phase("commit")
+        transaction.commit()
+        self._emit_operation_audit(
+            add_plan.context,
+            event_type="commit",
+            message="Commit succeeded.",
+            details={"transaction_state": transaction.state.value},
+            locator=add_plan.locator,
+        )
+        # After-commit hooks are best-effort: failures warn, but cannot turn an
+        # already-persisted record into an apparent API failure.
+        set_phase(HOOK_PHASES["after_commit"].name)
+        hook_dispatcher.after_commit(add_plan.context)
+
+    def _handle_add_operation_error(
+        self,
+        *,
+        error: Exception,
+        context: OperationContext,
+        hook_dispatcher: HookDispatcher,
+        transaction: UnitOfWork,
+        commit: bool,
+        operation_type: str,
+        current_phase: str,
+    ) -> None:
+        """Audit and roll back a failed add operation."""
+        add_operation_note(error, context.operation_id)
+        hook_dispatcher.on_error(context, error)
+        self._emit_operation_audit(
+            context,
+            event_type="failure",
+            message=f"{operation_type} operation failed.",
+            details={
+                "phase": current_phase,
+                "transaction_state": transaction.state.value,
+                "caller_owned_transaction": not commit,
+            },
+            exception=error,
+        )
+        # Caller-supplied transactions stay caller-owned. Internal transactions
+        # commit=True and roll back here before re-raising.
+        if commit and transaction.state is not OperationState.COMMITTED:
+            self._emit_operation_audit(
+                context,
+                event_type="rollback",
+                message="Rollback started.",
+                details={"rollback_phase": "started", "transaction_state": transaction.state.value},
+            )
+            transaction.rollback(original_exception=error)
+            hook_dispatcher.on_rollback(context, error)
+            if transaction.rollback_errors:
+                rollback_details: dict[str, object] = {
+                    "rollback_phase": "failed",
+                    "transaction_state": transaction.state.value,
+                    "rollback_errors": _rollback_errors_audit_details(transaction.rollback_errors),
+                }
                 self._emit_operation_audit(
-                    hook_context,
-                    event_type="write",
-                    message="Artifact write skipped for reference operation.",
-                    details={"write_phase": "artifact-write", "write_mode": storage_plan.write_mode},
-                    locator=canonical_locator,
+                    context,
+                    event_type="rollback",
+                    level="error",
+                    message="Rollback completed with failures.",
+                    details=rollback_details,
+                    exception=transaction.rollback_errors[0].exception,
                 )
             else:
-                current_phase = "artifact-write"
-                artifact_writer.write(hook_context, hook_context.source, canonical_locator)
                 self._emit_operation_audit(
-                    hook_context,
-                    event_type="write",
-                    message="Artifact write completed.",
-                    details={
-                        "write_phase": "artifact-write",
-                        "writer_type": type(artifact_writer).__name__,
-                        "write_mode": storage_plan.write_mode,
-                    },
-                    locator=canonical_locator,
-                )
-            current_phase = "metadata-extraction"
-            _add_classification_metadata(hook_context, canonical_locator)
-            if derived_metadata_collector is not None:
-                derived_metadata_collector(hook_context, canonical_locator)
-            current_phase = HOOK_PHASES["extract_metadata"].name
-            hook_dispatcher.extract_metadata(hook_context)
-            hook_context.derived_metadata = normalize_metadata(
-                hook_context.derived_metadata,
-                field_name="derived_metadata",
-            )
-            current_phase = HOOK_PHASES["before_record_write"].name
-            hook_dispatcher.before_record_write(hook_context)
-            hook_context.user_metadata = _normalize_metadata_for_schema(
-                hook_context.user_metadata,
-                schema_name=self._schema_name(schema_record_type),
-            )
-            hook_context.derived_metadata = normalize_metadata(
-                hook_context.derived_metadata,
-                field_name="derived_metadata",
-            )
-            record = self._build_artifact_record(
-                record_type=record_type,
-                locator=canonical_locator,
-                metadata=hook_context.user_metadata,
-                storage_mode=storage_mode,
-                original_path=original_path,
-                original_filename=original_filename,
-                suffixes=suffixes,
-                derived_metadata=_metadata_with_hook_warnings(hook_context),
-                naming_metadata=naming_metadata,
-                time_added=time_added,
-            )
-            current_phase = "record-write"
-            persisted = transaction.insert_staged_record(record)
-            hook_context.record_id = _require_record_id(persisted)
-            self._emit_operation_audit(
-                hook_context,
-                event_type="write",
-                message="Record staged.",
-                details={"write_phase": "record-write", "transaction_state": transaction.state.value},
-                locator=canonical_locator,
-            )
-            current_phase = HOOK_PHASES["after_record_write"].name
-            hook_dispatcher.after_record_write(hook_context)
-            if commit:
-                current_phase = HOOK_PHASES["before_commit"].name
-                hook_dispatcher.before_commit(hook_context)
-                current_phase = "commit"
-                transaction.commit()
-                self._emit_operation_audit(
-                    hook_context,
-                    event_type="commit",
-                    message="Commit succeeded.",
-                    details={"transaction_state": transaction.state.value},
-                    locator=canonical_locator,
-                )
-                # After-commit hooks are best-effort: failures warn, but cannot
-                # turn an already-persisted record into an apparent API failure.
-                current_phase = HOOK_PHASES["after_commit"].name
-                hook_dispatcher.after_commit(hook_context)
-            return persisted
-        except Exception as exc:
-            add_operation_note(exc, hook_context.operation_id)
-            hook_dispatcher.on_error(hook_context, exc)
-            self._emit_operation_audit(
-                hook_context,
-                event_type="failure",
-                message=f"{operation_type} operation failed.",
-                details={
-                    "phase": current_phase,
-                    "transaction_state": transaction.state.value,
-                    "caller_owned_transaction": not commit,
-                },
-                exception=exc,
-            )
-            # Caller-supplied transactions stay caller-owned. Internal
-            # transactions commit=True and roll back here before re-raising.
-            if commit and transaction.state is not OperationState.COMMITTED:
-                self._emit_operation_audit(
-                    hook_context,
+                    context,
                     event_type="rollback",
-                    message="Rollback started.",
-                    details={"rollback_phase": "started", "transaction_state": transaction.state.value},
-                )
-                transaction.rollback(original_exception=exc)
-                hook_dispatcher.on_rollback(hook_context, exc)
-                if transaction.rollback_errors:
-                    rollback_details: dict[str, object] = {
-                        "rollback_phase": "failed",
+                    message="Rollback completed.",
+                    details={
+                        "rollback_phase": "completed",
                         "transaction_state": transaction.state.value,
-                        "rollback_errors": _rollback_errors_audit_details(transaction.rollback_errors),
-                    }
-                    self._emit_operation_audit(
-                        hook_context,
-                        event_type="rollback",
-                        level="error",
-                        message="Rollback completed with failures.",
-                        details=rollback_details,
-                        exception=transaction.rollback_errors[0].exception,
-                    )
-                else:
-                    self._emit_operation_audit(
-                        hook_context,
-                        event_type="rollback",
-                        message="Rollback completed.",
-                        details={
-                            "rollback_phase": "completed",
-                            "transaction_state": transaction.state.value,
-                        },
-                    )
-            raise
+                    },
+                )
 
     def _select_schema(self, record_type: str | None, *, require_known: bool) -> RecordSchema:
         """Select the schema that applies to a record."""
