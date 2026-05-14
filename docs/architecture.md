@@ -44,7 +44,10 @@ stop the internal model from assuming every record is a copied or moved local fi
 For the current MVP:
 
 - `add_file()` still performs managed ingest by copy or move
-- managed file records store a `path` locator
+- managed file records store a `path` locator for the primary artifact, which
+  defaults to a UUID-backed path under `files/objects/`
+- schema templates create derived symlink replicas and generated views rather
+  than defining the primary path by default
 - compatibility fields `stored_abspath` and `stored_relpath` remain present for today's APIs and
   CLI
 - `Catalog.path()` resolves only path-backed records and returns `None` for records that are

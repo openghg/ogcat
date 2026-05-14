@@ -37,7 +37,8 @@ descriptions, and locating stored paths.
 - Records: each record stores reserved top-level fields plus `user_metadata`, `derived_metadata`,
   and `naming_metadata`. Records now also carry a small `record_type` and `locator` so the model
   can grow beyond copied or moved local files without changing the basic catalog shape.
-- Naming and templates: file placement under `files/` is driven by simple directory and filename templates evaluated from record id, source filename parts, timestamps, and user metadata.
+- Naming and templates: managed files default to UUID primary paths under `files/objects/`.
+  Directory and filename templates produce human-readable symlink replicas or regenerated views.
 - Derived metadata extractors: optional extractors can add lightweight summaries after ingest. The current implementation includes a netCDF extractor when `xarray` is installed.
 - Hooks and plugins: projects can register Python hook objects to add domain-specific metadata,
   validation, rollback, and lifecycle behavior without adding that logic to `ogcat` core.
@@ -186,6 +187,10 @@ artifact writer when a plugin or helper should materialise new data before the r
 See `ogcat.writers` for small helper wrappers around in-memory data, path-backed transforms, and zip
 extraction examples.
 
+By default, `add_file()` stores the primary artifact under a UUID path and creates a template-based
+symlink replica for human-readable browsing. Pass `primary_location="template"` when the template
+path should be the primary storage location.
+
 Use `catalog.plan_artifact_storage(...)` to dry-run a planned target before writing. The returned
 `StoragePlan` contains the locator, write intent, and resolved naming outputs; pass record metadata
 explicitly when calling `add_artifact(storage_plan=...)`. The plan is available to hooks and artifact
@@ -194,6 +199,10 @@ ogcat derives a plan from the writer's declared `target_kind` and `write_mode` w
 Domain logic can create directory-like artifacts such as NetCDF collections or `.zarr` stores while
 ogcat core records only generic locators and metadata. Artifact writers remain the place where
 filesystem work and rollback registration happen.
+
+Use `catalog.plan_view(root, template, mode="symlink", ...)` to dry-run a generated symlink view
+from current catalog metadata. The returned plan reports collisions, unsupported locators, and
+missing primary paths before `plan.apply()` creates any links.
 
 ## CLI
 
@@ -301,11 +310,12 @@ uv run python -m http.server 8000
 
 ## Storage Model
 
-Current storage is still centred on path-based managed ingest for the MVP. Files added with
-`add_file()` are copied or moved into the catalog's `files/` tree, and the resulting stored path is
-recorded in the catalog database alongside metadata and naming information. Existing paths, URIs,
-and explicit URI/urlpath locators can be recorded with `add_reference()` without copying or moving
-data.
+Current storage is still centred on path-backed managed ingest for the MVP. Files added with
+`add_file()` are copied or moved into the catalog's `files/objects/` tree by default, and the
+resulting primary path is recorded in the catalog database alongside metadata and naming
+information. Template-derived paths are linked replicas that can be regenerated after metadata or
+template changes. Existing paths, URIs, and explicit URI/urlpath locators can be recorded with
+`add_reference()` without copying or moving data.
 
 Records now also include a minimal locator block:
 

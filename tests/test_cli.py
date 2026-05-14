@@ -281,7 +281,9 @@ def test_search_fields_selects_human_output_columns(tmp_path: Path) -> None:
     assert "path" in stdout
     assert _record_id(record) in stdout
     assert "CO2" in stdout
-    assert "anthropogenic" in stdout
+    resolved_path = record.path()
+    assert resolved_path is not None
+    assert resolved_path.name in stdout
     assert "files" in stdout
     assert "product" not in stdout
     assert "CTE-HR" not in stdout
@@ -831,7 +833,8 @@ def test_search_paths_skips_non_path_backed_records(tmp_path: Path) -> None:
     assert result.exit_code == 0
     lines = [line for line in strip_ansi(result.stdout).splitlines() if line.strip()]
     assert len(lines) == 1
-    assert lines[0].endswith("source.nc")
+    stored_record = catalog.search(where={"species": "CO2"}, as_record_set=False)[0]
+    assert lines[0] == str(stored_record.path())
 
 
 def test_search_ids_and_paths_are_not_capped_by_default(tmp_path: Path) -> None:

@@ -362,7 +362,8 @@ def test_before_validate_hook_can_mutate_metadata_for_validation_and_naming(tmp_
     record = catalog.add_file(source)
 
     assert record.user_metadata["title"] == "from-hook"
-    assert Path(record.stored_abspath or "").name == "from-hook.nc"
+    assert Path(str(record.naming_metadata["template_replica_path"])).name == "from-hook.nc"
+    assert Path(record.stored_abspath or "").parent.parent.name == "objects"
 
 
 def test_resolve_artifact_locator_replacement_controls_add_file_target(tmp_path: Path) -> None:

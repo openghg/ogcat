@@ -430,6 +430,7 @@ def test_plan_artifact_storage_can_allocate_zarr_directory_name(tmp_path: Path) 
         metadata={"species": "CO2", "domain": "EUROPE", "title": "my_store"},
         target_kind="directory",
         write_mode="write",
+        primary_location="template",
     )
 
     assert plan.target_kind == "directory"

@@ -7,6 +7,14 @@ from ogcat.hooks import ArtifactWriter, HookManager, HookWarning, OperationConte
 from ogcat.models import ArtifactLocator, CatalogRecord, MetadataFieldDescription
 from ogcat.plugins import PluginRegistry
 from ogcat.record_set import CatalogRecordSet
+from ogcat.replicas import (
+    ReplicaApplyResult,
+    ReplicaMode,
+    ReplicaPlanItem,
+    ReplicaRole,
+    ReplicaState,
+    ReplicaViewPlan,
+)
 from ogcat.search import FieldPath, SearchOp, SearchQuery, SearchTerm
 from ogcat.spec import CatalogSpec, RecordSchema
 from ogcat.storage import (
@@ -67,6 +75,12 @@ __all__ = [
     "OperationContext",
     "OperationSource",
     "PluginRegistry",
+    "ReplicaApplyResult",
+    "ReplicaMode",
+    "ReplicaPlanItem",
+    "ReplicaRole",
+    "ReplicaState",
+    "ReplicaViewPlan",
     "RollbackFailure",
     "RecordSchema",
     "FieldPath",

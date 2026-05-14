@@ -22,8 +22,8 @@ from ogcat.storage import (
 )
 
 
-def test_plan_artifact_storage_renders_local_template_without_writing(tmp_path: Path) -> None:
-    """Planning renders local templates but does not create files or records."""
+def test_plan_artifact_storage_uses_uuid_primary_without_writing(tmp_path: Path) -> None:
+    """Planning defaults to a UUID primary path without creating files or records."""
     source = tmp_path / "source.nc"
     source.write_text("payload", encoding="utf-8")
     root = tmp_path / "catalog"
@@ -44,15 +44,53 @@ def test_plan_artifact_storage_renders_local_template_without_writing(tmp_path: 
         write_mode="copy",
     )
 
-    expected = root / "files" / "CO2" / "2024" / "paris.nc"
-    assert plan.locator == ArtifactLocator.from_path(expected, relative_path="files/CO2/2024/paris.nc")
+    assert plan.artifact_uuid is not None
+    expected = root / "files" / "objects" / plan.artifact_uuid[:2] / f"{plan.artifact_uuid}.nc"
+    assert plan.locator == ArtifactLocator.from_path(
+        expected,
+        relative_path=f"files/objects/{plan.artifact_uuid[:2]}/{plan.artifact_uuid}.nc",
+    )
     assert plan.write_mode == "copy"
-    assert plan.storage_relative_path == "CO2/2024/paris.nc"
-    assert plan.resolved_directory == "CO2/2024"
-    assert plan.resolved_filename == "paris.nc"
+    assert plan.locator.relative_path == f"files/objects/{plan.artifact_uuid[:2]}/{plan.artifact_uuid}.nc"
+    assert plan.storage_relative_path == f"objects/{plan.artifact_uuid[:2]}/{plan.artifact_uuid}.nc"
+    assert plan.resolved_directory == f"objects/{plan.artifact_uuid[:2]}"
+    assert plan.resolved_filename == f"{plan.artifact_uuid}.nc"
+    assert plan.primary_location == "uuid"
     assert plan.ogcat_owned
     assert not expected.exists()
     assert catalog.repository.all() == []
+
+
+def test_plan_artifact_storage_can_use_template_primary(tmp_path: Path) -> None:
+    """Planning can still use schema templates as the primary path."""
+    source = tmp_path / "source.nc"
+    source.write_text("payload", encoding="utf-8")
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(
+        root,
+        CatalogSpec(
+            catalog_name="files",
+            default_schema=RecordSchema(
+                directory_template="{species}/{year}",
+                filename_template="{title}{original_suffix}",
+            ),
+        ),
+    )
+
+    plan = catalog.plan_artifact_storage(
+        source,
+        metadata={"species": "CO2", "year": 2024, "title": "paris"},
+        write_mode="copy",
+        primary_location="template",
+    )
+
+    expected = root / "files" / "CO2" / "2024" / "paris.nc"
+    assert plan.locator == ArtifactLocator.from_path(expected, relative_path="files/CO2/2024/paris.nc")
+    assert plan.storage_relative_path == "CO2/2024/paris.nc"
+    assert plan.resolved_directory == "CO2/2024"
+    assert plan.resolved_filename == "paris.nc"
+    assert plan.primary_location == "template"
+    assert not expected.exists()
 
 
 def test_add_artifact_uses_planned_timestamp_for_date_named_paths(tmp_path: Path) -> None:
@@ -66,7 +104,11 @@ def test_add_artifact_uses_planned_timestamp_for_date_named_paths(tmp_path: Path
     )
 
     metadata: MetadataDict = {"title": "planned"}
-    plan = catalog.plan_artifact_storage(metadata=metadata, write_mode="reference")
+    plan = catalog.plan_artifact_storage(
+        metadata=metadata,
+        write_mode="reference",
+        primary_location="template",
+    )
     record = catalog.add_artifact(
         record_type="managed_artifact",
         storage_plan=plan,
@@ -102,7 +144,7 @@ def test_plan_artifact_storage_collision_uses_storage_adapter_exists(
 
     monkeypatch.setattr(LocalStorageAdapter, "exists", fake_exists)
 
-    plan = catalog.plan_artifact_storage(source, write_mode="copy")
+    plan = catalog.plan_artifact_storage(source, write_mode="copy", primary_location="template")
 
     assert Path(plan.locator.value).name == "fixed_2.nc"
     assert [Path(value).name for value in seen] == ["fixed.nc", "fixed_2.nc"]
@@ -145,6 +187,7 @@ def test_plan_artifact_storage_urlpath_root_does_not_import_fsspec(
         metadata={"species": "CO2", "title": "remote"},
         storage_root="s3://bucket/prefix",
         write_mode="copy",
+        primary_location="template",
     )
 
     assert plan.locator == ArtifactLocator.from_urlpath(
@@ -180,6 +223,7 @@ def test_urlpath_storage_root_does_not_populate_stored_relpath(
         metadata={"species": "CO2", "title": "remote"},
         storage_root="s3://bucket/prefix",
         write_mode="reference",
+        primary_location="template",
     )
     record = catalog.add_artifact(
         record_type="managed_file",
@@ -229,7 +273,12 @@ def test_plan_artifact_storage_urlpath_root_uses_available_collision_check(
 
     monkeypatch.setattr(catalog_module, "_urlpath_exists_if_supported", fake_exists)
 
-    plan = catalog.plan_artifact_storage(source, storage_root="s3://bucket/prefix", write_mode="copy")
+    plan = catalog.plan_artifact_storage(
+        source,
+        storage_root="s3://bucket/prefix",
+        write_mode="copy",
+        primary_location="template",
+    )
 
     assert plan.locator == ArtifactLocator.from_urlpath(
         "s3://bucket/prefix/2026/source/fixed_2.nc",
@@ -264,6 +313,7 @@ def test_plan_artifact_storage_custom_local_root_has_no_catalog_relative_path(tm
         storage_root=external_root,
         write_mode="reference",
         ogcat_owned=False,
+        primary_location="template",
     )
     record = catalog.add_artifact(
         record_type="external_file",
@@ -277,6 +327,26 @@ def test_plan_artifact_storage_custom_local_root_has_no_catalog_relative_path(tm
     assert plan.resolved_filename == "external.nc"
     assert record.stored_relpath is None
     assert record.locator.relative_path is None
+
+
+def test_plan_artifact_storage_explicit_locator_overrides_primary_location(tmp_path: Path) -> None:
+    """Explicit locators remain caller-selected primary storage locations."""
+    source = tmp_path / "source.nc"
+    source.write_text("payload", encoding="utf-8")
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+    target = tmp_path / "chosen" / "artifact.nc"
+
+    plan = catalog.plan_artifact_storage(
+        source,
+        locator=ArtifactLocator.from_path(target),
+        write_mode="reference",
+    )
+
+    assert plan.locator == ArtifactLocator.from_path(target)
+    assert plan.primary_location == "user_provided"
+    assert plan.artifact_uuid is None
+    assert plan.resolved_directory == str(target.parent)
+    assert plan.resolved_filename == "artifact.nc"
 
 
 def test_add_file_hook_urlpath_redirect_updates_plan_and_skips_path_extractor(

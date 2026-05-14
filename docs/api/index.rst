@@ -9,6 +9,7 @@ API reference
    models
    search
    storage
+   replicas
    hooks
    validation
    writers-transactions
