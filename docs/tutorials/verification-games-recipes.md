@@ -494,70 +494,9 @@ scenario_source_paths = {
 }
 ```
 
-## Discover fields
-
-Field discovery is available from Python and the CLI.
-
-```python
-print(catalog.list_metadata_fields(record_type="derived_flux"))
-print(catalog.list_record_fields())
-print(catalog.unique_values("species"))
-```
-
-The equivalent commands are:
-
-```bash
-uv run ogcat fields --catalog /path/to/catalog --record-type derived_flux
-uv run ogcat fields --catalog /path/to/catalog --stored
-uv run ogcat fields --catalog /path/to/catalog --values species
-```
-
-Schema-declared fields describe what the catalog expects. Stored fields show
-what actually appears in records, including nested paths such as
-`derived_metadata.reader_hint`. Unique values list scalar values only; list and
-mapping metadata are intentionally skipped.
-
-## Contains semantics
-
-`contains` means different things depending on the stored value type:
-
-- strings use substring matching;
-- lists and other sequences require exact membership, and list expectations
-  require every expected item to be present;
-- mappings use submapping matching;
-- scalar values fall back to equality.
-
-```python
-zip_path = external_dir / "gridfed_total_2021.zip"
-zip_path.write_text("fake zip placeholder\n", encoding="utf-8")
-
-zip_record = catalog.add_reference(
-    zip_path,
-    record_type="raw_flux",
-    metadata={
-        "title": "GridFED TOTAL 2021 zip",
-        "product": "GridFED",
-        "species": ["co2", "o2"],
-        "domain": "global",
-        "year": 2021,
-        "keywords": ["fossil", "archive"],
-        "provenance": "raw",
-        "format": "zip",
-        "processing_stage": "downloaded",
-    },
-)
-
-assert catalog.search(contains={"suffixes": "zip"}) == []
-assert catalog.search(contains={"suffixes": ".zip"})[0].id == zip_record.id
-assert catalog.search(contains={"keywords": ["fossil", "archive"]})[0].id == zip_record.id
-assert catalog.search(contains={"user_metadata": {"product": "GridFED"}})
-```
-
-For suffixes and file formats, prefer normalised metadata such as
-`format="zip"` or `derived_metadata.classification.format="zip"` over fuzzy
-suffix matching. The broader search rules are documented in
-[Metadata and validation](../concepts/metadata-and-validation.md) and
-[Search and record sets](../api/search.rst).
+For general field-discovery and search-containment rules, see
+[Metadata and validation](../concepts/metadata-and-validation.md),
+[Search and record sets](../api/search.rst), and [CLI](../cli.md).
 
 When you are done with the temporary example catalog:
 
