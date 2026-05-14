@@ -14,10 +14,16 @@ from ogcat.models import ArtifactLocator, CatalogRecord
 
 runner = CliRunner()
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+RICH_BOX_CHARS = ("╭", "╰", "│", "─")
 
 
 def strip_ansi(text: str) -> str:
     return ANSI_RE.sub("", text)
+
+
+def assert_no_rich_boxes(text: str) -> None:
+    """Assert CLI output does not contain Rich panel box-drawing characters."""
+    assert not any(char in text for char in RICH_BOX_CHARS)
 
 
 def _record_id(record: CatalogRecord) -> str:
@@ -77,6 +83,33 @@ def test_search_json_output(tmp_path: Path) -> None:
     payload = json.loads(strip_ansi(result.stdout))
     assert [item["id"] for item in payload] == [_record_id(record)]
     assert payload[0]["user_metadata"]["species"] == "CO2"
+
+
+def test_root_help_uses_plain_click_formatting() -> None:
+    """Root help output should not contain Rich box-drawing panels."""
+    result = runner.invoke(app, ["--help"])
+
+    assert result.exit_code == 0
+    stdout = strip_ansi(result.stdout)
+    assert "Options:" in stdout
+    assert "Commands:" in stdout
+    assert_no_rich_boxes(stdout)
+
+
+def test_subcommand_help_uses_plain_click_formatting() -> None:
+    """Subcommand help output should stay plain for direct and nested apps."""
+    search_result = runner.invoke(app, ["search", "--help"])
+    spec_result = runner.invoke(app, ["spec", "--help"])
+
+    assert search_result.exit_code == 0
+    search_stdout = strip_ansi(search_result.stdout)
+    assert "Options:" in search_stdout
+    assert_no_rich_boxes(search_stdout)
+
+    assert spec_result.exit_code == 0
+    spec_stdout = strip_ansi(spec_result.stdout)
+    assert "Commands:" in spec_stdout
+    assert_no_rich_boxes(spec_stdout)
 
 
 def test_search_accepts_positional_key_value_filters(tmp_path: Path) -> None:
@@ -810,6 +843,16 @@ def test_missing_catalog_configuration_returns_helpful_error() -> None:
 
     assert result.exit_code != 0
     assert "Provide --catalog or set OGCAT_CATALOG." in strip_ansi(result.stderr)
+
+
+def test_missing_command_error_is_plain_text() -> None:
+    """Missing-command usage errors should not render Rich error panels."""
+    result = runner.invoke(app, [])
+
+    assert result.exit_code != 0
+    stderr = strip_ansi(result.stderr)
+    assert "Error: Missing command." in stderr
+    assert_no_rich_boxes(stderr)
 
 
 def test_search_paths_skips_non_path_backed_records(tmp_path: Path) -> None:

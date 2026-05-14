@@ -24,8 +24,14 @@ from ogcat.spec import CatalogSpec, RecordSchema
 app = typer.Typer(
     help="Lightweight artifact catalog with managed file ingest.",
     context_settings={"help_option_names": ["-h", "--help"]},
+    rich_markup_mode=None,
+    pretty_exceptions_enable=False,
 )
-spec_app = typer.Typer(help="Inspect and update catalog specifications.")
+spec_app = typer.Typer(
+    help="Inspect and update catalog specifications.",
+    rich_markup_mode=None,
+    pretty_exceptions_enable=False,
+)
 app.add_typer(spec_app, name="spec")
 console = Console()
 error_console = Console(stderr=True)
