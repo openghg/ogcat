@@ -1,6 +1,6 @@
 # ADR 0001: Operation-Scoped Hook Lifecycle Observation
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-05-14
 - **Related issues**: [openghg/ogcat#75](https://github.com/openghg/ogcat/issues/75)
 

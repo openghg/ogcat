@@ -16,10 +16,21 @@ from ogcat import (
     PluginRegistry,
     RecordSchema,
 )
-from ogcat.hooks import OperationContext, OperationSource
+from ogcat.hooks import HookLifecycleEvent, OperationContext, OperationSource
 from ogcat.models import JsonValue
 from ogcat.transactions import OperationState
 from ogcat.validation import ValidationReport
+
+
+def _hook_context(tmp_path: Path) -> OperationContext:
+    """Build a minimal operation context for dispatcher unit tests."""
+    return OperationContext(
+        catalog_root=tmp_path,
+        operation_id="operation-1",
+        operation_type="add_file",
+        record_type="managed_artifact",
+        user_metadata={},
+    )
 
 
 def test_direct_registration_invokes_hook(tmp_path: Path) -> None:
@@ -180,6 +191,130 @@ def test_hooks_run_in_registration_order(tmp_path: Path) -> None:
         "first:before_commit",
         "second:before_commit",
     ]
+
+
+def test_hook_dispatcher_invokes_matching_hooks_and_emits_lifecycle_events(tmp_path: Path) -> None:
+    """A dispatcher should emit events around hooks that implement the selected phase."""
+    calls: list[str] = []
+    events: list[HookLifecycleEvent] = []
+
+    class FirstHook:
+        def before_validate_metadata(self, context: OperationContext) -> None:
+            calls.append("first")
+
+    class OtherPhaseHook:
+        def before_commit(self, context: OperationContext) -> None:
+            calls.append("other")
+
+    class SecondHook:
+        def before_validate_metadata(self, context: OperationContext) -> None:
+            calls.append("second")
+
+    dispatcher = HookManager([FirstHook(), OtherPhaseHook(), SecondHook()]).dispatcher(notify=events.append)
+
+    dispatcher.before_validate_metadata(_hook_context(tmp_path))
+
+    assert calls == ["first", "second"]
+    assert [
+        (event.phase.name, event.phase.label, event.stage, event.hook_count, event.warnings_added)
+        for event in events
+    ] == [
+        ("before_validate_metadata", "before-validate metadata", "started", 2, 0),
+        ("before_validate_metadata", "before-validate metadata", "completed", 2, 0),
+    ]
+
+
+def test_hook_dispatcher_emits_no_events_when_phase_has_no_hooks(tmp_path: Path) -> None:
+    """A dispatcher should stay silent when no registered hook matches a phase."""
+    events: list[HookLifecycleEvent] = []
+
+    class Hook:
+        def before_commit(self, context: OperationContext) -> None:
+            context.user_metadata["called"] = True
+
+    dispatcher = HookManager([Hook()]).dispatcher(notify=events.append)
+    context = _hook_context(tmp_path)
+
+    dispatcher.resolve_artifact_locator(context)
+
+    assert events == []
+    assert context.user_metadata == {}
+
+
+def test_hook_dispatcher_without_callback_preserves_hook_behavior(tmp_path: Path) -> None:
+    """A dispatcher without a callback should still run hooks normally."""
+
+    class ExtractorHook:
+        def extract_metadata(self, context: OperationContext) -> dict[str, object]:
+            return {"checksum": "abc123"}
+
+    context = _hook_context(tmp_path)
+
+    HookManager([ExtractorHook()]).dispatcher().extract_metadata(context)
+
+    assert context.derived_metadata == {"checksum": "abc123"}
+
+
+def test_hook_dispatcher_failed_event_preserves_hook_exception(tmp_path: Path) -> None:
+    """A failing hook should emit a failed event with the original exception."""
+    events: list[HookLifecycleEvent] = []
+
+    class FailingHook:
+        def before_record_write(self, context: OperationContext) -> None:
+            raise RuntimeError("record hook failed")
+
+    dispatcher = HookManager([FailingHook()]).dispatcher(notify=events.append)
+
+    with pytest.raises(RuntimeError, match="record hook failed") as exc_info:
+        dispatcher.before_record_write(_hook_context(tmp_path))
+
+    assert [(event.phase.name, event.stage, event.hook_count) for event in events] == [
+        ("before_record_write", "started", 1),
+        ("before_record_write", "failed", 1),
+    ]
+    assert events[-1].error is exc_info.value
+
+
+def test_hook_dispatcher_callback_failure_does_not_skip_hooks(tmp_path: Path) -> None:
+    """A callback failure should warn without preventing hook dispatch."""
+    calls: list[str] = []
+    stages: list[str] = []
+
+    class Hook:
+        def before_validate_metadata(self, context: OperationContext) -> None:
+            calls.append("hook")
+
+    def notify(event: HookLifecycleEvent) -> None:
+        stages.append(event.stage)
+        if event.stage == "started":
+            raise RuntimeError("observer failed")
+
+    dispatcher = HookManager([Hook()]).dispatcher(notify=notify)
+
+    with pytest.warns(RuntimeWarning, match="hook lifecycle callback failed"):
+        dispatcher.before_validate_metadata(_hook_context(tmp_path))
+
+    assert calls == ["hook"]
+    assert stages == ["started", "completed"]
+
+
+def test_hook_dispatcher_after_commit_failure_completes_with_warning(tmp_path: Path) -> None:
+    """After-commit hook failures should become warnings and completed events."""
+    events: list[HookLifecycleEvent] = []
+
+    class FailingAfterCommitHook:
+        def after_commit(self, context: OperationContext) -> None:
+            raise RuntimeError("external service failed")
+
+    context = _hook_context(tmp_path)
+    dispatcher = HookManager([FailingAfterCommitHook()]).dispatcher(notify=events.append)
+
+    with pytest.warns(RuntimeWarning, match="after_commit hook failed"):
+        dispatcher.after_commit(context)
+
+    assert [event.stage for event in events] == ["started", "completed"]
+    assert events[-1].warnings_added == 1
+    assert context.warnings[0].code == "hook.after_commit_failed"
 
 
 def test_before_validate_hook_can_mutate_metadata_for_validation_and_naming(tmp_path: Path) -> None:

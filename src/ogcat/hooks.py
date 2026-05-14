@@ -28,28 +28,72 @@ from an :class:`OperationSource` before the catalog record is committed.
 from __future__ import annotations
 
 import warnings
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from types import MappingProxyType
+from typing import Literal, Protocol, cast, runtime_checkable
 
 from ogcat.models import ArtifactLocator, MetadataDict
 from ogcat.storage import StoragePlan
 from ogcat.transactions import RollbackAction
 from ogcat.validation import ValidationReport
 
-HOOK_METHOD_NAMES = (
-    "before_validate_metadata",
-    "after_validate_metadata",
-    "resolve_artifact_locator",
-    "before_record_write",
-    "after_record_write",
-    "extract_metadata",
-    "before_commit",
-    "after_commit",
-    "on_error",
-    "on_rollback",
+HookLifecycleStage = Literal["started", "completed", "failed"]
+_HookMethod = Callable[..., object]
+
+
+@dataclass(frozen=True, slots=True)
+class HookPhase:
+    """Formal metadata for one hook dispatch phase.
+
+    Args:
+        name: Hook method name used to select participating hooks.
+        label: Human-readable phase label for diagnostics.
+    """
+
+    name: str
+    label: str
+
+
+_HOOK_PHASE_SEQUENCE = (
+    HookPhase("before_validate_metadata", "before-validate metadata"),
+    HookPhase("after_validate_metadata", "after-validate metadata"),
+    HookPhase("resolve_artifact_locator", "artifact locator resolution"),
+    HookPhase("before_record_write", "before-record-write"),
+    HookPhase("after_record_write", "after-record-write"),
+    HookPhase("extract_metadata", "metadata extraction"),
+    HookPhase("before_commit", "before-commit"),
+    HookPhase("after_commit", "after-commit"),
+    HookPhase("on_error", "operation error"),
+    HookPhase("on_rollback", "operation rollback"),
 )
+HOOK_PHASES: Mapping[str, HookPhase] = MappingProxyType({phase.name: phase for phase in _HOOK_PHASE_SEQUENCE})
+HOOK_METHOD_NAMES = tuple(HOOK_PHASES)
+
+
+@dataclass(frozen=True, slots=True)
+class HookLifecycleEvent:
+    """Lifecycle notification emitted around one hook dispatch phase.
+
+    Args:
+        phase: Formal hook phase metadata.
+        stage: Dispatch stage.
+        context: Operation context supplied to the hook phase.
+        hook_count: Number of hooks participating in this phase.
+        warnings_added: Number of context warnings added during dispatch.
+        error: Exception raised by the phase, if dispatch failed.
+    """
+
+    phase: HookPhase
+    stage: HookLifecycleStage
+    context: OperationContext
+    hook_count: int
+    warnings_added: int = 0
+    error: BaseException | None = None
+
+
+HookLifecycleCallback = Callable[[HookLifecycleEvent], None]
 
 
 def coerce_hook_iterable(value: object, *, label: str) -> list[object]:
@@ -357,8 +401,179 @@ class ErrorHook(Protocol):
         ...
 
 
+class HookDispatcher:
+    """Operation-scoped dispatcher for registered catalog hooks.
+
+    Args:
+        hooks: Hook objects available to this operation.
+        notify: Optional lifecycle callback for this operation.
+    """
+
+    def __init__(self, hooks: Iterable[object], notify: HookLifecycleCallback | None = None) -> None:
+        self._hooks = tuple(hooks)
+        self._notify = notify
+
+    def before_validate_metadata(self, context: OperationContext) -> None:
+        """Dispatch ``before_validate_metadata`` hooks."""
+        self._dispatch_context_method(HOOK_PHASES["before_validate_metadata"], context)
+
+    def after_validate_metadata(self, context: OperationContext, report: ValidationReport) -> None:
+        """Dispatch ``after_validate_metadata`` hooks."""
+
+        def invoke(_hook: object, method: _HookMethod) -> None:
+            method(context, report)
+
+        self._dispatch(HOOK_PHASES["after_validate_metadata"], context, invoke)
+
+    def resolve_artifact_locator(self, context: OperationContext) -> None:
+        """Dispatch ``resolve_artifact_locator`` hooks."""
+        self._dispatch_context_method(HOOK_PHASES["resolve_artifact_locator"], context)
+
+    def before_record_write(self, context: OperationContext) -> None:
+        """Dispatch ``before_record_write`` hooks."""
+        self._dispatch_context_method(HOOK_PHASES["before_record_write"], context)
+
+    def after_record_write(self, context: OperationContext) -> None:
+        """Dispatch ``after_record_write`` hooks."""
+        self._dispatch_context_method(HOOK_PHASES["after_record_write"], context)
+
+    def extract_metadata(self, context: OperationContext) -> None:
+        """Dispatch metadata extraction hooks and merge returned metadata."""
+
+        def invoke(_hook: object, method: _HookMethod) -> None:
+            extracted = method(context)
+            if extracted is not None:
+                context.derived_metadata.update(cast(MetadataDict, extracted))
+
+        self._dispatch(HOOK_PHASES["extract_metadata"], context, invoke)
+
+    def before_commit(self, context: OperationContext) -> None:
+        """Dispatch ``before_commit`` hooks."""
+        self._dispatch_context_method(HOOK_PHASES["before_commit"], context)
+
+    def after_commit(self, context: OperationContext) -> None:
+        """Dispatch ``after_commit`` hooks without failing committed work."""
+
+        def invoke(hook: object, method: _HookMethod) -> None:
+            try:
+                method(context)
+            except Exception as exc:
+                warning = HookWarning(
+                    hook_name=type(hook).__name__,
+                    message=f"after_commit hook failed: {type(exc).__name__}: {exc}",
+                    code="hook.after_commit_failed",
+                )
+                context.add_warning(warning)
+                warnings.warn(
+                    f"{warning.hook_name}: {warning.message}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+
+        self._dispatch(HOOK_PHASES["after_commit"], context, invoke)
+
+    def on_error(self, context: OperationContext, error: BaseException) -> None:
+        """Dispatch error hooks, preserving the original operation failure."""
+
+        def invoke(_hook: object, method: _HookMethod) -> None:
+            try:
+                method(context, error)
+            except Exception as exc:
+                error.add_note(f"error hook failed: {type(exc).__name__}: {exc}")
+
+        self._dispatch(HOOK_PHASES["on_error"], context, invoke)
+
+    def on_rollback(self, context: OperationContext, error: BaseException) -> None:
+        """Dispatch rollback hooks, preserving the original operation failure."""
+
+        def invoke(_hook: object, method: _HookMethod) -> None:
+            try:
+                method(context, error)
+            except Exception as exc:
+                error.add_note(f"rollback hook failed: {type(exc).__name__}: {exc}")
+
+        self._dispatch(HOOK_PHASES["on_rollback"], context, invoke)
+
+    def _dispatch(
+        self,
+        phase: HookPhase,
+        context: OperationContext,
+        invoke: Callable[[object, _HookMethod], None],
+    ) -> None:
+        """Dispatch one phase and emit lifecycle events."""
+        matching_hooks = self._matching_hooks(phase)
+        hook_count = len(matching_hooks)
+        if hook_count == 0:
+            return
+
+        self._notify_event(
+            HookLifecycleEvent(
+                phase=phase,
+                stage="started",
+                context=context,
+                hook_count=hook_count,
+            )
+        )
+        warning_count_before = len(context.warnings)
+        try:
+            for hook, method in matching_hooks:
+                invoke(hook, method)
+        except Exception as exc:
+            self._notify_event(
+                HookLifecycleEvent(
+                    phase=phase,
+                    stage="failed",
+                    context=context,
+                    hook_count=hook_count,
+                    warnings_added=len(context.warnings) - warning_count_before,
+                    error=exc,
+                )
+            )
+            raise
+
+        self._notify_event(
+            HookLifecycleEvent(
+                phase=phase,
+                stage="completed",
+                context=context,
+                hook_count=hook_count,
+                warnings_added=len(context.warnings) - warning_count_before,
+            )
+        )
+
+    def _dispatch_context_method(self, phase: HookPhase, context: OperationContext) -> None:
+        """Dispatch a phase whose hook methods only accept a context."""
+
+        def invoke(_hook: object, method: _HookMethod) -> None:
+            method(context)
+
+        self._dispatch(phase, context, invoke)
+
+    def _matching_hooks(self, phase: HookPhase) -> tuple[tuple[object, _HookMethod], ...]:
+        """Return registered hooks that implement a lifecycle phase."""
+        hooks: list[tuple[object, _HookMethod]] = []
+        for hook in self._hooks:
+            method = getattr(hook, phase.name, None)
+            if callable(method):
+                hooks.append((hook, method))
+        return tuple(hooks)
+
+    def _notify_event(self, event: HookLifecycleEvent) -> None:
+        """Notify one lifecycle event without failing hook dispatch."""
+        if self._notify is None:
+            return
+        try:
+            self._notify(event)
+        except Exception as exc:
+            warnings.warn(
+                f"hook lifecycle callback failed: {type(exc).__name__}: {exc}",
+                RuntimeWarning,
+                stacklevel=3,
+            )
+
+
 class HookManager:
-    """Deterministic dispatcher for registered catalog hooks."""
+    """Long-lived registry for catalog hooks."""
 
     def __init__(self, hooks: Iterable[object] = ()) -> None:
         self._hooks = list(hooks)
@@ -373,86 +588,49 @@ class HookManager:
         self._hooks.append(hook)
         return hook
 
+    def dispatcher(self, notify: HookLifecycleCallback | None = None) -> HookDispatcher:
+        """Return an operation-scoped hook dispatcher."""
+        return HookDispatcher(self._hooks, notify=notify)
+
     def before_validate_metadata(self, context: OperationContext) -> None:
         """Dispatch ``before_validate_metadata`` hooks."""
-        for hook in self._hooks:
-            if isinstance(hook, BeforeValidateMetadataHook):
-                hook.before_validate_metadata(context)
+        self.dispatcher().before_validate_metadata(context)
 
     def after_validate_metadata(self, context: OperationContext, report: ValidationReport) -> None:
         """Dispatch ``after_validate_metadata`` hooks."""
-        for hook in self._hooks:
-            if isinstance(hook, AfterValidateMetadataHook):
-                hook.after_validate_metadata(context, report)
+        self.dispatcher().after_validate_metadata(context, report)
 
     def resolve_artifact_locator(self, context: OperationContext) -> None:
         """Dispatch ``resolve_artifact_locator`` hooks."""
-        for hook in self._hooks:
-            if isinstance(hook, ResolveArtifactLocatorHook):
-                hook.resolve_artifact_locator(context)
+        self.dispatcher().resolve_artifact_locator(context)
 
     def before_record_write(self, context: OperationContext) -> None:
         """Dispatch ``before_record_write`` hooks."""
-        for hook in self._hooks:
-            if isinstance(hook, BeforeRecordWriteHook):
-                hook.before_record_write(context)
+        self.dispatcher().before_record_write(context)
 
     def after_record_write(self, context: OperationContext) -> None:
         """Dispatch ``after_record_write`` hooks."""
-        for hook in self._hooks:
-            if isinstance(hook, AfterRecordWriteHook):
-                hook.after_record_write(context)
+        self.dispatcher().after_record_write(context)
 
     def extract_metadata(self, context: OperationContext) -> None:
         """Dispatch metadata extraction hooks and merge returned metadata."""
-        for hook in self._hooks:
-            if isinstance(hook, ExtractMetadataHook):
-                extracted = hook.extract_metadata(context)
-                if extracted is not None:
-                    context.derived_metadata.update(extracted)
+        self.dispatcher().extract_metadata(context)
 
     def before_commit(self, context: OperationContext) -> None:
         """Dispatch ``before_commit`` hooks."""
-        for hook in self._hooks:
-            if isinstance(hook, BeforeCommitHook):
-                hook.before_commit(context)
+        self.dispatcher().before_commit(context)
 
     def after_commit(self, context: OperationContext) -> None:
         """Dispatch ``after_commit`` hooks without failing committed work."""
-        for hook in self._hooks:
-            if isinstance(hook, AfterCommitHook):
-                try:
-                    hook.after_commit(context)
-                except Exception as exc:
-                    warning = HookWarning(
-                        hook_name=type(hook).__name__,
-                        message=f"after_commit hook failed: {type(exc).__name__}: {exc}",
-                        code="hook.after_commit_failed",
-                    )
-                    context.add_warning(warning)
-                    warnings.warn(
-                        f"{warning.hook_name}: {warning.message}",
-                        RuntimeWarning,
-                        stacklevel=2,
-                    )
+        self.dispatcher().after_commit(context)
 
     def on_error(self, context: OperationContext, error: BaseException) -> None:
         """Dispatch error hooks, preserving the original operation failure."""
-        for hook in self._hooks:
-            if isinstance(hook, ErrorHook):
-                try:
-                    hook.on_error(context, error)
-                except Exception as exc:
-                    error.add_note(f"error hook failed: {type(exc).__name__}: {exc}")
+        self.dispatcher().on_error(context, error)
 
     def on_rollback(self, context: OperationContext, error: BaseException) -> None:
         """Dispatch rollback hooks, preserving the original operation failure."""
-        for hook in self._hooks:
-            if isinstance(hook, RollbackHook):
-                try:
-                    hook.on_rollback(context, error)
-                except Exception as exc:
-                    error.add_note(f"rollback hook failed: {type(exc).__name__}: {exc}")
+        self.dispatcher().on_rollback(context, error)
 
 
 __all__ = [
@@ -466,7 +644,13 @@ __all__ = [
     "ErrorHook",
     "ExtractMetadataHook",
     "HOOK_METHOD_NAMES",
+    "HOOK_PHASES",
+    "HookDispatcher",
+    "HookLifecycleCallback",
+    "HookLifecycleEvent",
+    "HookLifecycleStage",
     "HookManager",
+    "HookPhase",
     "HookWarning",
     "OperationContext",
     "OperationSource",
