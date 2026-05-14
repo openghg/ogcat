@@ -48,6 +48,38 @@ def test_successful_add_writes_structured_audit_events(tmp_path: Path) -> None:
     assert (catalog.root / AUDIT_LOG_RELATIVE_PATH).exists()
 
 
+def test_registered_hook_phases_emit_formal_audit_events(tmp_path: Path) -> None:
+    """Hook audit events should describe the method and phase consistently."""
+
+    class AuditedHook:
+        def before_validate_metadata(self, context: OperationContext) -> None:
+            context.user_metadata["hooked"] = True
+
+        def before_commit(self, context: OperationContext) -> None:
+            context.add_warning("commit hook warning", hook_name="AuditedHook")
+
+    catalog = Catalog.create(
+        tmp_path / "catalog",
+        CatalogSpec(catalog_name="files"),
+        hooks=[AuditedHook()],
+    )
+
+    catalog.add_file(_source_file(tmp_path))
+
+    hook_events = [event for event in catalog.audit_events(event_type="hook")]
+    hook_methods_and_phases = [
+        (event.details["hook_method"], event.details["hook_phase"], event.level) for event in hook_events
+    ]
+    assert hook_methods_and_phases == [
+        ("before_validate_metadata", "started", "info"),
+        ("before_validate_metadata", "completed", "info"),
+        ("before_commit", "started", "info"),
+        ("before_commit", "completed", "warning"),
+    ]
+    assert all(event.details["hook_count"] == 1 for event in hook_events)
+    assert hook_events[-1].details["warnings_added"] == 1
+
+
 def test_failed_add_writes_failure_and_rollback_events(tmp_path: Path) -> None:
     """A failed add should log the failure, rollback, and operation id."""
 
@@ -75,6 +107,11 @@ def test_failed_add_writes_failure_and_rollback_events(tmp_path: Path) -> None:
     failure = next(event for event in events if event.event_type == "failure")
     assert failure.exception_type == "RuntimeError"
     assert failure.details["phase"] == "before_record_write"
+    hook_failure = next(
+        event for event in events if event.event_type == "hook" and event.details["hook_phase"] == "failed"
+    )
+    assert hook_failure.details["hook_method"] == "before_record_write"
+    assert hook_failure.exception_type == "RuntimeError"
     rollback_events = [event for event in events if event.event_type == "rollback"]
     assert rollback_events[-1].message == "Rollback completed."
     assert catalog.repository.all() == []

@@ -50,6 +50,7 @@ searching records.
    architecture
    roadmap
    ideas
+   adr/index
    design-note-record-schemas
    design-note-artifact-locators
    design-note-hooks-plugins

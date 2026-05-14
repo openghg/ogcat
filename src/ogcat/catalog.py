@@ -58,6 +58,67 @@ HookInput = HookManager | Iterable[object] | None
 MetadataUpdateMode = Literal["replace", "shallow_merge"]
 
 
+@dataclass(frozen=True, slots=True)
+class _HookAuditPhase:
+    """Audit metadata for one hook dispatch phase."""
+
+    phase: str
+    method_name: str
+    label: str
+
+
+_BEFORE_VALIDATE_METADATA_HOOKS = _HookAuditPhase(
+    phase="before_validate_metadata",
+    method_name="before_validate_metadata",
+    label="before-validate metadata",
+)
+_AFTER_VALIDATE_METADATA_HOOKS = _HookAuditPhase(
+    phase="after_validate_metadata",
+    method_name="after_validate_metadata",
+    label="after-validate metadata",
+)
+_RESOLVE_ARTIFACT_LOCATOR_HOOKS = _HookAuditPhase(
+    phase="resolve_artifact_locator",
+    method_name="resolve_artifact_locator",
+    label="artifact locator resolution",
+)
+_EXTRACT_METADATA_HOOKS = _HookAuditPhase(
+    phase="extract_metadata",
+    method_name="extract_metadata",
+    label="metadata extraction",
+)
+_BEFORE_RECORD_WRITE_HOOKS = _HookAuditPhase(
+    phase="before_record_write",
+    method_name="before_record_write",
+    label="before-record-write",
+)
+_AFTER_RECORD_WRITE_HOOKS = _HookAuditPhase(
+    phase="after_record_write",
+    method_name="after_record_write",
+    label="after-record-write",
+)
+_BEFORE_COMMIT_HOOKS = _HookAuditPhase(
+    phase="before_commit",
+    method_name="before_commit",
+    label="before-commit",
+)
+_AFTER_COMMIT_HOOKS = _HookAuditPhase(
+    phase="after_commit",
+    method_name="after_commit",
+    label="after-commit",
+)
+_ON_ERROR_HOOKS = _HookAuditPhase(
+    phase="on_error",
+    method_name="on_error",
+    label="operation error",
+)
+_ON_ROLLBACK_HOOKS = _HookAuditPhase(
+    phase="on_rollback",
+    method_name="on_rollback",
+    label="operation rollback",
+)
+
+
 @dataclass(slots=True)
 class Catalog:
     """User-facing API bound to one catalog root.
@@ -1269,6 +1330,60 @@ class Catalog:
             )
         self._emit_audit(event)
 
+    def _run_hook_audit_phase(
+        self,
+        context: OperationContext,
+        phase: _HookAuditPhase,
+        callback: Callable[[], None],
+    ) -> None:
+        """Run one hook phase and emit structured audit events when hooks exist."""
+        hook_count = _hook_count(self.hook_manager, phase.method_name)
+        if hook_count == 0:
+            callback()
+            return
+
+        base_details = {
+            "phase": phase.phase,
+            "hook_method": phase.method_name,
+            "hook_count": hook_count,
+        }
+        self._emit_operation_audit(
+            context,
+            event_type="hook",
+            message=f"{phase.label} hooks started.",
+            details={**base_details, "hook_phase": "started"},
+        )
+        warning_count_before = len(context.warnings)
+        try:
+            callback()
+        except Exception as exc:
+            self._emit_operation_audit(
+                context,
+                event_type="hook",
+                level="error",
+                message=f"{phase.label} hooks failed.",
+                details={**base_details, "hook_phase": "failed"},
+                exception=exc,
+            )
+            raise
+
+        warnings_added = len(context.warnings) - warning_count_before
+        self._emit_operation_audit(
+            context,
+            event_type="hook",
+            level="warning" if warnings_added else "info",
+            message=(
+                f"{phase.label} hooks completed with warnings."
+                if warnings_added
+                else f"{phase.label} hooks completed."
+            ),
+            details={
+                **base_details,
+                "hook_phase": "completed",
+                "warnings_added": warnings_added,
+            },
+        )
+
     def _run_add_operation(
         self,
         *,
@@ -1307,7 +1422,7 @@ class Catalog:
             original_filename=original_filename,
             suffixes=[] if suffixes is None else list(suffixes),
         )
-        audit_phase = "operation-started"
+        current_phase = "operation-started"
         self._emit_operation_audit(
             hook_context,
             event_type="operation-started",
@@ -1315,9 +1430,13 @@ class Catalog:
             details={"caller_owned_transaction": not commit},
         )
         try:
-            audit_phase = "before_validate_metadata"
-            self.hook_manager.before_validate_metadata(hook_context)
-            audit_phase = "validation"
+            current_phase = _BEFORE_VALIDATE_METADATA_HOOKS.phase
+            self._run_hook_audit_phase(
+                hook_context,
+                _BEFORE_VALIDATE_METADATA_HOOKS,
+                lambda: self.hook_manager.before_validate_metadata(hook_context),
+            )
+            current_phase = "validation"
             hook_context.user_metadata = _normalize_metadata_for_schema(
                 hook_context.user_metadata,
                 schema_name=self._schema_name(schema_record_type),
@@ -1327,7 +1446,12 @@ class Catalog:
                 metadata=hook_context.user_metadata,
                 record_type=schema_record_type,
             )
-            self.hook_manager.after_validate_metadata(hook_context, validation_report)
+            current_phase = _AFTER_VALIDATE_METADATA_HOOKS.phase
+            self._run_hook_audit_phase(
+                hook_context,
+                _AFTER_VALIDATE_METADATA_HOOKS,
+                lambda: self.hook_manager.after_validate_metadata(hook_context, validation_report),
+            )
             self._emit_operation_audit(
                 hook_context,
                 event_type="validation",
@@ -1336,12 +1460,17 @@ class Catalog:
                 details=_validation_audit_details(validation_report),
             )
             validation_report.raise_for_errors()
-            audit_phase = "locator-resolution"
+            current_phase = "locator-factory"
             hook_context.planned_locators = [locator_factory(hook_context)]
-            self.hook_manager.resolve_artifact_locator(hook_context)
+            current_phase = _RESOLVE_ARTIFACT_LOCATOR_HOOKS.phase
+            self._run_hook_audit_phase(
+                hook_context,
+                _RESOLVE_ARTIFACT_LOCATOR_HOOKS,
+                lambda: self.hook_manager.resolve_artifact_locator(hook_context),
+            )
             canonical_locator = _artifact_locator_from_context(hook_context)
             hook_context.planned_locators[0] = canonical_locator
-            audit_phase = "storage-plan"
+            current_phase = "storage-plan"
             hook_context.storage_plan = (
                 storage_plan_factory(hook_context, canonical_locator)
                 if storage_plan_factory is not None
@@ -1385,7 +1514,7 @@ class Catalog:
                     locator=canonical_locator,
                 )
             else:
-                audit_phase = "artifact-write"
+                current_phase = "artifact-write"
                 artifact_writer.write(hook_context, hook_context.source, canonical_locator)
                 self._emit_operation_audit(
                     hook_context,
@@ -1398,17 +1527,26 @@ class Catalog:
                     },
                     locator=canonical_locator,
                 )
-            audit_phase = "metadata-extraction"
+            current_phase = "metadata-extraction"
             _add_classification_metadata(hook_context, canonical_locator)
             if derived_metadata_collector is not None:
                 derived_metadata_collector(hook_context, canonical_locator)
-            self.hook_manager.extract_metadata(hook_context)
+            current_phase = _EXTRACT_METADATA_HOOKS.phase
+            self._run_hook_audit_phase(
+                hook_context,
+                _EXTRACT_METADATA_HOOKS,
+                lambda: self.hook_manager.extract_metadata(hook_context),
+            )
             hook_context.derived_metadata = normalize_metadata(
                 hook_context.derived_metadata,
                 field_name="derived_metadata",
             )
-            audit_phase = "before_record_write"
-            self.hook_manager.before_record_write(hook_context)
+            current_phase = _BEFORE_RECORD_WRITE_HOOKS.phase
+            self._run_hook_audit_phase(
+                hook_context,
+                _BEFORE_RECORD_WRITE_HOOKS,
+                lambda: self.hook_manager.before_record_write(hook_context),
+            )
             hook_context.user_metadata = _normalize_metadata_for_schema(
                 hook_context.user_metadata,
                 schema_name=self._schema_name(schema_record_type),
@@ -1429,7 +1567,7 @@ class Catalog:
                 naming_metadata=naming_metadata,
                 time_added=time_added,
             )
-            audit_phase = "record-write"
+            current_phase = "record-write"
             persisted = transaction.insert_staged_record(record)
             hook_context.record_id = _require_record_id(persisted)
             self._emit_operation_audit(
@@ -1439,12 +1577,20 @@ class Catalog:
                 details={"write_phase": "record-write", "transaction_state": transaction.state.value},
                 locator=canonical_locator,
             )
-            audit_phase = "after_record_write"
-            self.hook_manager.after_record_write(hook_context)
+            current_phase = _AFTER_RECORD_WRITE_HOOKS.phase
+            self._run_hook_audit_phase(
+                hook_context,
+                _AFTER_RECORD_WRITE_HOOKS,
+                lambda: self.hook_manager.after_record_write(hook_context),
+            )
             if commit:
-                audit_phase = "before_commit"
-                self.hook_manager.before_commit(hook_context)
-                audit_phase = "commit"
+                current_phase = _BEFORE_COMMIT_HOOKS.phase
+                self._run_hook_audit_phase(
+                    hook_context,
+                    _BEFORE_COMMIT_HOOKS,
+                    lambda: self.hook_manager.before_commit(hook_context),
+                )
+                current_phase = "commit"
                 transaction.commit()
                 self._emit_operation_audit(
                     hook_context,
@@ -1455,18 +1601,26 @@ class Catalog:
                 )
                 # After-commit hooks are best-effort: failures warn, but cannot
                 # turn an already-persisted record into an apparent API failure.
-                audit_phase = "after_commit"
-                self.hook_manager.after_commit(hook_context)
+                current_phase = _AFTER_COMMIT_HOOKS.phase
+                self._run_hook_audit_phase(
+                    hook_context,
+                    _AFTER_COMMIT_HOOKS,
+                    lambda: self.hook_manager.after_commit(hook_context),
+                )
             return persisted
         except Exception as exc:
             add_operation_note(exc, hook_context.operation_id)
-            self.hook_manager.on_error(hook_context, exc)
+            self._run_hook_audit_phase(
+                hook_context,
+                _ON_ERROR_HOOKS,
+                lambda error=exc: self.hook_manager.on_error(hook_context, error),
+            )
             self._emit_operation_audit(
                 hook_context,
                 event_type="failure",
                 message=f"{operation_type} operation failed.",
                 details={
-                    "phase": audit_phase,
+                    "phase": current_phase,
                     "transaction_state": transaction.state.value,
                     "caller_owned_transaction": not commit,
                 },
@@ -1482,7 +1636,11 @@ class Catalog:
                     details={"rollback_phase": "started", "transaction_state": transaction.state.value},
                 )
                 transaction.rollback(original_exception=exc)
-                self.hook_manager.on_rollback(hook_context, exc)
+                self._run_hook_audit_phase(
+                    hook_context,
+                    _ON_ROLLBACK_HOOKS,
+                    lambda error=exc: self.hook_manager.on_rollback(hook_context, error),
+                )
                 if transaction.rollback_errors:
                     rollback_details: dict[str, object] = {
                         "rollback_phase": "failed",
@@ -2034,6 +2192,11 @@ def _operation_audit_details(context: OperationContext) -> dict[str, object]:
         "suffixes": list(context.suffixes),
         "hook_warning_count": len(context.warnings),
     }
+
+
+def _hook_count(hook_manager: HookManager, method_name: str) -> int:
+    """Return the number of registered hooks with a callable lifecycle method."""
+    return sum(1 for hook in hook_manager.hooks if callable(getattr(hook, method_name, None)))
 
 
 def _audit_locator(locator: ArtifactLocator | None) -> MetadataDict | None:
