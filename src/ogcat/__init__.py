@@ -1,5 +1,6 @@
 """Public package interface for ogcat."""
 
+from ogcat.audit import AuditEvent, AuditSink, JsonlAuditSink, read_audit_events
 from ogcat.catalog import Catalog
 from ogcat.classification import classify_artifact
 from ogcat.hooks import ArtifactWriter, HookManager, HookWarning, OperationContext, OperationSource
@@ -46,6 +47,8 @@ from ogcat.writers import (
 __all__ = [
     "ArtifactLocator",
     "ArtifactWriter",
+    "AuditEvent",
+    "AuditSink",
     "Catalog",
     "CatalogRecord",
     "CatalogRecordSet",
@@ -56,6 +59,7 @@ __all__ = [
     "FunctionArtifactWriter",
     "HookManager",
     "HookWarning",
+    "JsonlAuditSink",
     "LocalStorageAdapter",
     "MetadataFieldDescription",
     "MoveArtifactWriter",
@@ -79,6 +83,7 @@ __all__ = [
     "validate_record",
     "validate_schema",
     "validate_spec",
+    "read_audit_events",
     "memory_source",
     "memory_writer",
     "path_source",

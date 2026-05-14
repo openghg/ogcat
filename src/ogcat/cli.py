@@ -14,6 +14,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from ogcat.audit import exception_operation_id
 from ogcat.catalog import Catalog
 from ogcat.models import CatalogRecord
 from ogcat.record_set import CatalogRecordSet
@@ -36,6 +37,15 @@ def _fail(message: str, *, code: int = 1) -> NoReturn:
     """Print a consistent error message and exit."""
     error_console.print(f"Error: {message}")
     raise typer.Exit(code=code)
+
+
+def _format_exception_message(exc: Exception) -> str:
+    """Return a CLI error message with operation id context when available."""
+    message = str(exc)
+    operation_id = exception_operation_id(exc)
+    if operation_id is None:
+        return message
+    return f"{message} (operation_id: {operation_id})"
 
 
 def _resolve_catalog_path(catalog: Path | None) -> Path:
@@ -339,9 +349,79 @@ def add_command(
             operation=operation,
             record_type=record_type,
         )
-    except ValueError as exc:
-        _fail(str(exc))
+    except Exception as exc:
+        _fail(_format_exception_message(exc))
     console.print(f"Added {record.id}: {record.stored_abspath}")
+
+
+@app.command()
+def logs(
+    catalog: Annotated[Path | None, typer.Option("--catalog", help="Catalog root.")] = None,
+    user_id: Annotated[
+        str | None,
+        typer.Option("--user", help="Show events for this user id."),
+    ] = None,
+    operation_id: Annotated[
+        str | None,
+        typer.Option("--operation", help="Show events for this operation id."),
+    ] = None,
+    record_id: Annotated[
+        str | None,
+        typer.Option("--record", help="Show events for this record id."),
+    ] = None,
+    level: Annotated[
+        str | None,
+        typer.Option("--level", help="Show events at this level."),
+    ] = None,
+    event_type: Annotated[
+        str | None,
+        typer.Option("--event-type", help="Show events with this event type."),
+    ] = None,
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", min=0, help="Show only the most recent matching events."),
+    ] = None,
+    json_mode: Annotated[
+        bool,
+        typer.Option("--json", help="Print matching audit events as JSON."),
+    ] = False,
+) -> None:
+    """Show catalog audit events."""
+    active_catalog = _open_catalog_or_fail(catalog)
+    events = active_catalog.audit_events(
+        user_id=user_id,
+        operation_id=operation_id,
+        record_id=record_id,
+        level=level,
+        event_type=event_type,
+        limit=limit,
+    )
+
+    if json_mode:
+        _print_json([event.to_dict() for event in events])
+        return
+
+    if not events:
+        console.print("No audit events matched.")
+        return
+
+    table = Table(title="ogcat audit events")
+    table.add_column("timestamp", overflow="fold")
+    table.add_column("level")
+    table.add_column("event")
+    table.add_column("operation")
+    table.add_column("record")
+    table.add_column("message", overflow="fold")
+    for event in events:
+        table.add_row(
+            event.timestamp_utc,
+            event.level,
+            event.event_type,
+            event.operation_id,
+            event.record_id or "",
+            event.message,
+        )
+    console.print(table)
 
 
 @app.command(

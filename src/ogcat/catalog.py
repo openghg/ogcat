@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import getpass
 import importlib.util
+import os
+import warnings
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
@@ -11,6 +14,12 @@ from pathlib import Path
 from typing import Any, Literal, cast, overload
 from uuid import uuid4
 
+from ogcat.audit import (
+    AuditEvent,
+    AuditSink,
+    JsonlAuditSink,
+    add_operation_note,
+)
 from ogcat.classification import CLASSIFICATION_METADATA_KEY, classify_artifact
 from ogcat.extractors import extract_derived_metadata
 from ogcat.hooks import (
@@ -36,7 +45,7 @@ from ogcat.storage import (
     plan_storage,
 )
 from ogcat.tinydb_repository import TinyDbCatalogRepository
-from ogcat.transactions import OperationState, UnitOfWork
+from ogcat.transactions import OperationState, RollbackFailure, UnitOfWork
 from ogcat.validation import ValidationReport, validate_metadata, validate_spec
 from ogcat.writers import CopyArtifactWriter, MoveArtifactWriter
 
@@ -59,12 +68,16 @@ class Catalog:
         spec: Catalog specification loaded from or written to ``catalog.json``.
         repository: Record storage backend.
         hook_manager: Dispatcher for lifecycle hooks.
+        audit_sink: Sink for structured operation audit events.
+        audit_user_id: User id recorded on audit events.
     """
 
     root: Path
     spec: CatalogSpec
     repository: CatalogRepository
     hook_manager: HookManager = field(default_factory=HookManager)
+    audit_sink: AuditSink | None = None
+    audit_user_id: str | None = None
 
     @classmethod
     def create(
@@ -74,6 +87,8 @@ class Catalog:
         *,
         plugins: PluginInput = None,
         hooks: HookInput = None,
+        audit_sink: AuditSink | None = None,
+        audit_user_id: str | None = None,
     ) -> Catalog:
         """Create a catalog directory and write its specification.
 
@@ -84,6 +99,9 @@ class Catalog:
                 used to build a hook manager.
             hooks: Optional hook manager, or iterable of hook objects. Pass
                 either ``plugins`` or ``hooks``.
+            audit_sink: Optional audit sink. Defaults to a catalog-local JSONL
+                sink under ``.ogcat/logs/events.jsonl``.
+            audit_user_id: Optional user id to record on audit events.
 
         Returns:
             Open catalog instance bound to ``root``.
@@ -103,6 +121,8 @@ class Catalog:
             spec=spec,
             repository=repository,
             hook_manager=hook_manager,
+            audit_sink=_coerce_audit_sink(root_path, audit_sink),
+            audit_user_id=_resolve_audit_user_id(audit_user_id),
         )
 
     @classmethod
@@ -112,6 +132,8 @@ class Catalog:
         *,
         plugins: PluginInput = None,
         hooks: HookInput = None,
+        audit_sink: AuditSink | None = None,
+        audit_user_id: str | None = None,
     ) -> Catalog:
         """Open an existing catalog from disk.
 
@@ -121,6 +143,9 @@ class Catalog:
                 used to build a hook manager.
             hooks: Optional hook manager, or iterable of hook objects. Pass
                 either ``plugins`` or ``hooks``.
+            audit_sink: Optional audit sink. Defaults to a catalog-local JSONL
+                sink under ``.ogcat/logs/events.jsonl``.
+            audit_user_id: Optional user id to record on audit events.
 
         Returns:
             Open catalog instance bound to ``root``.
@@ -139,6 +164,8 @@ class Catalog:
             spec=spec,
             repository=repository,
             hook_manager=hook_manager,
+            audit_sink=_coerce_audit_sink(root_path, audit_sink),
+            audit_user_id=_resolve_audit_user_id(audit_user_id),
         )
 
     def add_file(
@@ -572,6 +599,48 @@ class Catalog:
         """
         with UnitOfWork(self.repository) as transaction:
             yield transaction
+
+    def audit_events(
+        self,
+        *,
+        user_id: str | None = None,
+        operation_id: str | None = None,
+        record_id: str | None = None,
+        level: str | None = None,
+        event_type: str | None = None,
+        limit: int | None = None,
+    ) -> list[AuditEvent]:
+        """Return catalog-local audit events matching optional filters.
+
+        Args:
+            user_id: Optional user id filter.
+            operation_id: Optional operation id filter.
+            record_id: Optional record id filter.
+            level: Optional event severity filter.
+            event_type: Optional lifecycle event type filter.
+            limit: Optional number of most recent matching events to return.
+
+        Returns:
+            Matching audit events in log order.
+        """
+        sink = self.audit_sink
+        if isinstance(sink, JsonlAuditSink):
+            return sink.read_events(
+                user_id=user_id,
+                operation_id=operation_id,
+                record_id=record_id,
+                level=level,
+                event_type=event_type,
+                limit=limit,
+            )
+        return JsonlAuditSink(self.root).read_events(
+            user_id=user_id,
+            operation_id=operation_id,
+            record_id=record_id,
+            level=level,
+            event_type=event_type,
+            limit=limit,
+        )
 
     def add_artifacts(
         self,
@@ -1142,6 +1211,64 @@ class Catalog:
             ),
         )
 
+    def _emit_audit(self, event: AuditEvent) -> None:
+        """Emit an audit event without failing the catalog operation."""
+        if self.audit_sink is None:
+            return
+        try:
+            self.audit_sink.emit(event)
+        except Exception as exc:
+            warnings.warn(
+                f"audit logging failed: {type(exc).__name__}: {exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
+    def _emit_operation_audit(
+        self,
+        context: OperationContext,
+        *,
+        event_type: str,
+        level: str = "info",
+        message: str,
+        details: Mapping[str, object] | None = None,
+        exception: BaseException | None = None,
+        locator: ArtifactLocator | None = None,
+    ) -> None:
+        """Emit one audit event for an operation context."""
+        raw_event_details = _operation_audit_details(context)
+        if details is not None:
+            raw_event_details.update(details)
+        event_details = normalize_metadata(raw_event_details, field_name="audit.details")
+        locator_details = _audit_locator(locator or _first_planned_locator(context))
+        if exception is None:
+            event = AuditEvent(
+                operation_id=context.operation_id,
+                level=level,
+                event_type=event_type,
+                user_id=self.audit_user_id,
+                catalog_id=self.spec.catalog_name,
+                catalog_path=str(self.root),
+                record_id=context.record_id,
+                locator=locator_details,
+                message=message,
+                details=event_details,
+            )
+        else:
+            event = AuditEvent.from_exception(
+                operation_id=context.operation_id,
+                event_type=event_type,
+                user_id=self.audit_user_id,
+                catalog_id=self.spec.catalog_name,
+                catalog_path=str(self.root),
+                record_id=context.record_id,
+                locator=locator_details,
+                message=message,
+                details=event_details,
+                exception=exception,
+            )
+        self._emit_audit(event)
+
     def _run_add_operation(
         self,
         *,
@@ -1180,8 +1307,17 @@ class Catalog:
             original_filename=original_filename,
             suffixes=[] if suffixes is None else list(suffixes),
         )
+        audit_phase = "operation-started"
+        self._emit_operation_audit(
+            hook_context,
+            event_type="operation-started",
+            message=f"Started {operation_type} operation.",
+            details={"caller_owned_transaction": not commit},
+        )
         try:
+            audit_phase = "before_validate_metadata"
             self.hook_manager.before_validate_metadata(hook_context)
+            audit_phase = "validation"
             hook_context.user_metadata = _normalize_metadata_for_schema(
                 hook_context.user_metadata,
                 schema_name=self._schema_name(schema_record_type),
@@ -1192,11 +1328,20 @@ class Catalog:
                 record_type=schema_record_type,
             )
             self.hook_manager.after_validate_metadata(hook_context, validation_report)
+            self._emit_operation_audit(
+                hook_context,
+                event_type="validation",
+                level=_validation_audit_level(validation_report),
+                message=_validation_audit_message(validation_report),
+                details=_validation_audit_details(validation_report),
+            )
             validation_report.raise_for_errors()
+            audit_phase = "locator-resolution"
             hook_context.planned_locators = [locator_factory(hook_context)]
             self.hook_manager.resolve_artifact_locator(hook_context)
             canonical_locator = _artifact_locator_from_context(hook_context)
             hook_context.planned_locators[0] = canonical_locator
+            audit_phase = "storage-plan"
             hook_context.storage_plan = (
                 storage_plan_factory(hook_context, canonical_locator)
                 if storage_plan_factory is not None
@@ -1214,6 +1359,16 @@ class Catalog:
             storage_plan = hook_context.storage_plan
             if storage_plan is None:
                 raise RuntimeError("Add operation did not produce a storage plan.")
+            self._emit_operation_audit(
+                hook_context,
+                event_type="write",
+                message="Storage plan prepared.",
+                details={
+                    "write_phase": "storage-plan",
+                    "storage_plan": _storage_plan_audit_details(storage_plan),
+                },
+                locator=canonical_locator,
+            )
             if naming_metadata is not None:
                 naming_metadata.update(_naming_metadata_from_storage_plan(storage_plan))
             if artifact_writer is None:
@@ -1222,8 +1377,28 @@ class Catalog:
                         f"Storage plan with write mode {storage_plan.write_mode!r} "
                         "requires an artifact_writer."
                     )
+                self._emit_operation_audit(
+                    hook_context,
+                    event_type="write",
+                    message="Artifact write skipped for reference operation.",
+                    details={"write_phase": "artifact-write", "write_mode": storage_plan.write_mode},
+                    locator=canonical_locator,
+                )
             else:
+                audit_phase = "artifact-write"
                 artifact_writer.write(hook_context, hook_context.source, canonical_locator)
+                self._emit_operation_audit(
+                    hook_context,
+                    event_type="write",
+                    message="Artifact write completed.",
+                    details={
+                        "write_phase": "artifact-write",
+                        "writer_type": type(artifact_writer).__name__,
+                        "write_mode": storage_plan.write_mode,
+                    },
+                    locator=canonical_locator,
+                )
+            audit_phase = "metadata-extraction"
             _add_classification_metadata(hook_context, canonical_locator)
             if derived_metadata_collector is not None:
                 derived_metadata_collector(hook_context, canonical_locator)
@@ -1232,6 +1407,7 @@ class Catalog:
                 hook_context.derived_metadata,
                 field_name="derived_metadata",
             )
+            audit_phase = "before_record_write"
             self.hook_manager.before_record_write(hook_context)
             hook_context.user_metadata = _normalize_metadata_for_schema(
                 hook_context.user_metadata,
@@ -1253,22 +1429,84 @@ class Catalog:
                 naming_metadata=naming_metadata,
                 time_added=time_added,
             )
+            audit_phase = "record-write"
             persisted = transaction.insert_staged_record(record)
+            hook_context.record_id = _require_record_id(persisted)
+            self._emit_operation_audit(
+                hook_context,
+                event_type="write",
+                message="Record staged.",
+                details={"write_phase": "record-write", "transaction_state": transaction.state.value},
+                locator=canonical_locator,
+            )
+            audit_phase = "after_record_write"
             self.hook_manager.after_record_write(hook_context)
             if commit:
+                audit_phase = "before_commit"
                 self.hook_manager.before_commit(hook_context)
+                audit_phase = "commit"
                 transaction.commit()
+                self._emit_operation_audit(
+                    hook_context,
+                    event_type="commit",
+                    message="Commit succeeded.",
+                    details={"transaction_state": transaction.state.value},
+                    locator=canonical_locator,
+                )
                 # After-commit hooks are best-effort: failures warn, but cannot
                 # turn an already-persisted record into an apparent API failure.
+                audit_phase = "after_commit"
                 self.hook_manager.after_commit(hook_context)
             return persisted
         except Exception as exc:
+            add_operation_note(exc, hook_context.operation_id)
             self.hook_manager.on_error(hook_context, exc)
+            self._emit_operation_audit(
+                hook_context,
+                event_type="failure",
+                message=f"{operation_type} operation failed.",
+                details={
+                    "phase": audit_phase,
+                    "transaction_state": transaction.state.value,
+                    "caller_owned_transaction": not commit,
+                },
+                exception=exc,
+            )
             # Caller-supplied transactions stay caller-owned. Internal
             # transactions commit=True and roll back here before re-raising.
             if commit and transaction.state is not OperationState.COMMITTED:
+                self._emit_operation_audit(
+                    hook_context,
+                    event_type="rollback",
+                    message="Rollback started.",
+                    details={"rollback_phase": "started", "transaction_state": transaction.state.value},
+                )
                 transaction.rollback(original_exception=exc)
                 self.hook_manager.on_rollback(hook_context, exc)
+                if transaction.rollback_errors:
+                    rollback_details: dict[str, object] = {
+                        "rollback_phase": "failed",
+                        "transaction_state": transaction.state.value,
+                        "rollback_errors": _rollback_errors_audit_details(transaction.rollback_errors),
+                    }
+                    self._emit_operation_audit(
+                        hook_context,
+                        event_type="rollback",
+                        level="error",
+                        message="Rollback completed with failures.",
+                        details=rollback_details,
+                        exception=transaction.rollback_errors[0].exception,
+                    )
+                else:
+                    self._emit_operation_audit(
+                        hook_context,
+                        event_type="rollback",
+                        message="Rollback completed.",
+                        details={
+                            "rollback_phase": "completed",
+                            "transaction_state": transaction.state.value,
+                        },
+                    )
             raise
 
     def _select_schema(self, record_type: str | None, *, require_known: bool) -> RecordSchema:
@@ -1419,6 +1657,27 @@ def _open_repository(root: Path, spec: CatalogSpec) -> CatalogRepository:
     if spec.db_backend != "tinydb":
         raise ValueError(f"Unsupported db_backend: {spec.db_backend}")
     return TinyDbCatalogRepository(root / spec.db_path)
+
+
+def _coerce_audit_sink(root: Path, audit_sink: AuditSink | None) -> AuditSink:
+    """Return an audit sink for a catalog root."""
+    if audit_sink is not None:
+        return audit_sink
+    return JsonlAuditSink(root)
+
+
+def _resolve_audit_user_id(audit_user_id: str | None) -> str | None:
+    """Resolve the audit user id from explicit input, environment, or OS user."""
+    if audit_user_id is not None:
+        return str(audit_user_id)
+    for env_name in ("OGCAT_USER_ID", "OGCAT_USER"):
+        env_value = os.environ.get(env_name)
+        if env_value:
+            return env_value
+    try:
+        return getpass.getuser()
+    except OSError:
+        return None
 
 
 def _coerce_hook_manager(
@@ -1751,6 +2010,110 @@ def _validate_artifact_batch_item(item: object, index: int) -> dict[str, object]
         raise ValueError(f"artifact batch item {index} must not supply {forbidden}")
 
     return item
+
+
+def _operation_audit_details(context: OperationContext) -> dict[str, object]:
+    """Return sanitized operation context details for audit events."""
+    source = context.source
+    return {
+        "operation_type": context.operation_type,
+        "record_type": context.record_type,
+        "storage_mode": context.storage_mode,
+        "record_id": context.record_id,
+        "metadata_keys": sorted(context.user_metadata),
+        "derived_metadata_keys": sorted(context.derived_metadata),
+        "source": {
+            "kind": source.kind,
+            "path": None if source.path is None else str(source.path),
+            "descriptor": source.descriptor,
+            "metadata_keys": sorted(source.metadata),
+            "payload_present": source.payload is not None,
+        },
+        "original_path": None if context.original_path is None else str(context.original_path),
+        "original_filename": context.original_filename,
+        "suffixes": list(context.suffixes),
+        "hook_warning_count": len(context.warnings),
+    }
+
+
+def _audit_locator(locator: ArtifactLocator | None) -> MetadataDict | None:
+    """Return a JSON-compatible locator summary for audit events."""
+    if locator is None:
+        return None
+    return normalize_metadata(locator.to_dict(), field_name="locator")
+
+
+def _first_planned_locator(context: OperationContext) -> ArtifactLocator | None:
+    """Return the first planned locator when one exists."""
+    if not context.planned_locators:
+        return None
+    return context.planned_locators[0]
+
+
+def _validation_audit_level(report: ValidationReport) -> str:
+    """Return the audit level for a validation report."""
+    if report.errors:
+        return "error"
+    if report.warnings:
+        return "warning"
+    return "info"
+
+
+def _validation_audit_message(report: ValidationReport) -> str:
+    """Return a concise validation audit message."""
+    if report.errors:
+        return "Metadata validation failed."
+    if report.warnings:
+        return "Metadata validation completed with warnings."
+    return "Metadata validation succeeded."
+
+
+def _validation_audit_details(report: ValidationReport) -> dict[str, object]:
+    """Return validation issue summaries for audit events."""
+    return {
+        "validation": {
+            "error_count": len(report.errors),
+            "warning_count": len(report.warnings),
+            "issues": [
+                {
+                    "path": issue.path,
+                    "message": issue.message,
+                    "severity": issue.severity,
+                    "code": issue.code,
+                    "hint": issue.hint,
+                }
+                for issue in report.issues
+            ],
+        }
+    }
+
+
+def _storage_plan_audit_details(plan: StoragePlan) -> dict[str, object]:
+    """Return storage plan details that are safe for audit logging."""
+    return {
+        "target_kind": plan.target_kind,
+        "write_mode": plan.write_mode,
+        "checksum": plan.checksum,
+        "ogcat_owned": plan.ogcat_owned,
+        "profile": plan.profile,
+        "adapter": plan.adapter,
+        "time_added": plan.time_added,
+        "storage_relative_path": plan.storage_relative_path,
+        "resolved_directory": plan.resolved_directory,
+        "resolved_filename": plan.resolved_filename,
+    }
+
+
+def _rollback_errors_audit_details(rollback_errors: list[RollbackFailure]) -> list[dict[str, str]]:
+    """Return rollback failure summaries for audit events."""
+    return [
+        {
+            "description": failure.description,
+            "exception_type": type(failure.exception).__name__,
+            "exception_message": str(failure.exception),
+        }
+        for failure in rollback_errors
+    ]
 
 
 def _require_record_id(record: CatalogRecord) -> str:

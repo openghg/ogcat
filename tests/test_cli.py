@@ -743,6 +743,59 @@ def test_add_accepts_json_object_metadata(tmp_path: Path) -> None:
     assert record.user_metadata == {"species": "CO2", "month": 1}
 
 
+def test_logs_json_filters_by_user(tmp_path: Path) -> None:
+    """The logs command should expose filtered structured audit events."""
+    catalog = Catalog.create(
+        tmp_path / "catalog",
+        CatalogSpec(catalog_name="fluxes"),
+        audit_user_id="cli-user",
+    )
+    source = tmp_path / "source.nc"
+    source.write_text("dummy", encoding="utf-8")
+    record = catalog.add_file(source, metadata={"species": "CO2"})
+
+    result = runner.invoke(
+        app,
+        ["logs", "--catalog", str(catalog.root), "--user", "cli-user", "--json"],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(strip_ansi(result.stdout))
+    assert {event["user_id"] for event in payload} == {"cli-user"}
+    assert "operation-started" in {event["event_type"] for event in payload}
+    assert any(
+        event["event_type"] == "commit" and event["record_id"] == _record_id(record) for event in payload
+    )
+
+
+def test_add_failure_error_includes_operation_id(tmp_path: Path) -> None:
+    """CLI add failures should expose the operation id for audit correlation."""
+    catalog = Catalog.create(
+        tmp_path / "catalog",
+        CatalogSpec(
+            catalog_name="fluxes",
+            default_schema=RecordSchema(
+                metadata_fields=[
+                    MetadataFieldDescription(
+                        name="species",
+                        description="Gas species.",
+                        required=True,
+                    )
+                ]
+            ),
+        ),
+    )
+    source = tmp_path / "source.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    result = runner.invoke(app, ["add", str(source), "--catalog", str(catalog.root)])
+
+    assert result.exit_code == 1
+    stderr = strip_ansi(result.stderr)
+    assert "Missing required metadata for schema default: species" in stderr
+    assert "operation_id:" in stderr
+
+
 def test_show_missing_record_returns_helpful_error(tmp_path: Path) -> None:
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
 

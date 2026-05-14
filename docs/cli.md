@@ -20,6 +20,31 @@ Ingest a file into a catalog.
 ogcat add <file> --catalog <root> [--meta KEY=VALUE ...] [--operation copy|move]
 ```
 
+If an add operation fails after an operation id has been created, the error
+message includes ``operation_id: ...`` so it can be correlated with
+``ogcat logs --operation``.
+
+### ``ogcat logs``
+
+Inspect catalog-local audit events.
+
+```
+ogcat logs --catalog <root> [--user USER] [--operation OPERATION_ID] [--record RECORD_ID] [--level LEVEL] [--event-type TYPE] [--limit N] [--json]
+```
+
+Audit events are stored as JSON Lines under
+``<catalog-root>/.ogcat/logs/events.jsonl``. Use ``--json`` for full structured
+events, or omit it for a compact table with timestamp, level, event type,
+operation id, record id, and message.
+
+Examples:
+
+```bash
+ogcat logs --catalog <root> --level error
+ogcat logs --catalog <root> --user alice --json
+ogcat logs --catalog <root> --operation "$operation_id"
+```
+
 ### ``ogcat search``
 
 Search catalog records.
