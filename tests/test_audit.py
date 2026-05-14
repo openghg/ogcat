@@ -77,6 +77,12 @@ def test_registered_hook_phases_emit_formal_audit_events(tmp_path: Path) -> None
         ("before_commit", "completed", "warning"),
     ]
     assert all(event.details["hook_count"] == 1 for event in hook_events)
+    assert [event.details["phase"] for event in hook_events] == [
+        "before_validate_metadata",
+        "before_validate_metadata",
+        "before_commit",
+        "before_commit",
+    ]
     assert hook_events[-1].details["warnings_added"] == 1
 
 
