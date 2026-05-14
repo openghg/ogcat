@@ -10,15 +10,16 @@ derived metadata, rollback registrar, and accumulated hook warnings.
 The design intentionally keeps hook classes lightweight. Plugin authors do not
 subclass a base class; they implement one or more protocol methods, usually with
 ``context: OperationContext`` and ``-> None`` or ``-> MetadataDict | None`` type
-hints. ``HookManager`` dispatches protocols in deterministic registration order,
-merges returned derived metadata, records non-fatal after-commit failures as
-warnings, and preserves the original exception when error or rollback hooks
+hints. ``HookManager`` stores the long-lived hook registry. Operation-scoped
+``HookDispatcher`` instances dispatch protocols in deterministic registration
+order, merge returned derived metadata, record non-fatal after-commit failures
+as warnings, and preserve the original exception when error or rollback hooks
 fail.
 
-``HOOK_METHOD_NAMES`` is the validation source of truth for ad hoc hook object
-inputs. When adding a lifecycle protocol to this module, add its method name to
-that tuple so ``Catalog.open()`` and ``Catalog.create()`` accept hooks that only
-implement the new stage.
+``_HOOK_PHASE_SEQUENCE`` defines formal hook phases, and ``HOOK_PHASES`` is the
+public mapping used during dispatch and validation. ``HOOK_METHOD_NAMES`` is
+derived from that source of truth for compatibility with existing validation
+callers.
 
 Artifact writers use the same context model. Any object satisfying
 :class:`ArtifactWriter` can materialise an :class:`ogcat.models.ArtifactLocator`
@@ -56,6 +57,7 @@ class HookPhase:
     label: str
 
 
+# Source of truth for lifecycle hook phase registration.
 _HOOK_PHASE_SEQUENCE = (
     HookPhase("before_validate_metadata", "before-validate metadata"),
     HookPhase("after_validate_metadata", "after-validate metadata"),
@@ -404,6 +406,8 @@ class ErrorHook(Protocol):
 class HookDispatcher:
     """Operation-scoped dispatcher for registered catalog hooks.
 
+    The dispatcher snapshots hooks for one operation.
+
     Args:
         hooks: Hook objects available to this operation.
         notify: Optional lifecycle callback for this operation.
@@ -576,7 +580,7 @@ class HookManager:
     """Long-lived registry for catalog hooks."""
 
     def __init__(self, hooks: Iterable[object] = ()) -> None:
-        self._hooks = list(hooks)
+        self._hooks = validate_hook_objects(hooks, label="hooks")
 
     @property
     def hooks(self) -> tuple[object, ...]:
@@ -585,8 +589,9 @@ class HookManager:
 
     def register(self, hook: object) -> object:
         """Register a hook object and return it for decorator-style usage."""
-        self._hooks.append(hook)
-        return hook
+        validated = validate_hook_objects([hook], label="hooks")
+        self._hooks.append(validated[0])
+        return validated[0]
 
     def dispatcher(self, notify: HookLifecycleCallback | None = None) -> HookDispatcher:
         """Return an operation-scoped hook dispatcher."""

@@ -130,13 +130,28 @@ def test_open_rejects_invalid_plugin_inputs_immediately(tmp_path: Path) -> None:
         Catalog.open(created.root, plugins="not plugins")  # type: ignore[arg-type]
 
 
-def test_open_rejects_non_hook_objects_in_hook_manager_immediately(tmp_path: Path) -> None:
-    """Hook managers should reject entries with no supported hook methods."""
+def test_empty_hook_manager_is_allowed() -> None:
+    """Empty hook managers should remain valid registries."""
+    manager = HookManager()
 
-    created = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+    assert manager.hooks == ()
+
+
+def test_hook_manager_constructor_rejects_non_hook_objects() -> None:
+    """Hook managers should reject constructor entries with no supported hook methods."""
 
     with pytest.raises(TypeError, match="hooks item 0 must provide at least one callable hook method"):
-        Catalog.open(created.root, hooks=HookManager([object()]))
+        HookManager([object()])
+
+
+def test_hook_manager_register_rejects_non_hook_objects() -> None:
+    """Hook managers should reject registered objects with no supported hook methods."""
+    manager = HookManager()
+
+    with pytest.raises(TypeError, match="hooks item 0 must provide at least one callable hook method"):
+        manager.register(object())
+
+    assert manager.hooks == ()
 
 
 def test_create_rejects_both_plugins_and_hooks(tmp_path: Path) -> None:

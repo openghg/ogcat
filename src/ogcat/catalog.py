@@ -69,7 +69,7 @@ class Catalog:
             managed files.
         spec: Catalog specification loaded from or written to ``catalog.json``.
         repository: Record storage backend.
-        hook_manager: Dispatcher for lifecycle hooks.
+        hook_manager: Long-lived hook registry.
         audit_sink: Sink for structured operation audit events.
         audit_user_id: User id recorded on audit events.
     """
