@@ -5,7 +5,7 @@ from __future__ import annotations
 import getpass
 import os
 import warnings
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -18,7 +18,7 @@ from ogcat.audit import (
     AuditSink,
     JsonlAuditSink,
 )
-from ogcat.extractors import extract_derived_metadata
+from ogcat.catalog_application import CatalogApplication
 from ogcat.hooks import (
     ArtifactWriter,
     HookLifecycleEvent,
@@ -33,13 +33,16 @@ from ogcat.operation_helpers import (
     artifact_locator_from_context,
     naming_metadata_from_storage_plan,
     normalize_metadata_for_schema,
-    storage_plan_with_locator,
 )
 from ogcat.operation_runner import (
     AddOperationRequest,
     AddOperationRunner,
+    ArtifactLocatorFactory,
+    DerivedMetadataCollector,
     OperationRunner,
     OperationServices,
+    RecordPostProcessor,
+    StoragePlanFactory,
 )
 from ogcat.plugins import PluginRegistry
 from ogcat.record_set import CatalogRecordSet
@@ -61,21 +64,15 @@ from ogcat.storage import (
 from ogcat.storage_planning import (
     PrimaryLocation,
     PrimaryStoragePlanningContext,
-    PrimaryStoragePlanResult,
     plan_primary_storage,
 )
 from ogcat.tinydb_repository import TinyDbCatalogRepository
 from ogcat.transactions import UnitOfWork
 from ogcat.validation import ValidationReport, validate_metadata, validate_spec
-from ogcat.writers import CopyArtifactWriter, MoveArtifactWriter
 
-ArtifactLocatorFactory = Callable[[OperationContext], ArtifactLocator]
-StoragePlanFactory = Callable[[OperationContext, ArtifactLocator], StoragePlan | None]
-DerivedMetadataCollector = Callable[[OperationContext, ArtifactLocator], None]
 PluginInput = PluginRegistry | Iterable[object] | None
 HookInput = HookManager | Iterable[object] | None
 MetadataUpdateMode = Literal["replace", "shallow_merge"]
-RecordPostProcessor = Callable[[UnitOfWork, OperationContext, CatalogRecord], CatalogRecord]
 
 
 @dataclass(slots=True)
@@ -230,109 +227,18 @@ class Catalog:
         resolved_primary_location = _coerce_primary_location(primary_location)
 
         timestamp = _utc_timestamp()
-        files_root = self.root / self.spec.files_root
-        objects_root = self.root / self.spec.objects_root
-        naming_metadata: MetadataDict = {
-            "record_schema": "default" if record_type is None else record_type,
-            "directory_template": directory_template,
-            "filename_template": filename_template,
-            "primary_location": resolved_primary_location,
-        }
-        planned_primary: PrimaryStoragePlanResult | None = None
-
-        def plan_primary(context: OperationContext) -> PrimaryStoragePlanResult:
-            """Plan the managed-file primary location for this operation."""
-            return plan_primary_storage(
-                PrimaryStoragePlanningContext(
-                    catalog_root=self.root,
-                    files_root=files_root,
-                    objects_root=objects_root,
-                    operation_id=context.operation_id,
-                    metadata=context.user_metadata,
-                    directory_template=directory_template,
-                    filename_template=filename_template,
-                    source_path=source,
-                    storage_root=None,
-                    date_added=timestamp[:10],
-                    primary_location=resolved_primary_location,
-                )
-            )
-
-        def resolve_local_file_locator(context: OperationContext) -> ArtifactLocator:
-            """Resolve the managed-file storage path for this operation."""
-            nonlocal planned_primary
-            planned_primary = plan_primary(context)
-            if resolved_primary_location == "template":
-                naming_metadata["artifact_uuid"] = context.operation_id
-            return planned_primary.locator
-
-        def plan_local_file_storage(
-            context: OperationContext,
-            locator: ArtifactLocator,
-        ) -> StoragePlan:
-            """Build the storage plan for a managed local file."""
-            primary = planned_primary or plan_primary(context)
-            artifact_uuid = context.operation_id if resolved_primary_location == "template" else None
-            return primary.to_storage_plan(
-                locator=locator,
-                target_kind="file",
-                write_mode=cast(WriteMode, chosen_operation),
-                ogcat_owned=True,
-                artifact_uuid=artifact_uuid,
-            )
-
-        def collect_file_metadata(context: OperationContext, locator: ArtifactLocator) -> None:
-            """Collect generic derived metadata from the written file."""
-            locator_path = locator.as_path()
-            if locator_path is not None:
-                context.derived_metadata.update(extract_derived_metadata(locator_path))
-
-        source_description = OperationSource(kind="local_file", path=source, descriptor=str(source))
-        artifact_writer: ArtifactWriter = (
-            CopyArtifactWriter() if chosen_operation == "copy" else MoveArtifactWriter()
+        return self._application().add_file(
+            source=source,
+            metadata=metadata,
+            schema=schema,
+            schema_record_type=record_type,
+            record_type=resolved_record_type,
+            directory_template=directory_template,
+            filename_template=filename_template,
+            operation=chosen_operation,
+            primary_location=resolved_primary_location,
+            time_added=timestamp,
         )
-        record_post_processor: RecordPostProcessor | None = None
-        if resolved_primary_location == "uuid":
-
-            def create_default_template_replica(
-                transaction: UnitOfWork,
-                context: OperationContext,
-                record: CatalogRecord,
-            ) -> CatalogRecord:
-                """Create the default template symlink replica for a UUID primary."""
-                return self._create_template_link_replica(
-                    transaction=transaction,
-                    context=context,
-                    record=record,
-                    directory_template=directory_template,
-                    filename_template=filename_template,
-                )
-
-            record_post_processor = create_default_template_replica
-
-        with self.transaction() as transaction:
-            return self._run_add_operation(
-                transaction=transaction,
-                commit=True,
-                operation_type="add_file",
-                record_type=resolved_record_type,
-                schema=schema,
-                schema_record_type=record_type,
-                metadata=metadata,
-                storage_mode=chosen_operation,
-                original_path=source,
-                original_filename=source.name,
-                suffixes=source.suffixes,
-                derived_metadata={},
-                naming_metadata=naming_metadata,
-                time_added=timestamp,
-                source=source_description,
-                locator_factory=resolve_local_file_locator,
-                storage_plan_factory=plan_local_file_storage,
-                artifact_writer=artifact_writer,
-                derived_metadata_collector=collect_file_metadata,
-                record_post_processor=record_post_processor,
-            )
 
     def plan_artifact_storage(
         self,
@@ -533,10 +439,11 @@ class Catalog:
         metadata = _coerce_metadata_input(metadata_input, schema_name=schema_name)
         validated_source = _optional_operation_source(source)
         validated_artifact_writer = _validate_artifact_writer(artifact_writer)
+        application = self._application()
         if transaction is not None:
             if transaction.repository is not self.repository:
                 raise ValueError("Transaction is bound to a different catalog repository.")
-            return self._add_artifact_in_transaction(
+            return application.add_artifact(
                 transaction=transaction,
                 commit=False,
                 record_type=record_type,
@@ -555,7 +462,7 @@ class Catalog:
                 schema=schema,
             )
         with self.transaction() as unit_of_work:
-            return self._add_artifact_in_transaction(
+            return application.add_artifact(
                 transaction=unit_of_work,
                 commit=True,
                 record_type=record_type,
@@ -1260,18 +1167,11 @@ class Catalog:
         schema: RecordSchema,
     ) -> CatalogRecord:
         """Add an artifact record within an active transaction."""
-        operation_source = source or OperationSource(
-            kind="external",
-            path=locator.as_path(),
-            descriptor=locator.value,
-        )
-        return self._run_add_operation(
+        return self._application().add_artifact(
             transaction=transaction,
             commit=commit,
-            operation_type="add_artifact",
             record_type=record_type,
-            schema=schema,
-            schema_record_type=record_type,
+            locator=locator,
             metadata=metadata,
             storage_mode=storage_mode,
             original_path=original_path,
@@ -1280,17 +1180,10 @@ class Catalog:
             derived_metadata=derived_metadata,
             naming_metadata=naming_metadata,
             time_added=time_added,
-            source=operation_source,
-            locator_factory=lambda context: locator,
+            source=source,
             artifact_writer=artifact_writer,
-            storage_plan_factory=(
-                None
-                if storage_plan is None
-                else lambda context, canonical_locator: storage_plan_with_locator(
-                    storage_plan,
-                    canonical_locator,
-                )
-            ),
+            storage_plan=storage_plan,
+            schema=schema,
         )
 
     def _emit_audit(self, event: AuditEvent) -> None:
@@ -1418,7 +1311,7 @@ class Catalog:
         record_post_processor: RecordPostProcessor | None = None,
     ) -> CatalogRecord:
         """Run the shared add operation lifecycle for file and record-only adds."""
-        request = AddOperationRequest(
+        return self._application().run_add_operation(
             transaction=transaction,
             commit=commit,
             operation_type=operation_type,
@@ -1440,7 +1333,10 @@ class Catalog:
             derived_metadata_collector=derived_metadata_collector,
             record_post_processor=record_post_processor,
         )
-        return self._build_add_operation_runner(request).run()
+
+    def _application(self) -> CatalogApplication:
+        """Build the internal application service for catalog operations."""
+        return CatalogApplication(self)
 
     def _build_add_operation_runner(self, request: AddOperationRequest) -> OperationRunner:
         """Build the runner used for one internal add operation."""

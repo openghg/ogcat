@@ -17,7 +17,42 @@ from ogcat import (
     RecordSchema,
     ValidationReport,
 )
+from ogcat.catalog_application import CatalogApplication
 from ogcat.operation_runner import AddOperationRequest, OperationRunner
+
+
+def test_add_file_facade_delegates_to_application_service(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catalog.add_file keeps API coercion while delegating operation orchestration."""
+    captured: dict[str, object] = {}
+
+    def fake_add_file(self: CatalogApplication, **kwargs: object) -> CatalogRecord:
+        captured.update(kwargs)
+        source = kwargs["source"]
+        assert isinstance(source, Path)
+        return CatalogRecord(
+            catalog=self.catalog.spec.catalog_name,
+            time_added="2026-05-15T00:00:00Z",
+            id="delegated",
+            record_type=str(kwargs["record_type"]),
+            locator=ArtifactLocator.path(source),
+        )
+
+    monkeypatch.setattr(CatalogApplication, "add_file", fake_add_file)
+    source = tmp_path / "source.nc"
+    source.write_text("payload", encoding="utf-8")
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+
+    record = catalog.add_file(source, metadata={"title": "Example"}, operation="copy")
+
+    assert record.id == "delegated"
+    assert captured["source"] == source.resolve()
+    assert captured["metadata"] == {"title": "Example"}
+    assert captured["record_type"] == "managed_file"
+    assert captured["operation"] == "copy"
+    assert captured["primary_location"] == "uuid"
 
 
 def test_run_add_operation_delegates_to_operation_runner(

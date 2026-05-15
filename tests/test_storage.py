@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-import ogcat.catalog as catalog_module
+import ogcat.catalog_application as catalog_application_module
 import ogcat.storage_planning as storage_planning
 from ogcat import ArtifactLocator, Catalog, CatalogSpec, PluginRegistry, RecordSchema
 from ogcat.hooks import OperationContext, OperationSource
@@ -701,8 +701,8 @@ def test_add_file_hook_urlpath_redirect_updates_plan_and_skips_path_extractor(
         CatalogSpec(catalog_name="files"),
         plugins=PluginRegistry([RedirectHook()]),
     )
-    monkeypatch.setattr(catalog_module.CopyArtifactWriter, "write", fake_write)
-    monkeypatch.setattr(catalog_module, "extract_derived_metadata", fail_extract)
+    monkeypatch.setattr(catalog_application_module.CopyArtifactWriter, "write", fake_write)
+    monkeypatch.setattr(catalog_application_module, "extract_derived_metadata", fail_extract)
 
     record = catalog.add_file(source_file, operation="copy")
 

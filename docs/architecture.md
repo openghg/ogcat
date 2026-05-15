@@ -86,9 +86,11 @@ native transaction support later.
 
 ## Operation Runners
 
-`Catalog` remains the public API and setup layer: it validates user inputs, selects schemas, opens
-transactions, and prepares operation-specific request objects. Internal operation runners own the
-ordered lifecycle after that setup.
+`Catalog` remains the public API facade: it validates user inputs, selects schemas, and delegates
+add-operation orchestration to the internal `CatalogApplication` service. The application service
+prepares operation-specific request objects, wires managed-file storage planning to copy/move
+writers, and invokes the operation runner. This keeps the public API methods focused on the API
+contract rather than the add lifecycle details.
 
 The current concrete runner is `AddOperationRunner`. It implements the add lifecycle for
 `add_file()` and `add_artifact()`: validation, hook dispatch, locator resolution, storage planning,
@@ -101,6 +103,12 @@ passed through `OperationServices`. Operation-specific data lives in request dat
 `AddOperationRequest`. This keeps the public catalog surface narrow while making the internal
 contract explicit enough for future runners, such as an artifact update runner, to reuse the same
 services without sharing add-only request fields.
+
+The next refinement is to make writer materialisation explicit below the public API. A primary
+artifact plan should answer where the artifact belongs, while a writer or materialiser plan should
+answer how bytes or directories are produced there. That distinction is important for future
+directory-backed collection artifacts and `.zarr`-style outputs because `Catalog` should not branch
+on file versus directory versus collection.
 
 ## Why Templates and Metadata Live in `catalog.json`
 

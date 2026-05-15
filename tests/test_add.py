@@ -790,7 +790,7 @@ def test_add_file_removes_copied_target_when_metadata_extraction_fails(
     def fail_extract(path: Path) -> dict[str, object]:
         raise ValueError("simulated metadata failure")
 
-    monkeypatch.setattr("ogcat.catalog.extract_derived_metadata", fail_extract)
+    monkeypatch.setattr("ogcat.catalog_application.extract_derived_metadata", fail_extract)
 
     with pytest.raises(ValueError, match="simulated metadata failure"):
         catalog.add_file(source)
