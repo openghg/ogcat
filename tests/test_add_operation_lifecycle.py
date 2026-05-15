@@ -452,6 +452,36 @@ def test_hook_failure_after_writer_rolls_back_artifact_and_record(tmp_path: Path
     assert catalog.repository.all() == []
 
 
+def test_after_record_hook_failure_rolls_back_template_secondary(
+    tmp_path: Path,
+) -> None:
+    """Failures after template-link creation roll back the symlink, primary, and record."""
+    root = tmp_path / "catalog"
+    source = tmp_path / "secondary.nc"
+    source.write_text("payload", encoding="utf-8")
+    files_root = root / "data" / "files"
+    objects_root = root / "data" / "objects"
+
+    class FailingAfterRecordHook:
+        def after_record_write(self, context: OperationContext) -> None:
+            created_links = [path for path in files_root.rglob("*.nc") if path.is_symlink()]
+            assert created_links, "template secondary should exist before after_record_write"
+            raise RuntimeError("stop after secondary artifact")
+
+    catalog = Catalog.create(
+        root,
+        CatalogSpec(catalog_name="files"),
+        plugins=PluginRegistry([FailingAfterRecordHook()]),
+    )
+
+    with pytest.raises(RuntimeError, match="stop after secondary artifact"):
+        catalog.add_file(source)
+
+    assert catalog.repository.all() == []
+    assert list(files_root.rglob("*.nc")) == []
+    assert list(objects_root.rglob("*.nc")) == []
+
+
 def test_operation_runner_preserves_failure_audit_phase_and_rollback(tmp_path: Path) -> None:
     """Runner-owned failures keep the existing failure phase and rollback audit."""
 

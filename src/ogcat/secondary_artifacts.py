@@ -38,16 +38,11 @@ class SecondaryArtifactResult:
 
 
 class SecondaryArtifactOperation(Protocol):
-    """Required secondary artifact operation run after primary record staging."""
+    """Secondary artifact operation run after primary record staging."""
 
     @property
     def role(self) -> SecondaryArtifactRole:
         """Semantic role of the secondary artifact."""
-        ...
-
-    @property
-    def required(self) -> bool:
-        """Whether operation failure should fail the add operation."""
         ...
 
     def run(
@@ -70,7 +65,6 @@ class TemplateLinkSecondaryArtifact:
     filename_template: str
     role: SecondaryArtifactRole = "template_link"
     mode: ReplicaMode = "symlink"
-    required: bool = True
 
     def run(
         self,
@@ -94,13 +88,7 @@ class TemplateLinkSecondaryArtifact:
             mode=self.mode,
             message="Template symlink replica created.",
             event_type="replica",
-            naming_metadata_updates={
-                "template_replica_path": str(materialized.target_path),
-                "template_replica_relative_path": materialized.catalog_relative_path,
-                "template_replica_storage_relative_path": materialized.storage_relative_path,
-                "template_resolved_directory": materialized.resolved_directory,
-                "template_resolved_filename": materialized.resolved_filename,
-            },
+            naming_metadata_updates=materialized.naming_metadata,
             audit_details={
                 "replica_role": self.role,
                 "replica_mode": self.mode,
