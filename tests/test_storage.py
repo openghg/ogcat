@@ -10,6 +10,11 @@ import ogcat.catalog_application as catalog_application_module
 import ogcat.storage_planning as storage_planning
 from ogcat import ArtifactLocator, Catalog, CatalogSpec, PluginRegistry, RecordSchema
 from ogcat.hooks import OperationContext, OperationSource
+from ogcat.materialization import (
+    MaterializationIntent,
+    MaterializationPlan,
+    materialization_plan_from_locator,
+)
 from ogcat.models import MetadataDict
 from ogcat.reference_planning import plan_reference_locator
 from ogcat.storage import (
@@ -128,6 +133,46 @@ def test_primary_storage_planner_uuid_location_builds_storage_plan(tmp_path: Pat
     assert plan.ogcat_owned
 
 
+def test_primary_storage_planner_builds_materialization_target(tmp_path: Path) -> None:
+    """Primary planner exposes a target interface before storage-plan conversion."""
+    catalog_root = tmp_path / "catalog"
+    result = storage_planning.plan_primary_storage(
+        storage_planning.PrimaryStoragePlanningContext(
+            catalog_root=catalog_root,
+            files_root=catalog_root / "data" / "files",
+            objects_root=catalog_root / "data" / "objects",
+            operation_id="abcdef1234567890",
+            metadata={},
+            directory_template="{year_added}/{original_stem}",
+            filename_template="{original_filename}",
+            source_path=tmp_path / "source.zarr",
+            storage_root=None,
+            date_added="2026-05-15",
+            primary_location="uuid",
+        )
+    )
+
+    target = result.to_materialization_target(target_kind="directory")
+    plan = MaterializationPlan(
+        primary_target=target,
+        intent=MaterializationIntent(
+            writer=None,
+            target_kind="directory",
+            write_mode="write",
+            ogcat_owned=True,
+        ),
+    ).to_storage_plan()
+
+    assert target.target_kind == "directory"
+    assert target.adapter == "local"
+    assert target.storage_relative_path == "ab/abcdef1234567890.zarr"
+    assert target.resolved_directory == "ab"
+    assert target.resolved_filename == "abcdef1234567890.zarr"
+    assert plan.target_kind == "directory"
+    assert plan.write_mode == "write"
+    assert plan.ogcat_owned
+
+
 def test_primary_storage_planner_template_location_uses_schema_naming(tmp_path: Path) -> None:
     """Primary planner owns template placement without assigning an artifact UUID."""
     catalog_root = tmp_path / "catalog"
@@ -216,6 +261,29 @@ def test_primary_storage_planner_uuid_urlpath_root_has_remote_plan_metadata(tmp_
     assert plan.adapter == "fsspec"
     assert plan.artifact_uuid == "abcdef1234567890"
     assert plan.primary_location == "uuid"
+
+
+def test_locator_materialization_plan_supports_directory_writer_intent() -> None:
+    """Locator-backed writer materialization preserves target kind and adapter metadata."""
+    intent = MaterializationIntent(
+        writer=None,
+        target_kind="directory",
+        write_mode="write",
+        ogcat_owned=True,
+    )
+
+    plan = materialization_plan_from_locator(
+        ArtifactLocator.from_urlpath("s3://bucket/stores/example.zarr"),
+        intent=intent,
+    ).to_storage_plan()
+
+    assert plan.target_kind == "directory"
+    assert plan.write_mode == "write"
+    assert plan.ogcat_owned
+    assert plan.adapter == "fsspec"
+    assert plan.storage_relative_path is None
+    assert plan.resolved_directory == "s3://bucket/stores"
+    assert plan.resolved_filename == "example.zarr"
 
 
 def test_primary_storage_plan_uses_locator_directory_when_hook_target_has_no_relative_path(

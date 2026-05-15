@@ -13,6 +13,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, TypeAlias
 
+from ogcat.materialization import (
+    MaterializationIntent,
+    MaterializationPlan,
+    MaterializationTarget,
+)
 from ogcat.models import ArtifactLocator
 from ogcat.naming import build_naming_context, render_storage_location, split_name_and_suffixes
 from ogcat.operation_helpers import (
@@ -27,7 +32,6 @@ from ogcat.storage import (
     StoragePlan,
     TargetKind,
     WriteMode,
-    plan_storage,
 )
 
 PrimaryLocation: TypeAlias = Literal["uuid", "template"]
@@ -123,6 +127,48 @@ class PrimaryStoragePlanResult:
         Returns:
             Storage plan carrying the primary storage planning metadata.
         """
+        intent = MaterializationIntent(
+            writer=None,
+            target_kind=target_kind,
+            write_mode=write_mode,
+            ogcat_owned=ogcat_owned,
+        )
+        return MaterializationPlan(
+            primary_target=self.to_materialization_target(
+                locator=locator,
+                target_kind=target_kind,
+                adapter=adapter,
+                artifact_uuid=artifact_uuid,
+            ),
+            intent=intent,
+        ).to_storage_plan(
+            checksum=checksum,
+            profile=profile,
+            time_added=time_added,
+        )
+
+    def to_materialization_target(
+        self,
+        *,
+        locator: ArtifactLocator | None = None,
+        target_kind: TargetKind = "file",
+        adapter: str | None = None,
+        artifact_uuid: str | None = None,
+    ) -> MaterializationTarget:
+        """Build the resolved primary target for a materialization plan.
+
+        Args:
+            locator: Optional hook-resolved canonical locator.
+            target_kind: Whether the target is file-like or directory-like.
+            adapter: Optional adapter identifier. When omitted, it is inferred
+                from the planned locator.
+            artifact_uuid: Optional artifact UUID override for compatibility
+                with operations that record the operation id separately from
+                primary storage identity.
+
+        Returns:
+            Materialization target carrying primary storage planning metadata.
+        """
         canonical_locator = self.locator if locator is None else locator
         if canonical_locator == self.locator:
             storage_relative_path = self.storage_relative_path
@@ -136,15 +182,10 @@ class PrimaryStoragePlanResult:
                 else directory_from_relative_path(storage_relative_path)
             )
             resolved_filename = filename_from_locator(canonical_locator)
-        return plan_storage(
-            canonical_locator,
+        return MaterializationTarget(
+            locator=canonical_locator,
             target_kind=target_kind,
-            write_mode=write_mode,
-            checksum=checksum,
-            ogcat_owned=ogcat_owned,
-            profile=profile,
             adapter=adapter_name(canonical_locator) if adapter is None else adapter,
-            time_added=time_added,
             storage_relative_path=storage_relative_path,
             resolved_directory=resolved_directory,
             resolved_filename=resolved_filename,

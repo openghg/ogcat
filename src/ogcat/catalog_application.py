@@ -4,10 +4,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from ogcat.extractors import extract_derived_metadata
 from ogcat.hooks import ArtifactWriter, OperationContext, OperationSource
+from ogcat.materialization import (
+    MaterializationIntent,
+    MaterializationPlan,
+    reference_intent,
+    storage_plan_intent,
+    writer_intent,
+)
 from ogcat.models import ArtifactLocator, CatalogRecord, MetadataDict
 from ogcat.operation_helpers import storage_plan_with_locator
 from ogcat.operation_runner import (
@@ -18,7 +25,7 @@ from ogcat.operation_runner import (
     StoragePlanFactory,
 )
 from ogcat.spec import RecordSchema
-from ogcat.storage import StoragePlan, WriteMode
+from ogcat.storage import StoragePlan
 from ogcat.storage_planning import (
     PrimaryLocation,
     PrimaryStoragePlanningContext,
@@ -96,13 +103,15 @@ class CatalogApplication:
             """Build the storage plan for a managed local file."""
             primary = planned_primary or plan_primary(context)
             artifact_uuid = context.operation_id if primary_location == "template" else None
-            return primary.to_storage_plan(
+            primary_target = primary.to_materialization_target(
                 locator=locator,
-                target_kind="file",
-                write_mode=cast(WriteMode, operation),
-                ogcat_owned=True,
+                target_kind=materialization_intent.target_kind,
                 artifact_uuid=artifact_uuid,
             )
+            return MaterializationPlan(
+                primary_target=primary_target,
+                intent=materialization_intent,
+            ).to_storage_plan()
 
         def collect_file_metadata(context: OperationContext, locator: ArtifactLocator) -> None:
             """Collect generic derived metadata from the written file."""
@@ -114,6 +123,7 @@ class CatalogApplication:
         artifact_writer: ArtifactWriter = (
             CopyArtifactWriter() if operation == "copy" else MoveArtifactWriter()
         )
+        materialization_intent = writer_intent(artifact_writer)
         record_post_processor = self._template_replica_post_processor(
             primary_location=primary_location,
             directory_template=directory_template,
@@ -138,8 +148,8 @@ class CatalogApplication:
                 time_added=time_added,
                 source=source_description,
                 locator_factory=resolve_local_file_locator,
+                materialization_intent=materialization_intent,
                 storage_plan_factory=plan_local_file_storage,
-                artifact_writer=artifact_writer,
                 derived_metadata_collector=collect_file_metadata,
                 record_post_processor=record_post_processor,
             )
@@ -170,6 +180,12 @@ class CatalogApplication:
             path=locator.as_path(),
             descriptor=locator.value,
         )
+        if storage_plan is not None:
+            materialization_intent = storage_plan_intent(storage_plan, writer=artifact_writer)
+        else:
+            materialization_intent = (
+                reference_intent() if artifact_writer is None else writer_intent(artifact_writer)
+            )
         return self.run_add_operation(
             transaction=transaction,
             commit=commit,
@@ -187,7 +203,7 @@ class CatalogApplication:
             time_added=time_added,
             source=operation_source,
             locator_factory=lambda context: locator,
-            artifact_writer=artifact_writer,
+            materialization_intent=materialization_intent,
             storage_plan_factory=(
                 None
                 if storage_plan is None
@@ -217,8 +233,8 @@ class CatalogApplication:
         time_added: str | None,
         source: OperationSource,
         locator_factory: ArtifactLocatorFactory,
+        materialization_intent: MaterializationIntent,
         storage_plan_factory: StoragePlanFactory | None = None,
-        artifact_writer: ArtifactWriter | None = None,
         derived_metadata_collector: DerivedMetadataCollector | None = None,
         record_post_processor: RecordPostProcessor | None = None,
     ) -> CatalogRecord:
@@ -240,8 +256,8 @@ class CatalogApplication:
             time_added=time_added,
             source=source,
             locator_factory=locator_factory,
+            materialization_intent=materialization_intent,
             storage_plan_factory=storage_plan_factory,
-            artifact_writer=artifact_writer,
             derived_metadata_collector=derived_metadata_collector,
             record_post_processor=record_post_processor,
         )
