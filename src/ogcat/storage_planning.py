@@ -15,10 +15,164 @@ from typing import Literal, TypeAlias
 
 from ogcat.models import ArtifactLocator
 from ogcat.naming import build_naming_context, render_storage_location, split_name_and_suffixes
-from ogcat.operation_helpers import directory_from_relative_path
-from ogcat.storage import LocalStorageAdapter
+from ogcat.operation_helpers import (
+    adapter_name,
+    directory_from_locator,
+    directory_from_relative_path,
+    filename_from_locator,
+)
+from ogcat.storage import (
+    ChecksumPolicy,
+    LocalStorageAdapter,
+    StoragePlan,
+    TargetKind,
+    WriteMode,
+    plan_storage,
+)
 
 PrimaryLocation: TypeAlias = Literal["uuid", "template"]
+StoragePrimaryLocation: TypeAlias = Literal["uuid", "template", "user_provided"]
+
+
+@dataclass(frozen=True, slots=True)
+class PrimaryStoragePlanningContext:
+    """Inputs required to plan a primary artifact storage location.
+
+    Args:
+        catalog_root: Catalog root used for catalog-local relative paths.
+        files_root: Catalog template-managed files root.
+        objects_root: Catalog UUID-managed object root.
+        operation_id: Operation id used as the planned artifact UUID.
+        metadata: Normalized metadata available to naming templates.
+        directory_template: Directory naming template from the record schema.
+        filename_template: Filename naming template from the record schema.
+        source_path: Optional source path used for naming context.
+        storage_root: Optional external local root or fsspec URL root.
+        date_added: ISO date string used by date-based templates.
+        primary_location: Primary placement policy to render.
+        locator: User-provided locator when ``primary_location`` is
+            ``"user_provided"``.
+    """
+
+    catalog_root: Path
+    files_root: Path
+    objects_root: Path
+    operation_id: str
+    metadata: Mapping[str, object]
+    directory_template: str
+    filename_template: str
+    source_path: Path | None
+    storage_root: str | Path | None
+    date_added: str
+    primary_location: StoragePrimaryLocation
+    locator: ArtifactLocator | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PrimaryStoragePlanResult:
+    """Planned primary storage locator and derived metadata.
+
+    Args:
+        locator: Target artifact locator.
+        storage_relative_path: Path relative to the relevant storage root.
+        resolved_directory: Rendered storage directory, when available.
+        resolved_filename: Rendered final path component, when available.
+        artifact_uuid: UUID-style artifact storage identifier, when generated.
+        primary_location: Primary placement policy used for the plan.
+        storage_root: Local storage root used to recalculate path metadata when
+            hooks replace the planned locator.
+    """
+
+    locator: ArtifactLocator
+    storage_relative_path: str | None
+    resolved_directory: str | None
+    resolved_filename: str | None
+    artifact_uuid: str | None
+    primary_location: StoragePrimaryLocation
+    storage_root: Path | None = None
+
+    def to_storage_plan(
+        self,
+        *,
+        locator: ArtifactLocator | None = None,
+        target_kind: TargetKind = "file",
+        write_mode: WriteMode = "reference",
+        checksum: ChecksumPolicy = "none",
+        ogcat_owned: bool = False,
+        profile: str | None = None,
+        adapter: str | None = None,
+        time_added: str | None = None,
+        artifact_uuid: str | None = None,
+    ) -> StoragePlan:
+        """Build a concrete :class:`~ogcat.storage.StoragePlan`.
+
+        Args:
+            locator: Optional hook-resolved canonical locator.
+            target_kind: Whether the target is file-like or directory-like.
+            write_mode: Intended materialisation mode.
+            checksum: Checksum policy requested for the write.
+            ogcat_owned: Whether ogcat should treat the target as managed.
+            profile: Optional storage profile name or hint.
+            adapter: Optional adapter identifier. When omitted, it is inferred
+                from the planned locator.
+            time_added: Optional timestamp used for the storage plan.
+            artifact_uuid: Optional artifact UUID override for compatibility
+                with operations that record the operation id separately from
+                primary storage identity.
+
+        Returns:
+            Storage plan carrying the primary storage planning metadata.
+        """
+        canonical_locator = self.locator if locator is None else locator
+        if canonical_locator == self.locator:
+            storage_relative_path = self.storage_relative_path
+            resolved_directory = self.resolved_directory
+            resolved_filename = self.resolved_filename
+        else:
+            storage_relative_path = self._storage_relative_path_for(canonical_locator)
+            resolved_directory = (
+                directory_from_locator(canonical_locator)
+                if storage_relative_path is None
+                else directory_from_relative_path(storage_relative_path)
+            )
+            resolved_filename = filename_from_locator(canonical_locator)
+        return plan_storage(
+            canonical_locator,
+            target_kind=target_kind,
+            write_mode=write_mode,
+            checksum=checksum,
+            ogcat_owned=ogcat_owned,
+            profile=profile,
+            adapter=adapter_name(canonical_locator) if adapter is None else adapter,
+            time_added=time_added,
+            storage_relative_path=storage_relative_path,
+            resolved_directory=resolved_directory,
+            resolved_filename=resolved_filename,
+            artifact_uuid=self.artifact_uuid if artifact_uuid is None else artifact_uuid,
+            primary_location=self.primary_location,
+        )
+
+    def naming_metadata(self) -> dict[str, object]:
+        """Build record naming metadata from the planned primary storage."""
+        metadata: dict[str, object] = {"primary_location": self.primary_location}
+        if self.artifact_uuid is not None:
+            metadata["artifact_uuid"] = self.artifact_uuid
+        if self.storage_relative_path is not None:
+            metadata["storage_relative_path"] = self.storage_relative_path
+            metadata["primary_storage_relative_path"] = self.storage_relative_path
+        if self.resolved_directory is not None:
+            metadata["resolved_directory"] = self.resolved_directory
+            metadata["primary_resolved_directory"] = self.resolved_directory
+        if self.resolved_filename is not None:
+            metadata["resolved_filename"] = self.resolved_filename
+            metadata["primary_resolved_filename"] = self.resolved_filename
+        return metadata
+
+    def _storage_relative_path_for(self, locator: ArtifactLocator) -> str | None:
+        """Return storage-relative metadata for a hook-resolved locator."""
+        if self.storage_root is None:
+            return locator.relative_path
+        return storage_relative_path_for_locator(locator, storage_root=self.storage_root)
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +288,106 @@ def render_uuid_planned_locator(
     )
 
 
+def plan_primary_storage(context: PrimaryStoragePlanningContext) -> PrimaryStoragePlanResult:
+    """Plan the primary storage location for a catalog artifact.
+
+    Args:
+        context: Storage planning inputs including roots, naming templates,
+            metadata, and primary placement policy.
+
+    Returns:
+        Planned primary storage locator and metadata suitable for constructing
+        a storage plan or record naming metadata.
+
+    Raises:
+        ValueError: If ``primary_location`` is ``"user_provided"`` without a
+            locator, or an unsupported primary placement policy is supplied.
+    """
+    if context.primary_location == "user_provided":
+        if context.locator is None:
+            raise ValueError("locator is required when primary_location is 'user_provided'.")
+        return PrimaryStoragePlanResult(
+            locator=context.locator,
+            storage_relative_path=context.locator.relative_path,
+            resolved_directory=directory_from_locator(context.locator),
+            resolved_filename=filename_from_locator(context.locator),
+            artifact_uuid=None,
+            primary_location="user_provided",
+            storage_root=None,
+        )
+
+    if context.locator is not None:
+        raise ValueError("locator can only be provided when primary_location is 'user_provided'.")
+
+    naming_source = context.source_path or Path("artifact")
+    artifact_uuid = context.operation_id
+    naming_context = build_naming_context(
+        record_id=context.operation_id,
+        operation_id=context.operation_id,
+        original_path=naming_source,
+        metadata=context.metadata,
+        date_added=context.date_added,
+    )
+    naming_context["artifact_uuid"] = artifact_uuid
+    if context.primary_location == "uuid":
+        planned = render_uuid_planned_locator(
+            catalog_root=context.catalog_root,
+            objects_root=context.objects_root,
+            storage_root=context.storage_root,
+            artifact_uuid=artifact_uuid,
+            original_path=naming_source,
+        )
+        return _primary_result_from_planned_locator(
+            planned,
+            artifact_uuid=artifact_uuid,
+            primary_location="uuid",
+            storage_root=_primary_storage_root(context),
+        )
+
+    if context.primary_location != "template":
+        raise ValueError("primary_location must be 'uuid', 'template', or 'user_provided'.")
+    if context.storage_root is not None and _is_urlpath_root(context.storage_root):
+        planned = _render_urlpath_template_locator(
+            root_url=str(context.storage_root),
+            directory_template=context.directory_template,
+            filename_template=context.filename_template,
+            naming_context=naming_context,
+        )
+        return _primary_result_from_planned_locator(
+            planned,
+            artifact_uuid=None,
+            primary_location="template",
+            storage_root=_primary_storage_root(context),
+        )
+
+    local_files_root = (
+        context.files_root
+        if context.storage_root is None
+        else Path(context.storage_root).expanduser().resolve()
+    )
+    storage_adapter = LocalStorageAdapter()
+    target, _catalog_relative_path, resolved_filename = render_storage_location(
+        files_root=local_files_root,
+        directory_template=context.directory_template,
+        filename_template=context.filename_template,
+        context=naming_context,
+        exists=lambda candidate: storage_adapter.exists(ArtifactLocator.from_path(candidate)),
+    )
+    relative_path = (
+        target.relative_to(context.catalog_root).as_posix() if context.storage_root is None else None
+    )
+    storage_relative_path = target.relative_to(local_files_root).as_posix()
+    return PrimaryStoragePlanResult(
+        locator=ArtifactLocator.from_path(target, relative_path=relative_path),
+        storage_relative_path=storage_relative_path,
+        resolved_directory=directory_from_relative_path(storage_relative_path),
+        resolved_filename=resolved_filename,
+        artifact_uuid=None,
+        primary_location="template",
+        storage_root=_primary_storage_root(context),
+    )
+
+
 def render_planned_locator(
     *,
     catalog_root: Path,
@@ -166,49 +420,26 @@ def render_planned_locator(
     Returns:
         Rendered locator and path metadata.
     """
-    naming_source = source_path or Path("artifact")
-    naming_context = build_naming_context(
-        record_id=operation_id,
-        operation_id=operation_id,
-        original_path=naming_source,
-        metadata=metadata,
-        date_added=date_added,
-    )
-    artifact_uuid = operation_id
-    naming_context["artifact_uuid"] = artifact_uuid
-    if primary_location == "uuid":
-        return render_uuid_planned_locator(
+    planned = plan_primary_storage(
+        PrimaryStoragePlanningContext(
             catalog_root=catalog_root,
+            files_root=files_root,
             objects_root=objects_root,
-            storage_root=storage_root,
-            artifact_uuid=artifact_uuid,
-            original_path=naming_source,
-        )
-
-    if storage_root is not None and _is_urlpath_root(storage_root):
-        return _render_urlpath_template_locator(
-            root_url=str(storage_root),
+            operation_id=operation_id,
+            metadata=metadata,
             directory_template=directory_template,
             filename_template=filename_template,
-            naming_context=naming_context,
+            source_path=source_path,
+            storage_root=storage_root,
+            date_added=date_added,
+            primary_location=primary_location,
         )
-
-    local_files_root = files_root if storage_root is None else Path(storage_root).expanduser().resolve()
-    storage_adapter = LocalStorageAdapter()
-    target, _catalog_relative_path, resolved_filename = render_storage_location(
-        files_root=local_files_root,
-        directory_template=directory_template,
-        filename_template=filename_template,
-        context=naming_context,
-        exists=lambda candidate: storage_adapter.exists(ArtifactLocator.from_path(candidate)),
     )
-    relative_path = target.relative_to(catalog_root).as_posix() if storage_root is None else None
-    storage_relative_path = target.relative_to(local_files_root).as_posix()
     return PlannedLocator(
-        locator=ArtifactLocator.from_path(target, relative_path=relative_path),
-        storage_relative_path=storage_relative_path,
-        resolved_directory=directory_from_relative_path(storage_relative_path),
-        resolved_filename=resolved_filename,
+        locator=planned.locator,
+        storage_relative_path=planned.storage_relative_path,
+        resolved_directory=planned.resolved_directory,
+        resolved_filename=planned.resolved_filename,
     )
 
 
@@ -304,6 +535,38 @@ def _render_urlpath_template_locator(
     )
 
 
+def _primary_result_from_planned_locator(
+    planned: PlannedLocator,
+    *,
+    artifact_uuid: str | None,
+    primary_location: StoragePrimaryLocation,
+    storage_root: Path | None,
+) -> PrimaryStoragePlanResult:
+    """Return a primary storage planning result from locator metadata."""
+    return PrimaryStoragePlanResult(
+        locator=planned.locator,
+        storage_relative_path=planned.storage_relative_path,
+        resolved_directory=planned.resolved_directory,
+        resolved_filename=planned.resolved_filename,
+        artifact_uuid=artifact_uuid,
+        primary_location=primary_location,
+        storage_root=storage_root,
+    )
+
+
+def _primary_storage_root(context: PrimaryStoragePlanningContext) -> Path | None:
+    """Return the local root used for storage-relative metadata."""
+    if context.storage_root is not None:
+        if _is_urlpath_root(context.storage_root):
+            return None
+        return Path(context.storage_root).expanduser().resolve()
+    if context.primary_location == "uuid":
+        return context.objects_root
+    if context.primary_location == "template":
+        return context.files_root
+    return None
+
+
 def _uuid_storage_relative_path(*, artifact_uuid: str, original_path: Path) -> str:
     """Return the objects-root-relative path for a UUID primary artifact."""
     _stem, suffix = split_name_and_suffixes(original_path.name)
@@ -313,8 +576,12 @@ def _uuid_storage_relative_path(*, artifact_uuid: str, original_path: Path) -> s
 __all__ = [
     "PlannedLocator",
     "PrimaryLocation",
+    "PrimaryStoragePlanningContext",
+    "PrimaryStoragePlanResult",
+    "StoragePrimaryLocation",
     "UuidStoragePath",
     "join_urlpath",
+    "plan_primary_storage",
     "render_planned_locator",
     "render_uuid_planned_locator",
     "storage_relative_path_for_locator",

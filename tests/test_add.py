@@ -86,6 +86,10 @@ def test_add_file_can_store_primary_at_template_path(tmp_path: Path) -> None:
     assert expected.exists()
     assert not expected.is_symlink()
     assert "template_replica_path" not in record.naming_metadata
+    artifact_uuid = str(record.naming_metadata["artifact_uuid"])
+    assert len(artifact_uuid) == 32
+    int(artifact_uuid, 16)
+    assert artifact_uuid != _record_id(record)
     assert record.naming_metadata["primary_location"] == "template"
 
 
@@ -513,7 +517,7 @@ def test_metadata_normalization_accepts_numpy_scalars_when_available(tmp_path: P
     assert type(record.user_metadata["count"]) is int
 
 
-@pytest.mark.parametrize("field_name", ["id", "uuid", "operation_id"])
+@pytest.mark.parametrize("field_name", ["artifact_uuid", "id", "uuid", "operation_id"])
 def test_add_file_rejects_metadata_that_clobbers_reserved_template_fields(
     tmp_path: Path,
     field_name: str,
@@ -532,6 +536,22 @@ def test_add_file_rejects_metadata_that_clobbers_reserved_template_fields(
     assert catalog.repository.all() == []
     assert list((root / "data" / "files").rglob("reserved.nc")) == []
     assert list((root / "data" / "objects").rglob("reserved.nc")) == []
+
+
+def test_add_file_template_primary_rejects_artifact_uuid_metadata(tmp_path: Path) -> None:
+    """Template-primary ingest rejects metadata that would shadow planner fields."""
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "reserved.nc"
+    source.write_text("dummy", encoding="utf-8")
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="files"))
+
+    with pytest.raises(ValueError, match="Metadata cannot use reserved template field\\(s\\): artifact_uuid"):
+        catalog.add_file(source, metadata={"artifact_uuid": "user-value"}, primary_location="template")
+
+    assert catalog.repository.all() == []
+    assert list((root / "data" / "files").rglob("reserved.nc")) == []
 
 
 def test_add_file_preserves_dotted_stems_and_simple_suffixes(tmp_path: Path) -> None:

@@ -90,6 +90,164 @@ def test_storage_planning_relative_path_falls_back_to_locator_metadata(
     )
 
 
+def test_primary_storage_planner_uuid_location_builds_storage_plan(tmp_path: Path) -> None:
+    """Primary planner owns UUID placement and storage-plan metadata."""
+    catalog_root = tmp_path / "catalog"
+    result = storage_planning.plan_primary_storage(
+        storage_planning.PrimaryStoragePlanningContext(
+            catalog_root=catalog_root,
+            files_root=catalog_root / "data" / "files",
+            objects_root=catalog_root / "data" / "objects",
+            operation_id="abcdef1234567890",
+            metadata={},
+            directory_template="{year_added}/{original_stem}",
+            filename_template="{original_filename}",
+            source_path=tmp_path / "source.nc",
+            storage_root=None,
+            date_added="2026-05-15",
+            primary_location="uuid",
+        )
+    )
+    plan = result.to_storage_plan(write_mode="copy", ogcat_owned=True)
+
+    expected = catalog_root / "data" / "objects" / "ab" / "abcdef1234567890.nc"
+    assert result.locator == ArtifactLocator.from_path(
+        expected,
+        relative_path="data/objects/ab/abcdef1234567890.nc",
+    )
+    assert result.storage_relative_path == "ab/abcdef1234567890.nc"
+    assert result.resolved_directory == "ab"
+    assert result.resolved_filename == "abcdef1234567890.nc"
+    assert result.artifact_uuid == "abcdef1234567890"
+    assert result.primary_location == "uuid"
+    assert plan.locator == result.locator
+    assert plan.storage_relative_path == "ab/abcdef1234567890.nc"
+    assert plan.artifact_uuid == "abcdef1234567890"
+    assert plan.primary_location == "uuid"
+    assert plan.write_mode == "copy"
+    assert plan.ogcat_owned
+
+
+def test_primary_storage_planner_template_location_uses_schema_naming(tmp_path: Path) -> None:
+    """Primary planner owns template placement without assigning an artifact UUID."""
+    catalog_root = tmp_path / "catalog"
+
+    result = storage_planning.plan_primary_storage(
+        storage_planning.PrimaryStoragePlanningContext(
+            catalog_root=catalog_root,
+            files_root=catalog_root / "data" / "files",
+            objects_root=catalog_root / "data" / "objects",
+            operation_id="abcdef1234567890",
+            metadata={"species": "CO2", "year": 2026, "title": "paris"},
+            directory_template="{species}/{year}",
+            filename_template="{title}{original_suffix}",
+            source_path=tmp_path / "source.nc",
+            storage_root=None,
+            date_added="2026-05-15",
+            primary_location="template",
+        )
+    )
+
+    expected = catalog_root / "data" / "files" / "CO2" / "2026" / "paris.nc"
+    assert result.locator == ArtifactLocator.from_path(expected, relative_path="data/files/CO2/2026/paris.nc")
+    assert result.storage_relative_path == "CO2/2026/paris.nc"
+    assert result.resolved_directory == "CO2/2026"
+    assert result.resolved_filename == "paris.nc"
+    assert result.artifact_uuid is None
+    assert result.primary_location == "template"
+
+
+def test_primary_storage_planner_user_provided_location_keeps_explicit_locator(
+    tmp_path: Path,
+) -> None:
+    """Primary planner treats explicit locators as caller-selected storage."""
+    target = tmp_path / "chosen" / "artifact.nc"
+    locator = ArtifactLocator.from_path(target)
+
+    result = storage_planning.plan_primary_storage(
+        storage_planning.PrimaryStoragePlanningContext(
+            catalog_root=tmp_path / "catalog",
+            files_root=tmp_path / "catalog" / "data" / "files",
+            objects_root=tmp_path / "catalog" / "data" / "objects",
+            operation_id="abcdef1234567890",
+            metadata={},
+            directory_template="",
+            filename_template="",
+            source_path=tmp_path / "source.nc",
+            storage_root=None,
+            date_added="2026-05-15",
+            primary_location="user_provided",
+            locator=locator,
+        )
+    )
+
+    assert result.locator == locator
+    assert result.storage_relative_path is None
+    assert result.resolved_directory == str(target.parent)
+    assert result.resolved_filename == "artifact.nc"
+    assert result.artifact_uuid is None
+    assert result.primary_location == "user_provided"
+
+
+def test_primary_storage_planner_uuid_urlpath_root_has_remote_plan_metadata(tmp_path: Path) -> None:
+    """Primary planner supports UUID placement under fsspec URL roots."""
+    result = storage_planning.plan_primary_storage(
+        storage_planning.PrimaryStoragePlanningContext(
+            catalog_root=tmp_path / "catalog",
+            files_root=tmp_path / "catalog" / "data" / "files",
+            objects_root=tmp_path / "catalog" / "data" / "objects",
+            operation_id="abcdef1234567890",
+            metadata={},
+            directory_template="{year_added}/{original_stem}",
+            filename_template="{original_filename}",
+            source_path=tmp_path / "source.nc",
+            storage_root="s3://bucket/prefix",
+            date_added="2026-05-15",
+            primary_location="uuid",
+        )
+    )
+    plan = result.to_storage_plan(write_mode="copy", ogcat_owned=True)
+
+    assert result.locator == ArtifactLocator.from_urlpath("s3://bucket/prefix/ab/abcdef1234567890.nc")
+    assert result.locator.relative_path is None
+    assert result.storage_relative_path == "ab/abcdef1234567890.nc"
+    assert result.resolved_directory == "ab"
+    assert result.resolved_filename == "abcdef1234567890.nc"
+    assert plan.adapter == "fsspec"
+    assert plan.artifact_uuid == "abcdef1234567890"
+    assert plan.primary_location == "uuid"
+
+
+def test_primary_storage_plan_uses_locator_directory_when_hook_target_has_no_relative_path(
+    tmp_path: Path,
+) -> None:
+    """Hook replacement keeps locator-derived directory metadata when no relative path exists."""
+    catalog_root = tmp_path / "catalog"
+    result = storage_planning.plan_primary_storage(
+        storage_planning.PrimaryStoragePlanningContext(
+            catalog_root=catalog_root,
+            files_root=catalog_root / "data" / "files",
+            objects_root=catalog_root / "data" / "objects",
+            operation_id="abcdef1234567890",
+            metadata={},
+            directory_template="{year_added}/{original_stem}",
+            filename_template="{original_filename}",
+            source_path=tmp_path / "source.nc",
+            storage_root=None,
+            date_added="2026-05-15",
+            primary_location="uuid",
+        )
+    )
+    hook_target = ArtifactLocator.from_urlpath("memory://bucket/redirected/copied.nc")
+
+    plan = result.to_storage_plan(locator=hook_target)
+
+    assert plan.locator == hook_target
+    assert plan.storage_relative_path is None
+    assert plan.resolved_directory == "memory://bucket/redirected"
+    assert plan.resolved_filename == "copied.nc"
+
+
 def test_reference_planning_resolves_local_path_reference(tmp_path: Path) -> None:
     """Reference planning resolves path-backed references and preserves local path metadata."""
     source = tmp_path / "source.nc"
@@ -181,6 +339,22 @@ def test_plan_artifact_storage_can_use_template_primary(tmp_path: Path) -> None:
     assert plan.resolved_filename == "paris.nc"
     assert plan.primary_location == "template"
     assert not expected.exists()
+
+
+def test_plan_artifact_storage_template_primary_rejects_artifact_uuid_metadata(
+    tmp_path: Path,
+) -> None:
+    """Dry-run template planning rejects metadata that would shadow planner fields."""
+    source = tmp_path / "source.nc"
+    source.write_text("payload", encoding="utf-8")
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+
+    with pytest.raises(ValueError, match="Metadata cannot use reserved template field\\(s\\): artifact_uuid"):
+        catalog.plan_artifact_storage(
+            source,
+            metadata={"artifact_uuid": "user-value"},
+            primary_location="template",
+        )
 
 
 def test_add_artifact_uses_planned_timestamp_for_date_named_paths(tmp_path: Path) -> None:
@@ -288,6 +462,32 @@ def test_plan_artifact_storage_urlpath_root_does_not_import_fsspec(
     assert plan.storage_relative_path == "CO2/remote.nc"
     assert plan.resolved_directory == "CO2"
     assert plan.resolved_filename == "remote.nc"
+
+
+def test_plan_artifact_storage_uuid_urlpath_root_uses_root_relative_metadata(
+    tmp_path: Path,
+) -> None:
+    """UUID primary URL roots produce fsspec plans with root-relative metadata."""
+    source = tmp_path / "source.nc"
+    source.write_text("payload", encoding="utf-8")
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+
+    plan = catalog.plan_artifact_storage(
+        source,
+        storage_root="s3://bucket/prefix",
+        write_mode="copy",
+    )
+
+    assert plan.artifact_uuid is not None
+    assert plan.locator == ArtifactLocator.from_urlpath(
+        f"s3://bucket/prefix/{plan.artifact_uuid[:2]}/{plan.artifact_uuid}.nc"
+    )
+    assert plan.locator.relative_path is None
+    assert plan.adapter == "fsspec"
+    assert plan.storage_relative_path == f"{plan.artifact_uuid[:2]}/{plan.artifact_uuid}.nc"
+    assert plan.resolved_directory == plan.artifact_uuid[:2]
+    assert plan.resolved_filename == f"{plan.artifact_uuid}.nc"
+    assert plan.primary_location == "uuid"
 
 
 def test_urlpath_storage_root_does_not_populate_stored_relpath(
@@ -417,6 +617,33 @@ def test_plan_artifact_storage_custom_local_root_has_no_catalog_relative_path(tm
     assert plan.resolved_filename == "external.nc"
     assert record.stored_relpath is None
     assert record.locator.relative_path is None
+
+
+def test_plan_artifact_storage_uuid_custom_local_root_has_no_catalog_relative_path(
+    tmp_path: Path,
+) -> None:
+    """UUID primary custom local roots keep storage metadata root-relative."""
+    source = tmp_path / "source.nc"
+    source.write_text("payload", encoding="utf-8")
+    external_root = tmp_path / "external-root"
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+
+    plan = catalog.plan_artifact_storage(
+        source,
+        storage_root=external_root,
+        write_mode="reference",
+        ogcat_owned=False,
+    )
+
+    assert plan.artifact_uuid is not None
+    assert plan.locator == ArtifactLocator.from_path(
+        external_root / plan.artifact_uuid[:2] / f"{plan.artifact_uuid}.nc"
+    )
+    assert plan.locator.relative_path is None
+    assert plan.storage_relative_path == f"{plan.artifact_uuid[:2]}/{plan.artifact_uuid}.nc"
+    assert plan.resolved_directory == plan.artifact_uuid[:2]
+    assert plan.resolved_filename == f"{plan.artifact_uuid}.nc"
+    assert plan.primary_location == "uuid"
 
 
 def test_plan_artifact_storage_explicit_locator_overrides_primary_location(tmp_path: Path) -> None:
