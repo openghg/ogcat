@@ -26,6 +26,9 @@ _RESERVED_TEMPLATE_FIELDS = frozenset(
 )
 
 
+RESERVED_TEMPLATE_FIELDS = _RESERVED_TEMPLATE_FIELDS
+
+
 def _normalise_segment(value: str) -> str:
     """Normalise a path or filename segment conservatively."""
     cleaned = value.strip().replace(" ", "_")
@@ -50,6 +53,16 @@ def _split_name_and_suffixes(name: str) -> tuple[str, str]:
     if full_suffix:
         return name[: -len(full_suffix)], full_suffix
     return name, ""
+
+
+def normalise_segment(value: str) -> str:
+    """Normalise a path or filename segment conservatively."""
+    return _normalise_segment(value)
+
+
+def split_name_and_suffixes(name: str) -> tuple[str, str]:
+    """Split a filename into the base name and its naming suffix string."""
+    return _split_name_and_suffixes(name)
 
 
 def _naming_suffixes(name: str) -> list[str]:
