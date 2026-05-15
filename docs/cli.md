@@ -138,5 +138,5 @@ ogcat spec set FIELD=VALUE ... --catalog <root>
 including ``display_fields`` when configured.
 
 ``ogcat spec set`` supports simple fields such as ``catalog_name``,
-``default_operation``, and ``field_resolution_order``. ``files_root`` changes
-are rejected because they require a dedicated file migration operation.
+``default_operation``, and ``field_resolution_order``. Storage root changes
+are rejected because they require a dedicated migration operation.

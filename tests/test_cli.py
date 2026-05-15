@@ -314,10 +314,29 @@ def test_search_fields_selects_human_output_columns(tmp_path: Path) -> None:
     assert "path" in stdout
     assert _record_id(record) in stdout
     assert "CO2" in stdout
-    assert "anthropogenic" in stdout
-    assert "files" in stdout
+    resolved_path = record.path()
+    assert resolved_path is not None
+    assert "objects" in stdout
     assert "product" not in stdout
     assert "CTE-HR" not in stdout
+
+    plain_result = runner.invoke(
+        app,
+        [
+            "search",
+            "--catalog",
+            str(catalog.root),
+            "--where",
+            "species=CO2",
+            "--fields",
+            "id,species,path",
+            "--format",
+            "pipe",
+        ],
+    )
+
+    assert plain_result.exit_code == 0
+    assert str(resolved_path) in strip_ansi(plain_result.stdout)
 
 
 def test_search_uses_schema_display_fields_when_fields_are_omitted(tmp_path: Path) -> None:
@@ -725,7 +744,19 @@ def test_spec_cli_rejects_files_root_update(tmp_path: Path) -> None:
     )
 
     assert result.exit_code == 1
-    assert "Changing files_root requires a file-root migration operation." in strip_ansi(result.stderr)
+    assert "Changing files_root requires a storage-root migration operation." in strip_ansi(result.stderr)
+
+
+def test_spec_cli_rejects_objects_root_update(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+
+    result = runner.invoke(
+        app,
+        ["spec", "set", "objects_root=renamed-objects", "--catalog", str(catalog.root)],
+    )
+
+    assert result.exit_code == 1
+    assert "Changing objects_root requires a storage-root migration operation." in strip_ansi(result.stderr)
 
 
 def test_add_accepts_multiple_metadata_items_after_single_meta_flag(tmp_path: Path) -> None:
@@ -874,7 +905,8 @@ def test_search_paths_skips_non_path_backed_records(tmp_path: Path) -> None:
     assert result.exit_code == 0
     lines = [line for line in strip_ansi(result.stdout).splitlines() if line.strip()]
     assert len(lines) == 1
-    assert lines[0].endswith("source.nc")
+    stored_record = catalog.search(where={"species": "CO2"}, as_record_set=False)[0]
+    assert lines[0] == str(stored_record.path())
 
 
 def test_search_ids_and_paths_are_not_capped_by_default(tmp_path: Path) -> None:

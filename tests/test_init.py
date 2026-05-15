@@ -14,7 +14,8 @@ def test_create_and_open_catalog(tmp_path: Path) -> None:
     assert created.root == reopened.root
     assert (root / "catalog.json").exists()
     assert (root / "db.json").exists()
-    assert (root / "files").exists()
+    assert (root / "data" / "files").exists()
+    assert (root / "data" / "objects").exists()
     assert reopened.spec.catalog_name == "fluxes"
 
 
@@ -65,6 +66,22 @@ def test_catalog_spec_round_trips_via_catalog_json(tmp_path: Path) -> None:
         },
     ]
     assert reloaded == spec
+
+
+def test_catalog_spec_defaults_to_split_data_roots() -> None:
+    """New catalogs default readable views and UUID primaries to sibling data roots."""
+    spec = CatalogSpec(catalog_name="files")
+
+    assert spec.files_root == "data/files"
+    assert spec.objects_root == "data/objects"
+
+
+def test_catalog_spec_keeps_legacy_object_root_for_existing_files_root() -> None:
+    """Existing catalog JSON without objects_root keeps UUID objects under files/objects."""
+    spec = CatalogSpec.from_dict({"catalog_name": "files", "files_root": "files"})
+
+    assert spec.files_root == "files"
+    assert spec.objects_root == "files/objects"
 
 
 def test_catalog_spec_round_trips_record_schemas(tmp_path: Path) -> None:
@@ -367,9 +384,20 @@ def test_catalog_update_spec_rejects_files_root_without_migration(tmp_path: Path
     try:
         catalog.update_spec(files_root="renamed-files")
     except ValueError as exc:
-        assert "Changing files_root requires a file-root migration operation." in str(exc)
+        assert "Changing files_root requires a storage-root migration operation." in str(exc)
     else:  # pragma: no cover
         raise AssertionError("Expected files_root update to be rejected")
+
+
+def test_catalog_update_spec_rejects_objects_root_without_migration(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+
+    try:
+        catalog.update_spec(objects_root="renamed-objects")
+    except ValueError as exc:
+        assert "Changing objects_root requires a storage-root migration operation." in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("Expected objects_root update to be rejected")
 
 
 def test_record_schema_fallbacks_preserve_empty_templates() -> None:

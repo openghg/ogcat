@@ -49,6 +49,7 @@ from ogcat.validation import ValidationReport
 ArtifactLocatorFactory = Callable[[OperationContext], ArtifactLocator]
 StoragePlanFactory = Callable[[OperationContext, ArtifactLocator], StoragePlan | None]
 DerivedMetadataCollector = Callable[[OperationContext, ArtifactLocator], None]
+RecordPostProcessor = Callable[[UnitOfWork, OperationContext, CatalogRecord], CatalogRecord]
 _PhaseSetter = Callable[[str], None]
 
 
@@ -142,6 +143,7 @@ class AddOperationRequest:
     storage_plan_factory: StoragePlanFactory | None = None
     artifact_writer: ArtifactWriter | None = None
     derived_metadata_collector: DerivedMetadataCollector | None = None
+    record_post_processor: RecordPostProcessor | None = None
 
 
 @dataclass(slots=True)
@@ -444,6 +446,13 @@ class AddOperationRunner(OperationRunner):
             },
             locator=add_plan.locator,
         )
+        if self.request.record_post_processor is not None:
+            set_phase("record-post-processing")
+            persisted = self.request.record_post_processor(
+                self.request.transaction,
+                add_plan.context,
+                persisted,
+            )
         set_phase(HOOK_PHASES["after_record_write"].name)
         hook_dispatcher.after_record_write(add_plan.context)
         return persisted
@@ -636,6 +645,8 @@ def _storage_plan_audit_details(plan: StoragePlan) -> dict[str, object]:
         "storage_relative_path": plan.storage_relative_path,
         "resolved_directory": plan.resolved_directory,
         "resolved_filename": plan.resolved_filename,
+        "artifact_uuid": plan.artifact_uuid,
+        "primary_location": plan.primary_location,
     }
 
 

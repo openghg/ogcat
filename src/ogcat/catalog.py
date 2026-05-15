@@ -30,7 +30,7 @@ from ogcat.hooks import (
     validate_hook_objects,
 )
 from ogcat.models import ArtifactLocator, CatalogRecord, JsonValue, MetadataDict, normalize_metadata
-from ogcat.naming import build_naming_context, render_storage_location
+from ogcat.naming import _split_name_and_suffixes, build_naming_context, render_storage_location
 from ogcat.operation_helpers import (
     adapter_name,
     artifact_locator_from_context,
@@ -49,6 +49,12 @@ from ogcat.operation_runner import (
 )
 from ogcat.plugins import PluginRegistry
 from ogcat.record_set import CatalogRecordSet
+from ogcat.replicas import (
+    ReplicaMode,
+    ReplicaViewPlan,
+    materialize_template_link_replica,
+    plan_replica_view,
+)
 from ogcat.repository import CatalogRepository
 from ogcat.search import SearchQuery
 from ogcat.spec import CatalogSpec, RecordSchema
@@ -68,9 +74,11 @@ ArtifactLocatorFactory = Callable[[OperationContext], ArtifactLocator]
 StoragePlanFactory = Callable[[OperationContext, ArtifactLocator], StoragePlan | None]
 DerivedMetadataCollector = Callable[[OperationContext, ArtifactLocator], None]
 PlannedLocatorResult = tuple[ArtifactLocator, str | None, str | None, str | None]
+PrimaryLocation = Literal["uuid", "template"]
 PluginInput = PluginRegistry | Iterable[object] | None
 HookInput = HookManager | Iterable[object] | None
 MetadataUpdateMode = Literal["replace", "shallow_merge"]
+RecordPostProcessor = Callable[[UnitOfWork, OperationContext, CatalogRecord], CatalogRecord]
 
 
 @dataclass(slots=True)
@@ -130,6 +138,7 @@ class Catalog:
         root_path.mkdir(parents=True, exist_ok=True)
         spec.write(root_path / "catalog.json")
         (root_path / spec.files_root).mkdir(parents=True, exist_ok=True)
+        (root_path / spec.objects_root).mkdir(parents=True, exist_ok=True)
         repository = _open_repository(root_path, spec)
         return cls(
             root=root_path,
@@ -189,6 +198,7 @@ class Catalog:
         metadata: Mapping[Any, Any] | None = None,
         operation: str | None = None,
         record_type: str | None = None,
+        primary_location: PrimaryLocation = "uuid",
     ) -> CatalogRecord:
         """Add a local file using managed copy or move.
 
@@ -197,6 +207,9 @@ class Catalog:
             metadata: JSON-compatible user metadata.
             operation: ``"copy"`` or ``"move"``. Defaults to the catalog spec.
             record_type: Optional named schema to validate against.
+            primary_location: ``"uuid"`` stores the primary artifact under a
+                UUID path and creates a template symlink replica. ``"template"``
+                stores the primary artifact at the rendered template path.
 
         Returns:
             Persisted catalog record.
@@ -217,49 +230,79 @@ class Catalog:
         chosen_operation = operation or self.spec.default_operation
         if chosen_operation not in {"copy", "move"}:
             raise ValueError(f"Unsupported operation: {chosen_operation}")
+        resolved_primary_location = _coerce_primary_location(primary_location)
 
         timestamp = _utc_timestamp()
         files_root = self.root / self.spec.files_root
+        objects_root = self.root / self.spec.objects_root
         naming_metadata: MetadataDict = {
             "record_schema": "default" if record_type is None else record_type,
             "directory_template": directory_template,
             "filename_template": filename_template,
+            "primary_location": resolved_primary_location,
         }
 
         def resolve_local_file_locator(context: OperationContext) -> ArtifactLocator:
             """Resolve the managed-file storage path for this operation."""
+            artifact_uuid = context.operation_id
+            naming_metadata["artifact_uuid"] = artifact_uuid
             naming_context = build_naming_context(
-                record_id=context.operation_id,
-                operation_id=context.operation_id,
+                record_id=artifact_uuid,
+                operation_id=artifact_uuid,
                 original_path=source,
                 metadata=context.user_metadata,
                 date_added=timestamp[:10],
             )
+            if resolved_primary_location == "uuid":
+                target, catalog_relative_path, storage_relative_path = _uuid_storage_path(
+                    catalog_root=self.root,
+                    objects_root=objects_root,
+                    artifact_uuid=artifact_uuid,
+                    original_path=source,
+                )
+                naming_metadata["primary_storage_relative_path"] = storage_relative_path
+                naming_metadata["primary_resolved_directory"] = directory_from_relative_path(
+                    storage_relative_path
+                )
+                naming_metadata["primary_resolved_filename"] = target.name
+                return ArtifactLocator.from_path(target, relative_path=catalog_relative_path)
+
             storage_adapter = LocalStorageAdapter()
-            target, rel_path, _resolved_filename = render_storage_location(
+            target, _catalog_relative_path, _resolved_filename = render_storage_location(
                 files_root=files_root,
                 directory_template=directory_template,
                 filename_template=filename_template,
                 context=naming_context,
                 exists=lambda candidate: storage_adapter.exists(ArtifactLocator.from_path(candidate)),
             )
+            catalog_relative_path = target.relative_to(self.root).as_posix()
+            storage_relative_path = target.relative_to(files_root).as_posix()
             naming_metadata["resolved_filename"] = _resolved_filename
-            return ArtifactLocator.from_path(target, relative_path=rel_path)
+            naming_metadata["primary_storage_relative_path"] = storage_relative_path
+            naming_metadata["primary_resolved_directory"] = directory_from_relative_path(
+                storage_relative_path
+            )
+            naming_metadata["primary_resolved_filename"] = _resolved_filename
+            return ArtifactLocator.from_path(target, relative_path=catalog_relative_path)
 
         def plan_local_file_storage(
             context: OperationContext,
             locator: ArtifactLocator,
         ) -> StoragePlan:
             """Build the storage plan for a managed local file."""
+            storage_root = objects_root if resolved_primary_location == "uuid" else files_root
+            storage_relative_path = _storage_relative_path_for_locator(locator, storage_root=storage_root)
             return plan_storage(
                 locator,
                 target_kind="file",
                 write_mode=cast(WriteMode, chosen_operation),
                 ogcat_owned=True,
                 adapter=adapter_name(locator),
-                storage_relative_path=locator.relative_path,
-                resolved_directory=directory_from_relative_path(locator.relative_path),
+                storage_relative_path=storage_relative_path,
+                resolved_directory=directory_from_relative_path(storage_relative_path),
                 resolved_filename=filename_from_locator(locator),
+                artifact_uuid=context.operation_id,
+                primary_location=resolved_primary_location,
             )
 
         def collect_file_metadata(context: OperationContext, locator: ArtifactLocator) -> None:
@@ -272,6 +315,25 @@ class Catalog:
         artifact_writer: ArtifactWriter = (
             CopyArtifactWriter() if chosen_operation == "copy" else MoveArtifactWriter()
         )
+        record_post_processor: RecordPostProcessor | None = None
+        if resolved_primary_location == "uuid":
+
+            def create_default_template_replica(
+                transaction: UnitOfWork,
+                context: OperationContext,
+                record: CatalogRecord,
+            ) -> CatalogRecord:
+                """Create the default template symlink replica for a UUID primary."""
+                return self._create_template_link_replica(
+                    transaction=transaction,
+                    context=context,
+                    record=record,
+                    directory_template=directory_template,
+                    filename_template=filename_template,
+                )
+
+            record_post_processor = create_default_template_replica
+
         with self.transaction() as transaction:
             return self._run_add_operation(
                 transaction=transaction,
@@ -293,6 +355,7 @@ class Catalog:
                 storage_plan_factory=plan_local_file_storage,
                 artifact_writer=artifact_writer,
                 derived_metadata_collector=collect_file_metadata,
+                record_post_processor=record_post_processor,
             )
 
     def plan_artifact_storage(
@@ -306,6 +369,7 @@ class Catalog:
         write_mode: WriteMode | None = None,
         ogcat_owned: bool = True,
         storage_root: str | Path | None = None,
+        primary_location: PrimaryLocation = "uuid",
     ) -> StoragePlan:
         """Plan artifact storage without writing data or a catalog record.
 
@@ -324,6 +388,9 @@ class Catalog:
             ogcat_owned: Whether ogcat should treat the target as managed.
             storage_root: Optional local root or fsspec URL root for rendered
                 template targets.
+            primary_location: ``"uuid"`` plans a UUID primary path.
+                ``"template"`` plans the rendered schema template as the
+                primary path. Ignored when ``locator`` is supplied.
 
         Returns:
             Planned storage decision.
@@ -334,6 +401,7 @@ class Catalog:
         user_metadata = _coerce_metadata_input(metadata_input, schema_name=schema_name)
         resolved_record_type = "managed_artifact" if record_type is None else record_type
         resolved_write_mode = write_mode or ("write" if ogcat_owned else "reference")
+        resolved_primary_location = _coerce_primary_location(primary_location)
         source_path = None if path is None else Path(path).expanduser().resolve()
         timestamp = _utc_timestamp()
         operation_id = uuid4().hex
@@ -382,6 +450,7 @@ class Catalog:
                 source_path=source_path,
                 storage_root=storage_root,
                 date_added=timestamp[:10],
+                primary_location=resolved_primary_location,
             )
         else:
             planned_locator = locator
@@ -405,6 +474,8 @@ class Catalog:
             storage_relative_path=storage_relative_path,
             resolved_directory=resolved_directory,
             resolved_filename=resolved_filename,
+            artifact_uuid=operation_id if locator is None and resolved_primary_location == "uuid" else None,
+            primary_location="user_provided" if locator is not None else resolved_primary_location,
         )
         context.storage_plan = plan
         return plan
@@ -722,6 +793,53 @@ class Catalog:
                 raise ValueError(f"artifact batch item {index}: {exc}") from exc
         return records
 
+    def plan_view(
+        self,
+        root: str | Path,
+        template: str,
+        *,
+        mode: ReplicaMode = "symlink",
+        query: SearchQuery | None = None,
+        where: Mapping[str, object] | None = None,
+        contains: Mapping[str, object] | None = None,
+        regex: Mapping[str, str] | None = None,
+        match: Mapping[str, str] | None = None,
+        exists: Sequence[str] | None = None,
+        missing: Sequence[str] | None = None,
+        ignore_case: bool = False,
+    ) -> ReplicaViewPlan:
+        """Plan a generated replica view without mutating records or files.
+
+        Args:
+            root: Root directory for the generated view.
+            template: Combined path template relative to ``root``.
+            mode: Replica materialisation mode. Only ``"symlink"`` is
+                supported.
+            query: Optional pre-built search query.
+            where: Equality filters.
+            contains: Substring or list-membership filters.
+            regex: Regular-expression filters.
+            match: Glob or substring filters.
+            exists: Fields that must be present.
+            missing: Fields that must be absent.
+            ignore_case: Whether string comparisons should be case-insensitive.
+
+        Returns:
+            Dry-run replica view plan.
+        """
+        records = self.search(
+            query=query,
+            where=where,
+            contains=contains,
+            regex=regex,
+            match=match,
+            exists=exists,
+            missing=missing,
+            ignore_case=ignore_case,
+            as_record_set=False,
+        )
+        return plan_replica_view(root=root, template=template, records=records, mode=mode)
+
     @overload
     def search(
         self,
@@ -853,6 +971,7 @@ class Catalog:
         """Return a serialisable summary of catalog configuration and contents."""
         db_path = self.root / self.spec.db_path
         files_root = self.root / self.spec.files_root
+        objects_root = self.root / self.spec.objects_root
         default_schema = self.spec.get_schema()
         return {
             "catalog_name": self.spec.catalog_name,
@@ -860,6 +979,7 @@ class Catalog:
             "backend": self.spec.db_backend,
             "database_path": str(db_path),
             "files_root": str(files_root),
+            "objects_root": str(objects_root),
             "default_operation": self.spec.default_operation,
             "directory_template": default_schema.directory_template,
             "filename_template": default_schema.filename_template,
@@ -1022,11 +1142,13 @@ class Catalog:
         """Update simple catalog spec fields and persist ``catalog.json``.
 
         Supported fields are ``catalog_name``, ``default_operation``, and
-        ``field_resolution_order``. ``files_root`` changes require a dedicated
+        ``field_resolution_order``. Storage root changes require a dedicated
         migration operation and are intentionally rejected here.
         """
-        if "files_root" in fields:
-            raise ValueError("Changing files_root requires a file-root migration operation.")
+        forbidden_storage_roots = {"files_root", "objects_root"}.intersection(fields)
+        if forbidden_storage_roots:
+            joined = ", ".join(sorted(forbidden_storage_roots))
+            raise ValueError(f"Changing {joined} requires a storage-root migration operation.")
         allowed_fields = {"catalog_name", "default_operation", "field_resolution_order"}
         unknown_fields = sorted(field for field in fields if field not in allowed_fields)
         if unknown_fields:
@@ -1103,6 +1225,45 @@ class Catalog:
             naming_metadata=normalized_naming_metadata,
         )
 
+    def _create_template_link_replica(
+        self,
+        *,
+        transaction: UnitOfWork,
+        context: OperationContext,
+        record: CatalogRecord,
+        directory_template: str,
+        filename_template: str,
+    ) -> CatalogRecord:
+        """Create and record the default template symlink replica."""
+        materialized = materialize_template_link_replica(
+            catalog_root=self.root,
+            files_root=self.root / self.spec.files_root,
+            record=record,
+            directory_template=directory_template,
+            filename_template=filename_template,
+            register_rollback=lambda action, description: transaction.register_rollback(
+                action,
+                description=description,
+            ),
+        )
+        if materialized is None:
+            return record
+        updated_record = replace(record, naming_metadata=materialized.naming_metadata)
+        updated_record = transaction.update_staged_record(updated_record)
+        self._emit_operation_audit(
+            context,
+            event_type="replica",
+            message="Template symlink replica created.",
+            details={
+                "replica_role": "template_link",
+                "replica_mode": "symlink",
+                "replica_path": str(materialized.target_path),
+                "primary_path": str(materialized.primary_path),
+            },
+            locator=record.locator,
+        )
+        return updated_record
+
     def _render_planned_locator(
         self,
         *,
@@ -1112,6 +1273,7 @@ class Catalog:
         source_path: Path | None,
         storage_root: str | Path | None,
         date_added: str,
+        primary_location: PrimaryLocation,
     ) -> PlannedLocatorResult:
         """Render schema naming templates into a local or fsspec target locator."""
         directory_template = _require_template(schema.directory_template, field_name="directory_template")
@@ -1124,6 +1286,16 @@ class Catalog:
             metadata=context.user_metadata,
             date_added=date_added,
         )
+        artifact_uuid = context.operation_id
+        naming_context["artifact_uuid"] = artifact_uuid
+        if primary_location == "uuid":
+            return _render_uuid_planned_locator(
+                catalog_root=self.root,
+                objects_root=self.root / self.spec.objects_root,
+                storage_root=storage_root,
+                artifact_uuid=artifact_uuid,
+                original_path=naming_source,
+            )
 
         if storage_root is not None and _is_urlpath_root(storage_root):
             root_url = str(storage_root).rstrip("/")
@@ -1154,14 +1326,14 @@ class Catalog:
         else:
             files_root = Path(storage_root).expanduser().resolve()
         storage_adapter = LocalStorageAdapter()
-        target, rel_path, resolved_filename = render_storage_location(
+        target, _catalog_relative_path, resolved_filename = render_storage_location(
             files_root=files_root,
             directory_template=directory_template,
             filename_template=filename_template,
             context=naming_context,
             exists=lambda candidate: storage_adapter.exists(ArtifactLocator.from_path(candidate)),
         )
-        relative_path = rel_path if storage_root is None else None
+        relative_path = target.relative_to(self.root).as_posix() if storage_root is None else None
         storage_relative_path = target.relative_to(files_root).as_posix()
         resolved_directory = Path(storage_relative_path).parent.as_posix()
         if resolved_directory == ".":
@@ -1349,6 +1521,7 @@ class Catalog:
         storage_plan_factory: StoragePlanFactory | None = None,
         artifact_writer: ArtifactWriter | None = None,
         derived_metadata_collector: DerivedMetadataCollector | None = None,
+        record_post_processor: RecordPostProcessor | None = None,
     ) -> CatalogRecord:
         """Run the shared add operation lifecycle for file and record-only adds."""
         request = AddOperationRequest(
@@ -1371,6 +1544,7 @@ class Catalog:
             storage_plan_factory=storage_plan_factory,
             artifact_writer=artifact_writer,
             derived_metadata_collector=derived_metadata_collector,
+            record_post_processor=record_post_processor,
         )
         return self._build_add_operation_runner(request).run()
 
@@ -1513,6 +1687,7 @@ class Catalog:
             "db_backend": self.spec.db_backend,
             "db_path": self.spec.db_path,
             "files_root": self.spec.files_root,
+            "objects_root": self.spec.objects_root,
             "default_operation": self.spec.default_operation,
             "field_resolution_order": list(self.spec.field_resolution_order),
             "default_record_schema": self.spec.default_record_schema,
@@ -1531,6 +1706,61 @@ def _utc_timestamp() -> str:
     """Return a stable UTC timestamp string for record creation."""
     timestamp = datetime.now(tz=UTC).replace(microsecond=0).isoformat()
     return timestamp.replace("+00:00", "Z")
+
+
+def _coerce_primary_location(value: object) -> PrimaryLocation:
+    """Return a supported primary placement policy."""
+    if value in {"uuid", "template"}:
+        return cast(PrimaryLocation, value)
+    raise ValueError("primary_location must be 'uuid' or 'template'.")
+
+
+def _uuid_storage_path(
+    *,
+    catalog_root: Path,
+    objects_root: Path,
+    artifact_uuid: str,
+    original_path: Path,
+) -> tuple[Path, str, str]:
+    """Return the UUID primary path and relative path metadata."""
+    _stem, suffix = _split_name_and_suffixes(original_path.name)
+    storage_relative_path = f"{artifact_uuid[:2]}/{artifact_uuid}{suffix}"
+    target = objects_root / storage_relative_path
+    catalog_relative_path = target.relative_to(catalog_root).as_posix()
+    return target, catalog_relative_path, storage_relative_path
+
+
+def _render_uuid_planned_locator(
+    *,
+    catalog_root: Path,
+    objects_root: Path,
+    storage_root: str | Path | None,
+    artifact_uuid: str,
+    original_path: Path,
+) -> PlannedLocatorResult:
+    """Render a UUID primary locator for local or fsspec storage roots."""
+    _stem, suffix = _split_name_and_suffixes(original_path.name)
+    storage_relative_path = f"{artifact_uuid[:2]}/{artifact_uuid}{suffix}"
+    resolved_directory = directory_from_relative_path(storage_relative_path)
+    resolved_filename = Path(storage_relative_path).name
+
+    if storage_root is not None and _is_urlpath_root(storage_root):
+        return (
+            ArtifactLocator.from_urlpath(_join_urlpath(str(storage_root).rstrip("/"), storage_relative_path)),
+            storage_relative_path,
+            resolved_directory,
+            resolved_filename,
+        )
+
+    target_root = objects_root if storage_root is None else Path(storage_root).expanduser().resolve()
+    target = target_root / storage_relative_path
+    relative_path = target.relative_to(catalog_root).as_posix() if storage_root is None else None
+    return (
+        ArtifactLocator.from_path(target, relative_path=relative_path),
+        storage_relative_path,
+        resolved_directory,
+        resolved_filename,
+    )
 
 
 def _open_repository(root: Path, spec: CatalogSpec) -> CatalogRepository:
@@ -1680,12 +1910,15 @@ def _coerce_metadata_input(
     return normalize_metadata_for_schema(metadata, schema_name=schema_name)
 
 
-def _path_from_locator(locator: ArtifactLocator) -> Path:
-    """Return a local path from a path-backed artifact locator."""
-    path = locator.as_path()
-    if path is None:
-        raise ValueError("Managed file operations require a path-backed artifact locator.")
-    return path
+def _storage_relative_path_for_locator(locator: ArtifactLocator, *, storage_root: Path) -> str | None:
+    """Return a storage-root-relative path for a locator when available."""
+    if locator.kind == "path":
+        locator_path = Path(locator.value)
+        try:
+            return locator_path.relative_to(storage_root).as_posix()
+        except ValueError:
+            return locator.relative_path
+    return locator.relative_path
 
 
 def _require_template(value: str | None, *, field_name: str) -> str:

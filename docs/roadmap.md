@@ -47,7 +47,7 @@ There is no manager API in the code today. If this appears, it should sit on top
 
 Future work: support creating catalogs from data that already exists on disk.
 
-The current implementation assumes managed ingest into the catalog's own `files/` tree. A practical next step is a scan or import workflow that can build records from existing data with explicit rules, rather than requiring each file to be added one at a time through the current path-based flow.
+The current implementation assumes managed ingest into the catalog's own `data/objects/` tree. A practical next step is a scan or import workflow that can build records from existing data with explicit rules, rather than requiring each file to be added one at a time through the current path-based flow.
 
 ## Longer-Term Direction
 

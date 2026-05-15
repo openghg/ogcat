@@ -362,7 +362,8 @@ def test_before_validate_hook_can_mutate_metadata_for_validation_and_naming(tmp_
     record = catalog.add_file(source)
 
     assert record.user_metadata["title"] == "from-hook"
-    assert Path(record.stored_abspath or "").name == "from-hook.nc"
+    assert Path(str(record.naming_metadata["template_replica_path"])).name == "from-hook.nc"
+    assert Path(record.stored_abspath or "").parent.parent.name == "objects"
 
 
 def test_resolve_artifact_locator_replacement_controls_add_file_target(tmp_path: Path) -> None:
@@ -402,7 +403,7 @@ def test_resolve_artifact_locator_removal_fails_clearly(tmp_path: Path) -> None:
         catalog.add_file(source)
 
     assert catalog.repository.all() == []
-    assert not list((root / "files").rglob("missing-locator.nc"))
+    assert not list((root / "data" / "files").rglob("missing-locator.nc"))
 
 
 def test_hook_failure_rolls_back_staged_record_and_copied_file(tmp_path: Path) -> None:
@@ -424,7 +425,7 @@ def test_hook_failure_rolls_back_staged_record_and_copied_file(tmp_path: Path) -
 
     assert rollback_calls == ["external"]
     assert catalog.repository.all() == []
-    assert list((root / "files").rglob("failure.nc")) == []
+    assert list((root / "data" / "files").rglob("failure.nc")) == []
     assert source.exists()
 
 

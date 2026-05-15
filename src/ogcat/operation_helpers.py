@@ -50,12 +50,19 @@ def storage_plan_with_locator(plan: StoragePlan, locator: ArtifactLocator) -> St
 def naming_metadata_from_storage_plan(plan: StoragePlan) -> MetadataDict:
     """Build record naming metadata from storage planning outputs."""
     metadata: MetadataDict = {}
+    if plan.artifact_uuid is not None:
+        metadata["artifact_uuid"] = plan.artifact_uuid
+    if plan.primary_location is not None:
+        metadata["primary_location"] = plan.primary_location
     if plan.storage_relative_path is not None:
         metadata["storage_relative_path"] = plan.storage_relative_path
+        metadata["primary_storage_relative_path"] = plan.storage_relative_path
     if plan.resolved_directory is not None:
         metadata["resolved_directory"] = plan.resolved_directory
+        metadata["primary_resolved_directory"] = plan.resolved_directory
     if plan.resolved_filename is not None:
         metadata["resolved_filename"] = plan.resolved_filename
+        metadata["primary_resolved_filename"] = plan.resolved_filename
     return metadata
 
 

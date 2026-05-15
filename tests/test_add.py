@@ -1,3 +1,4 @@
+import os
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -18,7 +19,13 @@ def _stored_path(record: CatalogRecord) -> Path:
     return Path(record.stored_abspath)
 
 
+def _template_replica_path(record: CatalogRecord) -> Path:
+    assert "template_replica_path" in record.naming_metadata
+    return Path(str(record.naming_metadata["template_replica_path"]))
+
+
 def test_add_file_uses_generic_default_storage_layout(tmp_path: Path) -> None:
+    """Default managed ingest writes a UUID primary and a template symlink replica."""
     source_dir = tmp_path / "source"
     source_dir.mkdir()
     source = source_dir / "example.nc"
@@ -29,14 +36,57 @@ def test_add_file_uses_generic_default_storage_layout(tmp_path: Path) -> None:
 
     record = catalog.add_file(source)
 
-    expected = root / "files" / record.time_added[:4] / "example" / "example.nc"
-    assert _stored_path(record) == expected
+    artifact_uuid = str(record.naming_metadata["artifact_uuid"])
+    expected_primary = root / "data" / "objects" / artifact_uuid[:2] / f"{artifact_uuid}.nc"
+    expected_replica = root / "data" / "files" / record.time_added[:4] / "example" / "example.nc"
+    assert _stored_path(record) == expected_primary
     assert record.record_type == "managed_file"
-    assert record.locator == ArtifactLocator.path(expected, relative_path=record.stored_relpath)
-    assert expected.exists()
+    assert record.locator == ArtifactLocator.path(expected_primary, relative_path=record.stored_relpath)
+    assert expected_primary.exists()
+    assert expected_replica.is_symlink()
+    assert expected_replica.resolve() == expected_primary
+    assert _template_replica_path(record) == expected_replica
     assert record.original_filename == "example.nc"
     assert record.suffixes == [".nc"]
     assert record.storage_mode == "copy"
+    assert record.naming_metadata["primary_location"] == "uuid"
+
+
+def test_add_file_template_replica_uses_relative_symlink_target(tmp_path: Path) -> None:
+    """Default template replicas use relative links so movable catalogs are less brittle."""
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "relative.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+
+    record = catalog.add_file(source)
+    replica_path = _template_replica_path(record)
+
+    assert replica_path.is_symlink()
+    assert not Path(os.readlink(replica_path)).is_absolute()
+    assert replica_path.resolve() == _stored_path(record)
+
+
+def test_add_file_can_store_primary_at_template_path(tmp_path: Path) -> None:
+    """Callers can request the template path as the primary artifact location."""
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "example.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="files"))
+
+    record = catalog.add_file(source, primary_location="template")
+
+    expected = root / "data" / "files" / record.time_added[:4] / "example" / "example.nc"
+    assert _stored_path(record) == expected
+    assert expected.exists()
+    assert not expected.is_symlink()
+    assert "template_replica_path" not in record.naming_metadata
+    assert record.naming_metadata["primary_location"] == "template"
 
 
 def test_add_file_supports_flux_style_templates_when_requested(tmp_path: Path) -> None:
@@ -78,6 +128,7 @@ def test_add_file_supports_flux_style_templates_when_requested(tmp_path: Path) -
 
     expected = (
         root
+        / "data"
         / "files"
         / "CO2"
         / "EUROPE"
@@ -86,8 +137,10 @@ def test_add_file_supports_flux_style_templates_when_requested(tmp_path: Path) -
         / "anthropogenic"
         / "CTE-HR_v4.2_CO2_EUROPE_anthropogenic_202401.nc"
     )
-    assert _stored_path(record) == expected
-    assert expected.exists()
+    assert _stored_path(record).parent.parent.name == "objects"
+    assert expected.is_symlink()
+    assert expected.resolve() == _stored_path(record)
+    assert _template_replica_path(record) == expected
     assert record.original_filename == "anthropogenic.202401.nc"
     assert record.storage_mode == "copy"
 
@@ -130,11 +183,13 @@ def test_add_file_uses_record_type_schema_for_naming(tmp_path: Path) -> None:
         metadata={"product": "CTE-HR", "species": "CO2", "year": 2024, "month": 1},
     )
 
-    expected = root / "files" / "CO2" / "GLOBAL" / "CTE-HR" / "CTE-HR_CO2_202401.nc"
-    assert _stored_path(record) == expected
+    expected = root / "data" / "files" / "CO2" / "GLOBAL" / "CTE-HR" / "CTE-HR_CO2_202401.nc"
+    assert _stored_path(record).parent.parent.name == "objects"
+    assert expected.is_symlink()
+    assert expected.resolve() == _stored_path(record)
     assert record.record_type == "flux"
     assert record.naming_metadata["record_schema"] == "flux"
-    assert expected.exists()
+    assert _template_replica_path(record) == expected
 
 
 def test_add_file_preserves_empty_schema_directory_template(tmp_path: Path) -> None:
@@ -166,10 +221,12 @@ def test_add_file_preserves_empty_schema_directory_template(tmp_path: Path) -> N
 
     record = catalog.add_file(source, record_type="flux", metadata={"product": "CTE-HR"})
 
-    expected = root / "files" / "CTE-HR.nc"
-    assert _stored_path(record) == expected
+    expected = root / "data" / "files" / "CTE-HR.nc"
+    assert _stored_path(record).parent.parent.name == "objects"
+    assert expected.is_symlink()
+    assert expected.resolve() == _stored_path(record)
     assert record.naming_metadata["directory_template"] == ""
-    assert expected.exists()
+    assert _template_replica_path(record) == expected
 
 
 def test_add_file_rejects_unknown_explicit_record_schema(tmp_path: Path) -> None:
@@ -289,7 +346,7 @@ def test_add_file_does_not_truncate_fractional_year_metadata_for_naming(tmp_path
 
     record = catalog.add_file(source, metadata={"year": 2024.9, "month": 1})
 
-    assert _stored_path(record).name == "floatyear.nc"
+    assert _template_replica_path(record).name == "floatyear.nc"
 
 
 def test_add_file_uses_readable_list_metadata_in_naming_templates(tmp_path: Path) -> None:
@@ -312,7 +369,10 @@ def test_add_file_uses_readable_list_metadata_in_naming_templates(tmp_path: Path
 
     record = catalog.add_file(source, metadata={"tags": ["a", "b", "c"]})
 
-    assert _stored_path(record) == root / "files" / "a-b-c" / "a-b-c.nc"
+    replica_path = root / "data" / "files" / "a-b-c" / "a-b-c.nc"
+    assert replica_path.is_symlink()
+    assert replica_path.resolve() == _stored_path(record)
+    assert _template_replica_path(record) == replica_path
 
 
 def test_add_file_normalizes_path_metadata_before_tinydb_insert(
@@ -430,6 +490,7 @@ def test_plan_artifact_storage_normalizes_metadata_before_naming(tmp_path: Path)
     plan = catalog.plan_artifact_storage(
         path=source,
         metadata={"tags": ("a", "b"), "source_path": Path("named")},
+        primary_location="template",
     )
 
     assert plan.resolved_directory == "a-b"
@@ -469,7 +530,8 @@ def test_add_file_rejects_metadata_that_clobbers_reserved_template_fields(
         catalog.add_file(source, metadata={field_name: "user-value"})
 
     assert catalog.repository.all() == []
-    assert list((root / "files").rglob("reserved.nc")) == []
+    assert list((root / "data" / "files").rglob("reserved.nc")) == []
+    assert list((root / "data" / "objects").rglob("reserved.nc")) == []
 
 
 def test_add_file_preserves_dotted_stems_and_simple_suffixes(tmp_path: Path) -> None:
@@ -483,8 +545,12 @@ def test_add_file_preserves_dotted_stems_and_simple_suffixes(tmp_path: Path) -> 
 
     record = catalog.add_file(source)
 
-    expected = root / "files" / record.time_added[:4] / "anthropogenic.202401" / "anthropogenic.202401.nc"
-    assert _stored_path(record) == expected
+    expected = (
+        root / "data" / "files" / record.time_added[:4] / "anthropogenic.202401" / "anthropogenic.202401.nc"
+    )
+    assert expected.is_symlink()
+    assert expected.resolve() == _stored_path(record)
+    assert _template_replica_path(record) == expected
     assert record.original_filename == "anthropogenic.202401.nc"
     assert record.suffixes == [".202401", ".nc"]
 
@@ -500,8 +566,10 @@ def test_add_file_preserves_compressed_suffixes(tmp_path: Path) -> None:
 
     record = catalog.add_file(source)
 
-    expected = root / "files" / record.time_added[:4] / "archive" / "archive.tar.gz"
-    assert _stored_path(record) == expected
+    expected = root / "data" / "files" / record.time_added[:4] / "archive" / "archive.tar.gz"
+    assert expected.is_symlink()
+    assert expected.resolve() == _stored_path(record)
+    assert _template_replica_path(record) == expected
     assert record.original_filename == "archive.tar.gz"
     assert record.suffixes == [".tar", ".gz"]
 
@@ -544,8 +612,8 @@ def test_add_file_appends_numeric_suffix_on_collision(tmp_path: Path) -> None:
     first_record = catalog.add_file(first, metadata=metadata)
     second_record = catalog.add_file(second, metadata=metadata)
 
-    assert _stored_path(first_record).name == "CTE-HR_v4.2_CO2_EUROPE_anthropogenic_202401.nc"
-    assert _stored_path(second_record).name == "CTE-HR_v4.2_CO2_EUROPE_anthropogenic_202401_2.nc"
+    assert _template_replica_path(first_record).name == ("CTE-HR_v4.2_CO2_EUROPE_anthropogenic_202401.nc")
+    assert _template_replica_path(second_record).name == ("CTE-HR_v4.2_CO2_EUROPE_anthropogenic_202401_2.nc")
 
 
 def test_add_file_collision_suffixing_preserves_full_extension(tmp_path: Path) -> None:
@@ -571,8 +639,8 @@ def test_add_file_collision_suffixing_preserves_full_extension(tmp_path: Path) -
     first_record = catalog.add_file(first)
     second_record = catalog.add_file(second)
 
-    assert _stored_path(first_record).name == "bundle.tar.gz"
-    assert _stored_path(second_record).name == "bundle_2.tar.gz"
+    assert _template_replica_path(first_record).name == "bundle.tar.gz"
+    assert _template_replica_path(second_record).name == "bundle_2.tar.gz"
 
 
 def test_add_file_rolls_back_record_when_copy_fails(tmp_path: Path) -> None:
@@ -601,14 +669,15 @@ def test_add_file_rolls_back_record_when_naming_fails(
     def fail_render_storage_location(*args: object, **kwargs: object) -> None:
         raise ValueError("simulated naming failure")
 
-    monkeypatch.setattr("ogcat.catalog.render_storage_location", fail_render_storage_location)
+    monkeypatch.setattr("ogcat.replicas.render_storage_location", fail_render_storage_location)
 
     with pytest.raises(ValueError, match="simulated naming failure"):
         catalog.add_file(source)
 
     assert catalog.describe()["record_count"] == 0
     assert catalog.repository.all() == []
-    assert list((root / "files").rglob("*.nc")) == []
+    assert list((root / "data" / "files").rglob("*.nc")) == []
+    assert list((root / "data" / "objects").rglob("*.nc")) == []
 
 
 def test_add_file_rolls_back_record_after_staged_insert_before_file_write(
@@ -626,13 +695,14 @@ def test_add_file_rolls_back_record_after_staged_insert_before_file_write(
     def fail_before_file_write(*args: object, **kwargs: object) -> None:
         raise RuntimeError("simulated post-insert failure")
 
-    monkeypatch.setattr("ogcat.catalog.render_storage_location", fail_before_file_write)
+    monkeypatch.setattr("ogcat.replicas.render_storage_location", fail_before_file_write)
 
     with pytest.raises(RuntimeError, match="simulated post-insert failure"):
         catalog.add_file(source)
 
     assert catalog.repository.all() == []
-    assert list((root / "files").rglob("*.nc")) == []
+    assert list((root / "data" / "files").rglob("*.nc")) == []
+    assert list((root / "data" / "objects").rglob("*.nc")) == []
 
 
 def test_add_file_removes_partial_target_when_copy_fails(
@@ -657,7 +727,7 @@ def test_add_file_removes_partial_target_when_copy_fails(
         catalog.add_file(source)
 
     assert catalog.describe()["record_count"] == 0
-    assert list((root / "files").rglob("*.nc")) == []
+    assert list((root / "data" / "files").rglob("*.nc")) == []
 
 
 def test_add_file_removes_copied_target_when_record_write_fails(
@@ -682,7 +752,7 @@ def test_add_file_removes_copied_target_when_record_write_fails(
 
     assert source.exists()
     assert catalog.describe()["record_count"] == 0
-    assert list((root / "files").rglob("copied.nc")) == []
+    assert list((root / "data" / "files").rglob("*.nc")) == []
 
 
 def test_add_file_removes_copied_target_when_metadata_extraction_fails(
@@ -707,7 +777,7 @@ def test_add_file_removes_copied_target_when_metadata_extraction_fails(
 
     assert source.exists()
     assert catalog.describe()["record_count"] == 0
-    assert list((root / "files").rglob("metadata.nc")) == []
+    assert list((root / "data" / "files").rglob("*.nc")) == []
 
 
 def test_add_file_restores_moved_file_when_record_write_fails(
@@ -730,7 +800,7 @@ def test_add_file_restores_moved_file_when_record_write_fails(
     with pytest.raises(OSError, match="simulated record write failure"):
         catalog.add_file(source, operation="move")
 
-    assert list((root / "files").rglob("moved.nc")) == []
+    assert list((root / "data" / "files").rglob("*.nc")) == []
     assert source.exists()
     assert source.read_text(encoding="utf-8") == "dummy"
     assert catalog.describe()["record_count"] == 0

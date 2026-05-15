@@ -25,10 +25,15 @@ The catalog root is self-describing:
 <catalog-root>/
   catalog.json
   db.json
-  files/
+  data/
+    files/
+    objects/
 ```
 
-`catalog.json` defines how the catalog behaves. `db.json` stores records. `files/` is the managed storage root for ingested files.
+`catalog.json` defines how the catalog behaves. `db.json` stores records.
+`data/files/` holds human-readable template replicas and template-primary
+artifacts. `data/objects/` holds UUID primary objects for default managed
+ingest.
 
 ## First Pass Artifact Generalisation
 
@@ -44,7 +49,10 @@ stop the internal model from assuming every record is a copied or moved local fi
 For the current MVP:
 
 - `add_file()` still performs managed ingest by copy or move
-- managed file records store a `path` locator
+- managed file records store a `path` locator for the primary artifact, which
+  defaults to a UUID-backed path under `data/objects/`
+- schema templates create derived symlink replicas and generated views rather
+  than defining the primary path by default
 - compatibility fields `stored_abspath` and `stored_relpath` remain present for today's APIs and
   CLI
 - `Catalog.path()` resolves only path-backed records and returns `None` for records that are

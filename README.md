@@ -10,7 +10,7 @@ descriptions, and locating stored paths.
 ## Scope
 
 - local catalogs centred on managed file ingest
-- a self-describing catalog layout with `catalog.json`, `db.json`, and `files/`
+- a self-describing catalog layout with `catalog.json`, `db.json`, and `data/`
 - path-based managed ingest using `copy` or `move`
 - reference records for existing local paths, URIs, and explicit URI/urlpath locators
 - flexible JSON-serialisable user metadata
@@ -37,7 +37,8 @@ descriptions, and locating stored paths.
 - Records: each record stores reserved top-level fields plus `user_metadata`, `derived_metadata`,
   and `naming_metadata`. Records now also carry a small `record_type` and `locator` so the model
   can grow beyond copied or moved local files without changing the basic catalog shape.
-- Naming and templates: file placement under `files/` is driven by simple directory and filename templates evaluated from record id, source filename parts, timestamps, and user metadata.
+- Naming and templates: managed files default to UUID primary paths under `data/objects/`.
+  Directory and filename templates produce human-readable symlink replicas or regenerated views.
 - Derived metadata extractors: optional extractors can add lightweight summaries after ingest. The current implementation includes a netCDF extractor when `xarray` is installed.
 - Hooks and plugins: projects can register Python hook objects to add domain-specific metadata,
   validation, rollback, and lifecycle behavior without adding that logic to `ogcat` core.
@@ -51,12 +52,15 @@ Each catalog root is self-describing:
 <catalog-root>/
   catalog.json
   db.json
-  files/
+  data/
+    files/
+    objects/
 ```
 
 - `catalog.json`: catalog specification, default schema, and optional named record schemas
 - `db.json`: TinyDB-backed record store
-- `files/`: managed storage root for ingested files
+- `data/files/`: human-readable template replicas and template-primary artifacts
+- `data/objects/`: UUID primary objects for default managed ingest
 
 ## Installation
 
@@ -179,12 +183,16 @@ catalog = Catalog.create("example-catalog", spec, plugins=plugins)
 See [docs/design-note-hooks-plugins.md](docs/design-note-hooks-plugins.md) for hook lifecycle,
 rollback, and transaction examples.
 
-Use `add_file()` when ogcat should manage a local copy or move into the catalog's `files/` tree.
+Use `add_file()` when ogcat should manage a local copy or move into the catalog's `data/objects/` tree.
 Use `add_reference()` when the artifact already exists and ogcat should only record a local path,
 URI, URL path, or explicit `ArtifactLocator`. Use `add_artifact()` with an `OperationSource` and
 artifact writer when a plugin or helper should materialise new data before the record is written.
 See `ogcat.writers` for small helper wrappers around in-memory data, path-backed transforms, and zip
 extraction examples.
+
+By default, `add_file()` stores the primary artifact under a UUID path and creates a template-based
+symlink replica for human-readable browsing. Pass `primary_location="template"` when the template
+path should be the primary storage location.
 
 Use `catalog.plan_artifact_storage(...)` to dry-run a planned target before writing. The returned
 `StoragePlan` contains the locator, write intent, and resolved naming outputs; pass record metadata
@@ -194,6 +202,10 @@ ogcat derives a plan from the writer's declared `target_kind` and `write_mode` w
 Domain logic can create directory-like artifacts such as NetCDF collections or `.zarr` stores while
 ogcat core records only generic locators and metadata. Artifact writers remain the place where
 filesystem work and rollback registration happen.
+
+Use `catalog.plan_view(root, template, mode="symlink", ...)` to dry-run a generated symlink view
+from current catalog metadata. The returned plan reports collisions, unsupported locators, and
+missing primary paths before `plan.apply()` creates any links.
 
 ## CLI
 
@@ -301,11 +313,12 @@ uv run python -m http.server 8000
 
 ## Storage Model
 
-Current storage is still centred on path-based managed ingest for the MVP. Files added with
-`add_file()` are copied or moved into the catalog's `files/` tree, and the resulting stored path is
-recorded in the catalog database alongside metadata and naming information. Existing paths, URIs,
-and explicit URI/urlpath locators can be recorded with `add_reference()` without copying or moving
-data.
+Current storage is still centred on path-backed managed ingest for the MVP. Files added with
+`add_file()` are copied or moved into the catalog's `data/objects/` tree by default, and the
+resulting primary path is recorded in the catalog database alongside metadata and naming
+information. Template-derived paths are linked replicas that can be regenerated after metadata or
+template changes. Existing paths, URIs, and explicit URI/urlpath locators can be recorded with
+`add_reference()` without copying or moving data.
 
 Records now also include a minimal locator block:
 

@@ -116,7 +116,7 @@ print(example_flux_cdl())
 | Method | Use it when | Storage effect |
 | --- | --- | --- |
 | `add_reference(...)` | The artifact already exists and should stay where it is. | Records a local path, URI, or URL path; does not copy, move, or write data. |
-| `add_file(...)` | ogcat should manage a local copy or move a finished file into catalog storage. | Copies or moves one local file into the catalog `files_root`. |
+| `add_file(...)` | ogcat should manage a local copy or move a finished file into catalog storage. | Copies or moves one local file into the catalog object storage root and, by default, creates a readable template symlink under `files_root`. |
 | `add_artifact(...)` with a `StoragePlan` and writer | Domain code should create the output while ogcat handles planning, record creation, and rollback hooks. | The writer materialises the planned file or directory, then ogcat records it. |
 
 For the detailed storage model, see

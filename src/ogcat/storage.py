@@ -20,6 +20,7 @@ from ogcat.models import ArtifactLocator
 TargetKind = Literal["file", "directory"]
 WriteMode = Literal["copy", "move", "write", "reference"]
 ChecksumPolicy = Literal["none"]
+StoragePrimaryLocation = Literal["uuid", "template", "user_provided"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +45,9 @@ class StoragePlan:
         resolved_directory: Optional rendered directory path for template-based
             storage.
         resolved_filename: Optional rendered filename or final path component.
+        artifact_uuid: Optional UUID-style artifact storage identifier.
+        primary_location: Optional primary placement policy, such as ``"uuid"``,
+            ``"template"``, or ``"user_provided"``.
     """
 
     locator: ArtifactLocator
@@ -57,6 +61,8 @@ class StoragePlan:
     storage_relative_path: str | None = None
     resolved_directory: str | None = None
     resolved_filename: str | None = None
+    artifact_uuid: str | None = None
+    primary_location: StoragePrimaryLocation | None = None
 
 
 class StorageAdapter(Protocol):
@@ -231,6 +237,8 @@ def plan_storage(
     storage_relative_path: str | None = None,
     resolved_directory: str | None = None,
     resolved_filename: str | None = None,
+    artifact_uuid: str | None = None,
+    primary_location: StoragePrimaryLocation | None = None,
 ) -> StoragePlan:
     """Build a storage plan from already-resolved storage decisions.
 
@@ -250,6 +258,9 @@ def plan_storage(
         resolved_directory: Optional rendered directory path for template-based
             storage.
         resolved_filename: Optional rendered filename or final path component.
+        artifact_uuid: Optional UUID-style artifact storage identifier.
+        primary_location: Optional primary placement policy, such as ``"uuid"``,
+            ``"template"``, or ``"user_provided"``.
 
     Returns:
         Storage plan describing the target and intended write.
@@ -266,6 +277,8 @@ def plan_storage(
         storage_relative_path=storage_relative_path,
         resolved_directory=resolved_directory,
         resolved_filename=resolved_filename,
+        artifact_uuid=artifact_uuid,
+        primary_location=primary_location,
     )
 
 
@@ -425,6 +438,7 @@ __all__ = [
     "LocalStorageAdapter",
     "StorageAdapter",
     "StoragePlan",
+    "StoragePrimaryLocation",
     "TargetKind",
     "WriteMode",
     "adapter_for_locator",

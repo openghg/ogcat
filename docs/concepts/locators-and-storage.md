@@ -33,7 +33,7 @@ directly, but ogcat does not interpret them beyond recording the string value.
 Use the three catalog add methods for different storage responsibilities:
 
 - ``Catalog.add_file(...)`` is for managed local ingest. It copies or moves a
-  local source into the catalog's ``files/`` tree.
+  local source into the catalog's ``data/objects/`` tree by default.
 - ``Catalog.add_reference(...)`` is for artifacts that already exist. It records
   a local path, URI, URI locator, or URL-path locator without copying, moving,
   or writing artifact data.
@@ -44,7 +44,9 @@ Use the three catalog add methods for different storage responsibilities:
 ## Managed files
 
 ``catalog.add_file()`` copies or moves the source file into the catalog's
-``files/`` tree and records a ``path`` locator pointing at the stored copy.
+``data/objects/`` tree by default and records a ``path`` locator pointing at
+that UUID-backed primary copy. The configured directory and filename templates
+create a human-readable symlink replica, not the canonical artifact path.
 
 ```python
 record = catalog.add_file(
@@ -52,23 +54,36 @@ record = catalog.add_file(
     metadata={"species": "CO2"},
     operation="copy",     # or "move"
 )
-print(record.path())      # path inside files/
+print(record.path())      # primary UUID path inside data/objects/
 ```
 
-The storage location is derived from directory and filename templates stored
-in ``catalog.json``.  The defaults are:
+The human-readable replica location is derived from directory and filename
+templates stored in ``catalog.json``. The defaults are:
 
 ```
 directory: {year_added}/{original_stem}
 filename:  {title_slug|original_stem}{original_suffix}
 ```
 
+Pass ``primary_location="template"`` to keep the older template-primary
+behavior:
+
+```python
+record = catalog.add_file(
+    Path("data.nc"),
+    metadata={"species": "CO2"},
+    primary_location="template",
+)
+```
+
 ## Storage plans
 
 ``Catalog.plan_artifact_storage()`` performs the planning part of an add operation
-without writing data or inserting a record.  It validates metadata, applies the
-same naming templates, lets locator-resolution hooks adjust the result, and
-returns a ``StoragePlan``.
+without writing data or inserting a record. It validates metadata, applies the
+primary placement policy, lets locator-resolution hooks adjust the result, and
+returns a ``StoragePlan``. The default primary placement is UUID-backed; pass
+``primary_location="template"`` when schema templates should define the primary
+target.
 
 ```python
 plan = catalog.plan_artifact_storage(
@@ -84,6 +99,29 @@ target kind, write mode, storage-relative path, resolved directory, and resolved
 filename.  It does not carry record metadata; pass metadata again to
 ``add_artifact(...)`` when turning a storage plan into a record.
 
+## Generated replica views
+
+Use ``Catalog.plan_view()`` to build generated human-readable views from current
+record metadata and primary locators. Planning is a dry run: it renders target
+paths, reports duplicate paths and unsupported records, and does not create
+links.
+
+```python
+plan = catalog.plan_view(
+    root="./by-product",
+    template="{product}/{species}/{id}_{original_filename}",
+    mode="symlink",
+    where={"provenance": "derived"},
+)
+print(plan.collisions)
+result = plan.apply()
+print(result.created)
+```
+
+For v1, only local symlink replicas are supported. URI and URL-path records are
+reported as unsupported for local views, and missing primary paths are reported
+before applying unless ``skip_errors=True`` is passed to ``apply()``.
+
 ## Overriding template-derived storage paths
 
 Pass an explicit locator when the correct target path is known and should not be
@@ -97,7 +135,7 @@ from pathlib import Path
 from ogcat import ArtifactLocator, UnzipSingleFileArtifactWriter, path_source
 
 archive_path = Path("incoming/GCP-GridFEDv2023.1_2018.zip")
-target_path = catalog.root / "files" / "flux/raw/GridFED/v2023.1/co2-o2/GCP-GridFEDv2023.1_2018.nc"
+target_path = catalog.root / "data" / "files" / "flux/raw/GridFED/v2023.1/co2-o2/GCP-GridFEDv2023.1_2018.nc"
 
 plan = catalog.plan_artifact_storage(
     archive_path,
@@ -138,7 +176,7 @@ filesystem side effects and rollback registration.
 To catalog a file that should stay in place, use ``add_reference()``. For local
 paths, ogcat infers the path locator, original filename, suffixes, and original
 path. The file is not copied or moved, and it does not need to be under the
-catalog's managed ``files/`` root.
+catalog's managed ``data/files/`` root.
 
 ```python
 catalog.add_reference(
@@ -166,5 +204,6 @@ storage adapters. Install the optional dependency with
 <catalog-root>/
   catalog.json      catalog specification and schemas
   db.json           TinyDB record store
-  files/            managed file storage tree
+  data/files/       human-readable template replica tree
+  data/objects/     UUID primary object storage tree
 ```
