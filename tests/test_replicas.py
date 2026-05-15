@@ -109,6 +109,37 @@ def test_view_reports_missing_primary_targets(tmp_path: Path) -> None:
     assert result.skipped[0].state == ReplicaState.MISSING_TARGET
 
 
+def test_apply_rechecks_missing_primary_targets_after_planning(tmp_path: Path) -> None:
+    """Apply should not create a broken link when a planned primary disappears."""
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+    record = catalog.add_file(_source_file(tmp_path, "alpha.nc"), metadata={"product": "flux"})
+    primary_path = record.path()
+    assert primary_path is not None
+    plan = catalog.plan_view(tmp_path / "view", "{product}/{id}.nc")
+    target_path = plan.items[0].target_path
+    primary_path.unlink()
+
+    with pytest.raises(ValueError, match="Primary target does not exist"):
+        plan.apply()
+
+    assert not target_path.exists()
+    assert not target_path.is_symlink()
+
+    result = plan.apply(skip_errors=True)
+    assert result.skipped[0].state == ReplicaState.MISSING_TARGET
+    assert not target_path.exists()
+    assert not target_path.is_symlink()
+
+
+def test_plan_view_rejects_normalized_parent_segments(tmp_path: Path) -> None:
+    """Whitespace-padded parent-directory segments must not escape the view root."""
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+    catalog.add_file(_source_file(tmp_path, "alpha.nc"), metadata={"product": " .. "})
+
+    with pytest.raises(ValueError, match="relative path below the view root"):
+        catalog.plan_view(tmp_path / "view", "{product}/{id}.nc")
+
+
 def test_view_regeneration_uses_updated_metadata_without_moving_primary(tmp_path: Path) -> None:
     """Regenerated views use current metadata while the primary UUID path stays put."""
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))

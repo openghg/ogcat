@@ -39,6 +39,15 @@ class ReplicaState(StrEnum):
     ERROR = "error"
 
 
+_BLOCKING_STATES = frozenset(
+    {
+        ReplicaState.COLLISION,
+        ReplicaState.UNSUPPORTED,
+        ReplicaState.MISSING_TARGET,
+    }
+)
+
+
 @dataclass(frozen=True, slots=True)
 class ReplicaPlanItem:
     """One planned or applied replica path.
@@ -145,21 +154,20 @@ class ReplicaViewPlan:
             ValueError: If the plan contains blocking items and ``skip_errors``
                 is false.
         """
-        blocking = [
-            item
-            for item in self.items
-            if item.state in {ReplicaState.COLLISION, ReplicaState.UNSUPPORTED, ReplicaState.MISSING_TARGET}
-        ]
+        blocking = [item for item in self.items if item.state in _BLOCKING_STATES]
         if blocking and not skip_errors:
             raise ValueError(_format_blocking_items(blocking))
 
         results: list[ReplicaPlanItem] = []
         for item in self.items:
-            if item.state in {ReplicaState.COLLISION, ReplicaState.UNSUPPORTED, ReplicaState.MISSING_TARGET}:
+            if item.state in _BLOCKING_STATES:
                 results.append(item)
                 continue
             try:
-                results.append(_apply_symlink_item(item))
+                applied = _apply_symlink_item(item)
+                if applied.state in _BLOCKING_STATES and not skip_errors:
+                    raise ValueError(_format_blocking_items([applied]))
+                results.append(applied)
             except OSError as exc:
                 error_item = replace(item, state=ReplicaState.ERROR, message=str(exc))
                 if not skip_errors:
@@ -331,6 +339,12 @@ def _apply_symlink_item(item: ReplicaPlanItem) -> ReplicaPlanItem:
     """Apply one symlink plan item."""
     if item.source_path is None:
         return replace(item, state=ReplicaState.UNSUPPORTED)
+    if not item.source_path.exists():
+        return replace(
+            item,
+            state=ReplicaState.MISSING_TARGET,
+            message=f"Primary target does not exist: {item.source_path}",
+        )
     existing_state = _existing_target_state(item.target_path, item.source_path)
     if existing_state is not None:
         return replace(item, state=existing_state[0], message=existing_state[1])
@@ -367,9 +381,10 @@ def _render_replica_path(root: Path, template: str, context: dict[str, object]) 
     parts = [part for part in rendered.replace("\\", "/").split("/") if part]
     if not parts:
         raise ValueError("Replica template rendered an empty path.")
-    if any(part in {".", ".."} for part in parts) or Path(rendered).is_absolute():
+    normalised_parts = [_normalise_segment(part) for part in parts]
+    if any(part in {".", ".."} for part in normalised_parts) or Path(rendered).is_absolute():
         raise ValueError(f"Replica template must render a relative path below the view root: {rendered}")
-    return root.joinpath(*(_normalise_segment(part) for part in parts))
+    return root.joinpath(*normalised_parts)
 
 
 def _record_original_name(record: CatalogRecord) -> str:
