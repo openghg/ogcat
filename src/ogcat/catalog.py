@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import getpass
-import importlib.util
 import os
 import warnings
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
@@ -30,7 +29,7 @@ from ogcat.hooks import (
     validate_hook_objects,
 )
 from ogcat.models import ArtifactLocator, CatalogRecord, JsonValue, MetadataDict, normalize_metadata
-from ogcat.naming import _split_name_and_suffixes, build_naming_context, render_storage_location
+from ogcat.naming import build_naming_context, render_storage_location
 from ogcat.operation_helpers import (
     adapter_name,
     artifact_locator_from_context,
@@ -65,6 +64,12 @@ from ogcat.storage import (
     WriteMode,
     plan_storage,
 )
+from ogcat.storage_planning import (
+    PrimaryLocation,
+    _render_planned_locator,
+    _storage_relative_path_for_locator,
+    _uuid_storage_path,
+)
 from ogcat.tinydb_repository import TinyDbCatalogRepository
 from ogcat.transactions import UnitOfWork
 from ogcat.validation import ValidationReport, validate_metadata, validate_spec
@@ -73,8 +78,6 @@ from ogcat.writers import CopyArtifactWriter, MoveArtifactWriter
 ArtifactLocatorFactory = Callable[[OperationContext], ArtifactLocator]
 StoragePlanFactory = Callable[[OperationContext, ArtifactLocator], StoragePlan | None]
 DerivedMetadataCollector = Callable[[OperationContext, ArtifactLocator], None]
-PlannedLocatorResult = tuple[ArtifactLocator, str | None, str | None, str | None]
-PrimaryLocation = Literal["uuid", "template"]
 PluginInput = PluginRegistry | Iterable[object] | None
 HookInput = HookManager | Iterable[object] | None
 MetadataUpdateMode = Literal["replace", "shallow_merge"]
@@ -438,15 +441,21 @@ class Catalog:
         validation_report.raise_for_errors()
 
         if locator is None:
+            directory_template = _require_template(schema.directory_template, field_name="directory_template")
+            filename_template = _require_template(schema.filename_template, field_name="filename_template")
             (
                 planned_locator,
                 storage_relative_path,
                 resolved_directory,
                 resolved_filename,
-            ) = self._render_planned_locator(
-                context=context,
-                schema=schema,
-                record_type=record_type,
+            ) = _render_planned_locator(
+                catalog_root=self.root,
+                files_root=self.root / self.spec.files_root,
+                objects_root=self.root / self.spec.objects_root,
+                operation_id=context.operation_id,
+                metadata=context.user_metadata,
+                directory_template=directory_template,
+                filename_template=filename_template,
                 source_path=source_path,
                 storage_root=storage_root,
                 date_added=timestamp[:10],
@@ -1264,87 +1273,6 @@ class Catalog:
         )
         return updated_record
 
-    def _render_planned_locator(
-        self,
-        *,
-        context: OperationContext,
-        schema: RecordSchema,
-        record_type: str | None,
-        source_path: Path | None,
-        storage_root: str | Path | None,
-        date_added: str,
-        primary_location: PrimaryLocation,
-    ) -> PlannedLocatorResult:
-        """Render schema naming templates into a local or fsspec target locator."""
-        directory_template = _require_template(schema.directory_template, field_name="directory_template")
-        filename_template = _require_template(schema.filename_template, field_name="filename_template")
-        naming_source = source_path or Path("artifact")
-        naming_context = build_naming_context(
-            record_id=context.operation_id,
-            operation_id=context.operation_id,
-            original_path=naming_source,
-            metadata=context.user_metadata,
-            date_added=date_added,
-        )
-        artifact_uuid = context.operation_id
-        naming_context["artifact_uuid"] = artifact_uuid
-        if primary_location == "uuid":
-            return _render_uuid_planned_locator(
-                catalog_root=self.root,
-                objects_root=self.root / self.spec.objects_root,
-                storage_root=storage_root,
-                artifact_uuid=artifact_uuid,
-                original_path=naming_source,
-            )
-
-        if storage_root is not None and _is_urlpath_root(storage_root):
-            root_url = str(storage_root).rstrip("/")
-            fake_root = Path("/__ogcat_storage__")
-
-            target, _rel_path, resolved_filename = render_storage_location(
-                files_root=fake_root,
-                directory_template=directory_template,
-                filename_template=filename_template,
-                context=naming_context,
-                exists=lambda candidate: _urlpath_exists_if_supported(
-                    _join_urlpath(root_url, candidate.relative_to(fake_root).as_posix())
-                ),
-            )
-            relative_path = target.relative_to(fake_root).as_posix()
-            resolved_directory = str(Path(relative_path).parent)
-            if resolved_directory == ".":
-                resolved_directory = ""
-            return (
-                ArtifactLocator.from_urlpath(_join_urlpath(root_url, relative_path)),
-                relative_path,
-                resolved_directory,
-                resolved_filename,
-            )
-
-        if storage_root is None:
-            files_root = self.root / self.spec.files_root
-        else:
-            files_root = Path(storage_root).expanduser().resolve()
-        storage_adapter = LocalStorageAdapter()
-        target, _catalog_relative_path, resolved_filename = render_storage_location(
-            files_root=files_root,
-            directory_template=directory_template,
-            filename_template=filename_template,
-            context=naming_context,
-            exists=lambda candidate: storage_adapter.exists(ArtifactLocator.from_path(candidate)),
-        )
-        relative_path = target.relative_to(self.root).as_posix() if storage_root is None else None
-        storage_relative_path = target.relative_to(files_root).as_posix()
-        resolved_directory = Path(storage_relative_path).parent.as_posix()
-        if resolved_directory == ".":
-            resolved_directory = ""
-        return (
-            ArtifactLocator.from_path(target, relative_path=relative_path),
-            storage_relative_path,
-            resolved_directory,
-            resolved_filename,
-        )
-
     def _add_artifact_in_transaction(
         self,
         *,
@@ -1715,54 +1643,6 @@ def _coerce_primary_location(value: object) -> PrimaryLocation:
     raise ValueError("primary_location must be 'uuid' or 'template'.")
 
 
-def _uuid_storage_path(
-    *,
-    catalog_root: Path,
-    objects_root: Path,
-    artifact_uuid: str,
-    original_path: Path,
-) -> tuple[Path, str, str]:
-    """Return the UUID primary path and relative path metadata."""
-    _stem, suffix = _split_name_and_suffixes(original_path.name)
-    storage_relative_path = f"{artifact_uuid[:2]}/{artifact_uuid}{suffix}"
-    target = objects_root / storage_relative_path
-    catalog_relative_path = target.relative_to(catalog_root).as_posix()
-    return target, catalog_relative_path, storage_relative_path
-
-
-def _render_uuid_planned_locator(
-    *,
-    catalog_root: Path,
-    objects_root: Path,
-    storage_root: str | Path | None,
-    artifact_uuid: str,
-    original_path: Path,
-) -> PlannedLocatorResult:
-    """Render a UUID primary locator for local or fsspec storage roots."""
-    _stem, suffix = _split_name_and_suffixes(original_path.name)
-    storage_relative_path = f"{artifact_uuid[:2]}/{artifact_uuid}{suffix}"
-    resolved_directory = directory_from_relative_path(storage_relative_path)
-    resolved_filename = Path(storage_relative_path).name
-
-    if storage_root is not None and _is_urlpath_root(storage_root):
-        return (
-            ArtifactLocator.from_urlpath(_join_urlpath(str(storage_root).rstrip("/"), storage_relative_path)),
-            storage_relative_path,
-            resolved_directory,
-            resolved_filename,
-        )
-
-    target_root = objects_root if storage_root is None else Path(storage_root).expanduser().resolve()
-    target = target_root / storage_relative_path
-    relative_path = target.relative_to(catalog_root).as_posix() if storage_root is None else None
-    return (
-        ArtifactLocator.from_path(target, relative_path=relative_path),
-        storage_relative_path,
-        resolved_directory,
-        resolved_filename,
-    )
-
-
 def _open_repository(root: Path, spec: CatalogSpec) -> CatalogRepository:
     """Create the configured repository for a catalog spec."""
     if spec.db_backend != "tinydb":
@@ -1869,38 +1749,6 @@ def _reference_locator_and_path(
     return ArtifactLocator.from_path(path), path
 
 
-def _urlpath_exists_if_supported(urlpath: str) -> bool:
-    """Return whether a URL path exists when fsspec is installed.
-
-    Args:
-        urlpath: URL path to check.
-
-    Returns:
-        ``True`` when the fsspec target exists. Returns ``False`` when fsspec or
-        a protocol-specific dependency is not installed so planning can remain a
-        dry-run without optional storage dependencies.
-    """
-    if importlib.util.find_spec("fsspec") is None:
-        return False
-    from ogcat.storage import adapter_for_locator
-
-    locator = ArtifactLocator.from_urlpath(urlpath)
-    try:
-        return adapter_for_locator(locator).exists(locator)
-    except ImportError:
-        return False
-
-
-def _is_urlpath_root(value: str | Path) -> bool:
-    """Return whether a storage root should be treated as an fsspec URL."""
-    return isinstance(value, str) and "://" in value
-
-
-def _join_urlpath(root_url: str, relative_path: str) -> str:
-    """Join an fsspec URL root and relative path without local path coercion."""
-    return f"{root_url.rstrip('/')}/{relative_path.lstrip('/')}"
-
-
 def _coerce_metadata_input(
     metadata: object,
     *,
@@ -1908,17 +1756,6 @@ def _coerce_metadata_input(
 ) -> MetadataDict:
     """Copy user metadata after preserving existing non-dictionary errors."""
     return normalize_metadata_for_schema(metadata, schema_name=schema_name)
-
-
-def _storage_relative_path_for_locator(locator: ArtifactLocator, *, storage_root: Path) -> str | None:
-    """Return a storage-root-relative path for a locator when available."""
-    if locator.kind == "path":
-        locator_path = Path(locator.value)
-        try:
-            return locator_path.relative_to(storage_root).as_posix()
-        except ValueError:
-            return locator.relative_path
-    return locator.relative_path
 
 
 def _require_template(value: str | None, *, field_name: str) -> str:

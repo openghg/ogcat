@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import ogcat.catalog as catalog_module
+import ogcat.storage_planning as storage_planning
 from ogcat import ArtifactLocator, Catalog, CatalogSpec, PluginRegistry, RecordSchema
 from ogcat.hooks import OperationContext, OperationSource
 from ogcat.models import MetadataDict
@@ -20,6 +21,72 @@ from ogcat.storage import (
     register_remove_on_rollback,
     remove_target,
 )
+
+
+def test_storage_planning_uuid_path_preserves_catalog_and_storage_relative_paths(
+    tmp_path: Path,
+) -> None:
+    """UUID path planning keeps catalog-relative and objects-relative metadata distinct."""
+    catalog_root = tmp_path / "catalog"
+    objects_root = catalog_root / "data" / "objects"
+    target, catalog_relative_path, storage_relative_path = storage_planning._uuid_storage_path(
+        catalog_root=catalog_root,
+        objects_root=objects_root,
+        artifact_uuid="abcdef123456",
+        original_path=tmp_path / "archive.tar.gz",
+    )
+
+    assert target == objects_root / "ab" / "abcdef123456.tar.gz"
+    assert catalog_relative_path == "data/objects/ab/abcdef123456.tar.gz"
+    assert storage_relative_path == "ab/abcdef123456.tar.gz"
+
+
+def test_storage_planning_joins_urlpath_roots_without_path_coercion() -> None:
+    """URL path joins should preserve the protocol while normalizing boundary slashes."""
+    assert storage_planning._join_urlpath("s3://bucket/prefix/", "/nested/file.nc") == (
+        "s3://bucket/prefix/nested/file.nc"
+    )
+
+
+def test_storage_planning_relative_path_prefers_local_storage_root(
+    tmp_path: Path,
+) -> None:
+    """Storage-relative metadata is relative to the root when the locator is underneath it."""
+    storage_root = tmp_path / "objects"
+    locator = ArtifactLocator.from_path(
+        storage_root / "ab" / "artifact.nc",
+        relative_path="data/objects/ab/artifact.nc",
+    )
+
+    assert storage_planning._storage_relative_path_for_locator(locator, storage_root=storage_root) == (
+        "ab/artifact.nc"
+    )
+
+
+def test_storage_planning_relative_path_falls_back_to_locator_metadata(
+    tmp_path: Path,
+) -> None:
+    """External local and URL-path locators keep their existing relative-path metadata."""
+    storage_root = tmp_path / "objects"
+    external_locator = ArtifactLocator.from_path(
+        tmp_path / "external" / "artifact.nc",
+        relative_path="external/artifact.nc",
+    )
+    url_locator = ArtifactLocator.from_urlpath(
+        "s3://bucket/prefix/artifact.nc",
+        relative_path="prefix/artifact.nc",
+    )
+
+    assert (
+        storage_planning._storage_relative_path_for_locator(
+            external_locator,
+            storage_root=storage_root,
+        )
+        == "external/artifact.nc"
+    )
+    assert storage_planning._storage_relative_path_for_locator(url_locator, storage_root=storage_root) == (
+        "prefix/artifact.nc"
+    )
 
 
 def test_plan_artifact_storage_uses_uuid_primary_without_writing(tmp_path: Path) -> None:
@@ -216,7 +283,7 @@ def test_urlpath_storage_root_does_not_populate_stored_relpath(
             ),
         ),
     )
-    monkeypatch.setattr(catalog_module, "_urlpath_exists_if_supported", lambda _urlpath: False)
+    monkeypatch.setattr(storage_planning, "_urlpath_exists_if_supported", lambda _urlpath: False)
 
     plan = catalog.plan_artifact_storage(
         source,
@@ -271,7 +338,7 @@ def test_plan_artifact_storage_urlpath_root_uses_available_collision_check(
         seen.append(urlpath)
         return urlpath.endswith("/fixed.nc")
 
-    monkeypatch.setattr(catalog_module, "_urlpath_exists_if_supported", fake_exists)
+    monkeypatch.setattr(storage_planning, "_urlpath_exists_if_supported", fake_exists)
 
     plan = catalog.plan_artifact_storage(
         source,
