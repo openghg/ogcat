@@ -19,30 +19,31 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Protocol
 
 from ogcat.audit import add_operation_note
 from ogcat.classification import CLASSIFICATION_METADATA_KEY, classify_artifact
 from ogcat.hooks import (
     HOOK_PHASES,
-    ArtifactWriter,
     HookDispatcher,
     HookLifecycleCallback,
     HookManager,
     OperationContext,
     OperationSource,
 )
+from ogcat.materialization import (
+    MaterializationIntent,
+    materialization_plan_from_locator,
+    validate_writer_matches_storage_plan,
+)
 from ogcat.models import ArtifactLocator, CatalogRecord, JsonValue, MetadataDict, normalize_metadata
 from ogcat.operation_helpers import (
-    adapter_name,
     artifact_locator_from_context,
-    directory_from_locator,
-    filename_from_locator,
     naming_metadata_from_storage_plan,
     normalize_metadata_for_schema,
 )
 from ogcat.spec import RecordSchema
-from ogcat.storage import StoragePlan, TargetKind, WriteMode, plan_storage
+from ogcat.storage import StoragePlan
 from ogcat.transactions import OperationState, RollbackFailure, UnitOfWork
 from ogcat.validation import ValidationReport
 
@@ -140,8 +141,8 @@ class AddOperationRequest:
     time_added: str | None
     source: OperationSource
     locator_factory: ArtifactLocatorFactory
+    materialization_intent: MaterializationIntent
     storage_plan_factory: StoragePlanFactory | None = None
-    artifact_writer: ArtifactWriter | None = None
     derived_metadata_collector: DerivedMetadataCollector | None = None
     record_post_processor: RecordPostProcessor | None = None
 
@@ -312,16 +313,10 @@ class AddOperationRunner(OperationRunner):
         context.storage_plan = (
             self.request.storage_plan_factory(context, locator)
             if self.request.storage_plan_factory is not None
-            else plan_storage(
+            else materialization_plan_from_locator(
                 locator,
-                target_kind=_target_kind_from_writer(self.request.artifact_writer),
-                write_mode=_write_mode_from_writer(self.request.artifact_writer),
-                ogcat_owned=self.request.artifact_writer is not None,
-                adapter=adapter_name(locator),
-                storage_relative_path=locator.relative_path,
-                resolved_directory=directory_from_locator(locator),
-                resolved_filename=filename_from_locator(locator),
-            )
+                intent=self.request.materialization_intent,
+            ).to_storage_plan()
         )
         storage_plan = context.storage_plan
         if storage_plan is None:
@@ -352,12 +347,8 @@ class AddOperationRunner(OperationRunner):
         set_phase: _PhaseSetter,
     ) -> None:
         """Materialise or skip the artifact write for an add operation."""
-        if self.request.artifact_writer is None:
-            if add_plan.storage_plan.write_mode != "reference":
-                raise ValueError(
-                    f"Storage plan with write mode {add_plan.storage_plan.write_mode!r} "
-                    "requires an artifact_writer."
-                )
+        writer = self.request.materialization_intent.writer
+        if add_plan.storage_plan.write_mode == "reference":
             self.dependencies.emit_operation_audit(
                 add_plan.context,
                 event_type="write",
@@ -369,16 +360,22 @@ class AddOperationRunner(OperationRunner):
                 locator=add_plan.locator,
             )
             return
+        if writer is None:
+            raise ValueError(
+                f"Storage plan with write mode {add_plan.storage_plan.write_mode!r} "
+                "requires an artifact_writer."
+            )
+        validate_writer_matches_storage_plan(writer, add_plan.storage_plan)
 
         set_phase("artifact-write")
-        self.request.artifact_writer.write(add_plan.context, add_plan.context.source, add_plan.locator)
+        writer.write(add_plan.context, add_plan.context.source, add_plan.locator)
         self.dependencies.emit_operation_audit(
             add_plan.context,
             event_type="write",
             message="Artifact write completed.",
             details={
                 "write_phase": "artifact-write",
-                "writer_type": type(self.request.artifact_writer).__name__,
+                "writer_type": type(writer).__name__,
                 "write_mode": add_plan.storage_plan.write_mode,
             },
             locator=add_plan.locator,
@@ -572,26 +569,6 @@ def _add_classification_metadata(context: OperationContext, locator: ArtifactLoc
         }
     elif existing is None:
         context.derived_metadata[CLASSIFICATION_METADATA_KEY] = classification
-
-
-def _target_kind_from_writer(artifact_writer: ArtifactWriter | None) -> TargetKind:
-    """Infer a storage target kind from a writer when it declares one."""
-    if artifact_writer is None:
-        return "file"
-    target_kind = getattr(artifact_writer, "target_kind", "file")
-    if target_kind in {"file", "directory"}:
-        return cast(TargetKind, target_kind)
-    return "file"
-
-
-def _write_mode_from_writer(artifact_writer: ArtifactWriter | None) -> WriteMode:
-    """Infer a storage write mode from a writer when it declares one."""
-    if artifact_writer is None:
-        return "reference"
-    write_mode = getattr(artifact_writer, "write_mode", "write")
-    if write_mode in {"copy", "move", "write", "reference"}:
-        return cast(WriteMode, write_mode)
-    return "write"
 
 
 def _validation_audit_level(report: ValidationReport) -> str:

@@ -28,6 +28,7 @@ from ogcat.hooks import (
     coerce_hook_iterable,
     validate_hook_objects,
 )
+from ogcat.materialization import reference_intent, writer_intent
 from ogcat.models import ArtifactLocator, CatalogRecord, JsonValue, MetadataDict, normalize_metadata
 from ogcat.operation_helpers import (
     artifact_locator_from_context,
@@ -1328,8 +1329,10 @@ class Catalog:
             time_added=time_added,
             source=source,
             locator_factory=locator_factory,
+            materialization_intent=(
+                reference_intent() if artifact_writer is None else writer_intent(artifact_writer)
+            ),
             storage_plan_factory=storage_plan_factory,
-            artifact_writer=artifact_writer,
             derived_metadata_collector=derived_metadata_collector,
             record_post_processor=record_post_processor,
         )

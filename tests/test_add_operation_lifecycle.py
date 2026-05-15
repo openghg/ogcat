@@ -19,6 +19,7 @@ from ogcat import (
 )
 from ogcat.catalog_application import CatalogApplication
 from ogcat.operation_runner import AddOperationRequest, OperationRunner
+from ogcat.storage import StoragePlan
 
 
 def test_add_file_facade_delegates_to_application_service(
@@ -100,7 +101,104 @@ def test_run_add_operation_delegates_to_operation_runner(
     assert request.operation_type == "add_artifact"
     assert request.record_type == "external_reference"
     assert request.metadata == {"title": "Delegated"}
+    assert request.materialization_intent.writer is None
+    assert request.materialization_intent.write_mode == "reference"
+    assert request.materialization_intent.ogcat_owned is False
     assert record.id == "runner"
+
+
+def test_add_file_application_request_uses_copy_materialization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Managed file requests carry explicit copy materialization intent."""
+    requests: list[AddOperationRequest] = []
+
+    class FakeRunner(OperationRunner):
+        def __init__(self, request: AddOperationRequest) -> None:
+            self.request = request
+
+        def run(self) -> CatalogRecord:
+            return CatalogRecord(
+                catalog="files",
+                time_added="2026-05-15T00:00:00Z",
+                id="runner",
+                record_type=self.request.record_type,
+                locator=ArtifactLocator.path(tmp_path / "stored.nc"),
+            )
+
+    def build_fake_runner(self: Catalog, request: AddOperationRequest) -> OperationRunner:
+        requests.append(request)
+        return FakeRunner(request)
+
+    monkeypatch.setattr(Catalog, "_build_add_operation_runner", build_fake_runner)
+    source = tmp_path / "source.nc"
+    source.write_text("payload", encoding="utf-8")
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+
+    catalog.add_file(source, operation="copy")
+
+    request = requests[0]
+    assert request.operation_type == "add_file"
+    assert request.materialization_intent.target_kind == "file"
+    assert request.materialization_intent.write_mode == "copy"
+    assert request.materialization_intent.ogcat_owned is True
+    assert type(request.materialization_intent.writer).__name__ == "CopyArtifactWriter"
+
+
+def test_add_artifact_application_request_uses_writer_materialization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Writer-backed artifact requests carry target kind and write mode intent."""
+    requests: list[AddOperationRequest] = []
+
+    class DirectoryWriter:
+        target_kind = "directory"
+        write_mode = "write"
+
+        def write(
+            self,
+            context: OperationContext,
+            source: OperationSource,
+            target: ArtifactLocator,
+        ) -> None:
+            raise AssertionError("fake runner should not invoke writer")
+
+    class FakeRunner(OperationRunner):
+        def __init__(self, request: AddOperationRequest) -> None:
+            self.request = request
+
+        def run(self) -> CatalogRecord:
+            return CatalogRecord(
+                catalog="artifacts",
+                time_added="2026-05-15T00:00:00Z",
+                id="runner",
+                record_type=self.request.record_type,
+                locator=ArtifactLocator.path(tmp_path / "stored.zarr"),
+            )
+
+    def build_fake_runner(self: Catalog, request: AddOperationRequest) -> OperationRunner:
+        requests.append(request)
+        return FakeRunner(request)
+
+    writer = DirectoryWriter()
+    monkeypatch.setattr(Catalog, "_build_add_operation_runner", build_fake_runner)
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+
+    catalog.add_artifact(
+        record_type="zarr_store",
+        locator=ArtifactLocator.path(tmp_path / "store.zarr"),
+        source=OperationSource(kind="memory", descriptor="generated"),
+        artifact_writer=writer,
+    )
+
+    request = requests[0]
+    assert request.operation_type == "add_artifact"
+    assert request.materialization_intent.writer is writer
+    assert request.materialization_intent.target_kind == "directory"
+    assert request.materialization_intent.write_mode == "write"
+    assert request.materialization_intent.ogcat_owned is True
 
 
 def test_add_file_lifecycle_preserves_hook_order_and_file_storage(tmp_path: Path) -> None:
@@ -173,6 +271,71 @@ def test_record_only_add_artifact_skips_artifact_write(tmp_path: Path) -> None:
     assert record.stored_abspath == str(target)
     assert not target.exists()
     assert catalog.repository.all() == [record]
+
+
+def test_explicit_reference_storage_plan_skips_artifact_writer(tmp_path: Path) -> None:
+    """Explicit reference plans are authoritative and do not run supplied writers."""
+
+    class ExplodingWriter:
+        target_kind = "file"
+        write_mode = "write"
+
+        def write(
+            self,
+            context: OperationContext,
+            source: OperationSource,
+            target: ArtifactLocator,
+        ) -> None:
+            raise AssertionError("reference storage plan should skip the writer")
+
+    target = tmp_path / "planned.txt"
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+
+    record = catalog.add_artifact(
+        record_type="planned_reference",
+        storage_plan=StoragePlan(locator=ArtifactLocator.path(target), write_mode="reference"),
+        source=OperationSource(kind="text", descriptor="record only"),
+        artifact_writer=ExplodingWriter(),
+    )
+
+    assert record.locator == ArtifactLocator.path(target)
+    assert not target.exists()
+
+
+def test_explicit_storage_plan_rejects_writer_write_mode_mismatch(tmp_path: Path) -> None:
+    """Writer-declared write modes must match authoritative explicit plans."""
+
+    class CopyDeclaredWriter:
+        target_kind = "file"
+        write_mode = "copy"
+
+        def write(
+            self,
+            context: OperationContext,
+            source: OperationSource,
+            target: ArtifactLocator,
+        ) -> None:
+            raise AssertionError("mismatched writer should fail before writing")
+
+    target = tmp_path / "planned.txt"
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+
+    with pytest.raises(
+        ValueError,
+        match="Artifact writer write_mode 'copy' does not match storage plan write_mode 'move'",
+    ):
+        catalog.add_artifact(
+            record_type="planned_move",
+            storage_plan=StoragePlan(
+                locator=ArtifactLocator.path(target),
+                write_mode="move",
+                ogcat_owned=True,
+            ),
+            source=OperationSource(kind="text", descriptor="planned move"),
+            artifact_writer=CopyDeclaredWriter(),
+        )
+
+    assert not target.exists()
 
 
 def test_writer_backed_add_artifact_writes_and_persists_metadata(tmp_path: Path) -> None:

@@ -104,11 +104,12 @@ passed through `OperationServices`. Operation-specific data lives in request dat
 contract explicit enough for future runners, such as an artifact update runner, to reuse the same
 services without sharing add-only request fields.
 
-The next refinement is to make writer materialisation explicit below the public API. A primary
-artifact plan should answer where the artifact belongs, while a writer or materialiser plan should
-answer how bytes or directories are produced there. That distinction is important for future
-directory-backed collection artifacts and `.zarr`-style outputs because `Catalog` should not branch
-on file versus directory versus collection.
+Writer materialisation is represented explicitly by an internal materialisation intent and target.
+A primary artifact plan answers where the artifact belongs, and exposes that decision as a
+materialisation target. The materialisation intent answers how bytes or directories are produced
+there, if at all. That distinction is important for future directory-backed collection artifacts
+and `.zarr`-style outputs because `Catalog` should not branch on file versus directory versus
+collection.
 
 ## Why Templates and Metadata Live in `catalog.json`
 
