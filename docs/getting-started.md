@@ -9,7 +9,8 @@ records, and retrieve the stored path.
 uv run ogcat init ./my-catalog --name demo
 ```
 
-This writes ``my-catalog/catalog.json`` and creates ``my-catalog/files/``.
+This writes ``my-catalog/catalog.json`` and creates ``my-catalog/data/files/``
+and ``my-catalog/data/objects/``.
 
 ## Add a file
 
@@ -19,7 +20,7 @@ uv run ogcat add ./report.pdf \
   --meta title="Q1 Report" author="Alice" year=2024
 ```
 
-The file is copied into the catalog's ``files/`` tree.  The record id is
+The file is copied into the catalog's ``data/objects/`` tree.  The record id is
 printed to stdout.
 
 ## Search

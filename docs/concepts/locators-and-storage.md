@@ -33,7 +33,7 @@ directly, but ogcat does not interpret them beyond recording the string value.
 Use the three catalog add methods for different storage responsibilities:
 
 - ``Catalog.add_file(...)`` is for managed local ingest. It copies or moves a
-  local source into the catalog's ``files/`` tree.
+  local source into the catalog's ``data/objects/`` tree by default.
 - ``Catalog.add_reference(...)`` is for artifacts that already exist. It records
   a local path, URI, URI locator, or URL-path locator without copying, moving,
   or writing artifact data.
@@ -44,7 +44,7 @@ Use the three catalog add methods for different storage responsibilities:
 ## Managed files
 
 ``catalog.add_file()`` copies or moves the source file into the catalog's
-``files/objects/`` tree by default and records a ``path`` locator pointing at
+``data/objects/`` tree by default and records a ``path`` locator pointing at
 that UUID-backed primary copy. The configured directory and filename templates
 create a human-readable symlink replica, not the canonical artifact path.
 
@@ -54,7 +54,7 @@ record = catalog.add_file(
     metadata={"species": "CO2"},
     operation="copy",     # or "move"
 )
-print(record.path())      # primary UUID path inside files/objects/
+print(record.path())      # primary UUID path inside data/objects/
 ```
 
 The human-readable replica location is derived from directory and filename
@@ -135,7 +135,7 @@ from pathlib import Path
 from ogcat import ArtifactLocator, UnzipSingleFileArtifactWriter, path_source
 
 archive_path = Path("incoming/GCP-GridFEDv2023.1_2018.zip")
-target_path = catalog.root / "files" / "flux/raw/GridFED/v2023.1/co2-o2/GCP-GridFEDv2023.1_2018.nc"
+target_path = catalog.root / "data" / "files" / "flux/raw/GridFED/v2023.1/co2-o2/GCP-GridFEDv2023.1_2018.nc"
 
 plan = catalog.plan_artifact_storage(
     archive_path,
@@ -176,7 +176,7 @@ filesystem side effects and rollback registration.
 To catalog a file that should stay in place, use ``add_reference()``. For local
 paths, ogcat infers the path locator, original filename, suffixes, and original
 path. The file is not copied or moved, and it does not need to be under the
-catalog's managed ``files/`` root.
+catalog's managed ``data/files/`` root.
 
 ```python
 catalog.add_reference(
@@ -204,5 +204,6 @@ storage adapters. Install the optional dependency with
 <catalog-root>/
   catalog.json      catalog specification and schemas
   db.json           TinyDB record store
-  files/            managed file storage tree
+  data/files/       human-readable template replica tree
+  data/objects/     UUID primary object storage tree
 ```

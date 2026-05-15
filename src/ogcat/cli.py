@@ -660,6 +660,7 @@ def info(
     table.add_row("backend", str(description["backend"]))
     table.add_row("database path", str(description["database_path"]))
     table.add_row("files root", str(description["files_root"]))
+    table.add_row("objects root", str(description["objects_root"]))
     table.add_row("default operation", str(description["default_operation"]))
     table.add_row("directory template", str(description["directory_template"]))
     table.add_row("filename template", str(description["filename_template"]))

@@ -16,7 +16,7 @@ The locator shape is intentionally minimal:
 {
   "kind": "path",
   "value": "/abs/path/to/object",
-  "relative_path": "files/example.nc"
+  "relative_path": "data/objects/ab/abcdef.nc"
 }
 ```
 

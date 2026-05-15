@@ -11,6 +11,8 @@ from ogcat.models import MetadataFieldDescription
 
 DEFAULT_DIRECTORY_TEMPLATE = "{year_added}/{original_stem}"
 DEFAULT_FILENAME_TEMPLATE = "{title_slug|original_stem}{original_suffix}"
+DEFAULT_FILES_ROOT = "data/files"
+DEFAULT_OBJECTS_ROOT = "data/objects"
 
 
 @dataclass(slots=True)
@@ -102,7 +104,10 @@ class CatalogSpec:
         db_backend: Repository backend identifier. Only ``"tinydb"`` is
             supported today.
         db_path: Database path relative to the catalog root.
-        files_root: Managed file root relative to the catalog root.
+        files_root: Human-readable managed file view root relative to the
+            catalog root.
+        objects_root: UUID primary object storage root relative to the catalog
+            root.
         default_operation: Default managed-file operation.
         field_resolution_order: Namespace order for flattened search fields.
         default_record_schema: Name of the fallback schema in ``record_schemas``.
@@ -113,7 +118,8 @@ class CatalogSpec:
     catalog_name: str
     db_backend: str = "tinydb"
     db_path: str = "db.json"
-    files_root: str = "files"
+    files_root: str = DEFAULT_FILES_ROOT
+    objects_root: str = ""
     default_operation: Literal["copy", "move"] = "copy"
     field_resolution_order: list[str] = field(
         default_factory=lambda: ["top_level", "user_metadata", "derived_metadata"]
@@ -127,6 +133,8 @@ class CatalogSpec:
         self.default_record_schema = str(self.default_record_schema).strip()
         if not self.default_record_schema:
             raise ValueError("default_record_schema cannot be empty.")
+        self.files_root = str(self.files_root)
+        self.objects_root = str(self.objects_root or _default_objects_root(self.files_root))
         record_schemas = _coerce_record_schema_mapping(self.record_schemas)
         default_schema = _coerce_record_schema(self.default_schema, field_name="default_schema")
         if default_schema is not None:
@@ -158,6 +166,7 @@ class CatalogSpec:
             "db_backend": self.db_backend,
             "db_path": self.db_path,
             "files_root": self.files_root,
+            "objects_root": self.objects_root,
             "default_operation": self.default_operation,
             "field_resolution_order": list(self.field_resolution_order),
             "default_record_schema": self.default_record_schema,
@@ -175,7 +184,13 @@ class CatalogSpec:
             catalog_name=str(data["catalog_name"]),
             db_backend=str(data.get("db_backend", "tinydb")),
             db_path=str(data.get("db_path", "db.json")),
-            files_root=str(data.get("files_root", "files")),
+            files_root=str(data.get("files_root", DEFAULT_FILES_ROOT)),
+            objects_root=str(
+                data.get(
+                    "objects_root",
+                    _default_objects_root(str(data.get("files_root", DEFAULT_FILES_ROOT))),
+                )
+            ),
             default_operation=data.get("default_operation", "copy"),  # type: ignore[arg-type]
             field_resolution_order=[
                 str(item)
@@ -237,6 +252,13 @@ def _default_record_schema() -> RecordSchema:
         directory_template=DEFAULT_DIRECTORY_TEMPLATE,
         filename_template=DEFAULT_FILENAME_TEMPLATE,
     )
+
+
+def _default_objects_root(files_root: str) -> str:
+    """Return the default UUID object root for a managed files root."""
+    if files_root == DEFAULT_FILES_ROOT:
+        return DEFAULT_OBJECTS_ROOT
+    return f"{files_root.rstrip('/')}/objects"
 
 
 def _coerce_record_schema(value: object, *, field_name: str) -> RecordSchema | None:

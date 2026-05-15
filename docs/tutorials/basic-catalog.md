@@ -86,7 +86,7 @@ with TemporaryDirectory(prefix="ogcat-tutorial-") as tmp:
     )
 ```
 
-`add_file()` copies the source file into the catalog's managed `files/` tree.
+`add_file()` copies the source file into the catalog's managed `data/objects/` tree.
 `add_artifact()` records a locator and metadata without copying or moving data.
 
 ## Search and inspect records

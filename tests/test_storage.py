@@ -45,15 +45,15 @@ def test_plan_artifact_storage_uses_uuid_primary_without_writing(tmp_path: Path)
     )
 
     assert plan.artifact_uuid is not None
-    expected = root / "files" / "objects" / plan.artifact_uuid[:2] / f"{plan.artifact_uuid}.nc"
+    expected = root / "data" / "objects" / plan.artifact_uuid[:2] / f"{plan.artifact_uuid}.nc"
     assert plan.locator == ArtifactLocator.from_path(
         expected,
-        relative_path=f"files/objects/{plan.artifact_uuid[:2]}/{plan.artifact_uuid}.nc",
+        relative_path=f"data/objects/{plan.artifact_uuid[:2]}/{plan.artifact_uuid}.nc",
     )
     assert plan.write_mode == "copy"
-    assert plan.locator.relative_path == f"files/objects/{plan.artifact_uuid[:2]}/{plan.artifact_uuid}.nc"
-    assert plan.storage_relative_path == f"objects/{plan.artifact_uuid[:2]}/{plan.artifact_uuid}.nc"
-    assert plan.resolved_directory == f"objects/{plan.artifact_uuid[:2]}"
+    assert plan.locator.relative_path == f"data/objects/{plan.artifact_uuid[:2]}/{plan.artifact_uuid}.nc"
+    assert plan.storage_relative_path == f"{plan.artifact_uuid[:2]}/{plan.artifact_uuid}.nc"
+    assert plan.resolved_directory == plan.artifact_uuid[:2]
     assert plan.resolved_filename == f"{plan.artifact_uuid}.nc"
     assert plan.primary_location == "uuid"
     assert plan.ogcat_owned
@@ -84,8 +84,8 @@ def test_plan_artifact_storage_can_use_template_primary(tmp_path: Path) -> None:
         primary_location="template",
     )
 
-    expected = root / "files" / "CO2" / "2024" / "paris.nc"
-    assert plan.locator == ArtifactLocator.from_path(expected, relative_path="files/CO2/2024/paris.nc")
+    expected = root / "data" / "files" / "CO2" / "2024" / "paris.nc"
+    assert plan.locator == ArtifactLocator.from_path(expected, relative_path="data/files/CO2/2024/paris.nc")
     assert plan.storage_relative_path == "CO2/2024/paris.nc"
     assert plan.resolved_directory == "CO2/2024"
     assert plan.resolved_filename == "paris.nc"
@@ -117,7 +117,7 @@ def test_add_artifact_uses_planned_timestamp_for_date_named_paths(tmp_path: Path
 
     assert plan.time_added is not None
     assert record.time_added == plan.time_added
-    assert record.locator.relative_path == f"files/{plan.time_added[:4]}/planned.txt"
+    assert record.locator.relative_path == f"data/files/{plan.time_added[:4]}/planned.txt"
     assert record.user_metadata == metadata
     assert record.naming_metadata["resolved_filename"] == "planned.txt"
 

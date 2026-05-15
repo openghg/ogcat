@@ -26,7 +26,7 @@ Models and specifications
 
 .. autoclass:: ogcat.CatalogSpec
    :members:
-   :exclude-members: catalog_name, db_backend, db_path, files_root, default_operation, field_resolution_order, default_schema, record_schemas
+   :exclude-members: catalog_name, db_backend, db_path, files_root, objects_root, default_operation, field_resolution_order, default_schema, record_schemas
    :member-order: bysource
 
 .. autoclass:: ogcat.RecordSchema

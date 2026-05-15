@@ -283,7 +283,7 @@ def test_search_fields_selects_human_output_columns(tmp_path: Path) -> None:
     assert "CO2" in stdout
     resolved_path = record.path()
     assert resolved_path is not None
-    assert "files" in stdout
+    assert "objects" in stdout
     assert "product" not in stdout
     assert "CTE-HR" not in stdout
 
@@ -711,7 +711,19 @@ def test_spec_cli_rejects_files_root_update(tmp_path: Path) -> None:
     )
 
     assert result.exit_code == 1
-    assert "Changing files_root requires a file-root migration operation." in strip_ansi(result.stderr)
+    assert "Changing files_root requires a storage-root migration operation." in strip_ansi(result.stderr)
+
+
+def test_spec_cli_rejects_objects_root_update(tmp_path: Path) -> None:
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+
+    result = runner.invoke(
+        app,
+        ["spec", "set", "objects_root=renamed-objects", "--catalog", str(catalog.root)],
+    )
+
+    assert result.exit_code == 1
+    assert "Changing objects_root requires a storage-root migration operation." in strip_ansi(result.stderr)
 
 
 def test_add_accepts_multiple_metadata_items_after_single_meta_flag(tmp_path: Path) -> None:

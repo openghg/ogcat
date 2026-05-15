@@ -403,7 +403,7 @@ def test_resolve_artifact_locator_removal_fails_clearly(tmp_path: Path) -> None:
         catalog.add_file(source)
 
     assert catalog.repository.all() == []
-    assert not list((root / "files").rglob("missing-locator.nc"))
+    assert not list((root / "data" / "files").rglob("missing-locator.nc"))
 
 
 def test_hook_failure_rolls_back_staged_record_and_copied_file(tmp_path: Path) -> None:
@@ -425,7 +425,7 @@ def test_hook_failure_rolls_back_staged_record_and_copied_file(tmp_path: Path) -
 
     assert rollback_calls == ["external"]
     assert catalog.repository.all() == []
-    assert list((root / "files").rglob("failure.nc")) == []
+    assert list((root / "data" / "files").rglob("failure.nc")) == []
     assert source.exists()
 
 
