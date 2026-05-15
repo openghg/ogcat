@@ -13,6 +13,7 @@ _COMPRESSED_SUFFIXES = {".gz", ".bz2", ".xz", ".zip", ".zst"}
 _RESERVED_TEMPLATE_FIELDS = frozenset(
     {
         "date_added",
+        "artifact_uuid",
         "id",
         "operation_id",
         "original_filename",
