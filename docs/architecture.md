@@ -94,9 +94,10 @@ contract rather than the add lifecycle details.
 
 The current concrete runner is `AddOperationRunner`. It implements the add lifecycle for
 `add_file()` and `add_artifact()`: validation, hook dispatch, locator resolution, storage planning,
-artifact writing or reference skipping, derived metadata collection, record staging, commit, audit,
-and rollback. `OperationRunner` is the generic internal command interface with a single `run()`
-method, so future operation families can be represented without overloading add-specific names.
+artifact writing or reference skipping, derived metadata collection, record staging, required
+secondary artifact operations, commit, audit, and rollback. `OperationRunner` is the generic
+internal command interface with a single `run()` method, so future operation families can be
+represented without overloading add-specific names.
 
 Shared catalog services such as hook management, audit emission, validation, and record building are
 passed through `OperationServices`. Operation-specific data lives in request dataclasses such as
@@ -110,6 +111,11 @@ materialisation target. The materialisation intent answers how bytes or director
 there, if at all. That distinction is important for future directory-backed collection artifacts
 and `.zarr`-style outputs because `Catalog` should not branch on file versus directory versus
 collection.
+
+Required secondary artifacts, such as the default human-readable template symlink for UUID primary
+storage, are modeled as ordered secondary operations. They run after the primary record is staged
+and has an id, but before commit, so their filesystem effects and record metadata updates remain
+part of the same rollback boundary.
 
 ## Why Templates and Metadata Live in `catalog.json`
 

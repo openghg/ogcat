@@ -21,9 +21,9 @@ from ogcat.operation_runner import (
     AddOperationRequest,
     ArtifactLocatorFactory,
     DerivedMetadataCollector,
-    RecordPostProcessor,
     StoragePlanFactory,
 )
+from ogcat.secondary_artifacts import SecondaryArtifactOperation, TemplateLinkSecondaryArtifact
 from ogcat.spec import RecordSchema
 from ogcat.storage import StoragePlan
 from ogcat.storage_planning import (
@@ -124,7 +124,7 @@ class CatalogApplication:
             CopyArtifactWriter() if operation == "copy" else MoveArtifactWriter()
         )
         materialization_intent = writer_intent(artifact_writer)
-        record_post_processor = self._template_replica_post_processor(
+        secondary_artifact_operations = self._template_link_secondary_artifacts(
             primary_location=primary_location,
             directory_template=directory_template,
             filename_template=filename_template,
@@ -151,7 +151,7 @@ class CatalogApplication:
                 materialization_intent=materialization_intent,
                 storage_plan_factory=plan_local_file_storage,
                 derived_metadata_collector=collect_file_metadata,
-                record_post_processor=record_post_processor,
+                secondary_artifact_operations=secondary_artifact_operations,
             )
 
     def add_artifact(
@@ -236,7 +236,7 @@ class CatalogApplication:
         materialization_intent: MaterializationIntent,
         storage_plan_factory: StoragePlanFactory | None = None,
         derived_metadata_collector: DerivedMetadataCollector | None = None,
-        record_post_processor: RecordPostProcessor | None = None,
+        secondary_artifact_operations: tuple[SecondaryArtifactOperation, ...] = (),
     ) -> CatalogRecord:
         """Build and run a shared add-operation request."""
         request = AddOperationRequest(
@@ -259,36 +259,28 @@ class CatalogApplication:
             materialization_intent=materialization_intent,
             storage_plan_factory=storage_plan_factory,
             derived_metadata_collector=derived_metadata_collector,
-            record_post_processor=record_post_processor,
+            secondary_artifact_operations=secondary_artifact_operations,
         )
         return self.catalog._build_add_operation_runner(request).run()
 
-    def _template_replica_post_processor(
+    def _template_link_secondary_artifacts(
         self,
         *,
         primary_location: PrimaryLocation,
         directory_template: str,
         filename_template: str,
-    ) -> RecordPostProcessor | None:
-        """Return the default template-link post processor when required."""
+    ) -> tuple[SecondaryArtifactOperation, ...]:
+        """Return default secondary artifacts for UUID primary file adds."""
         if primary_location != "uuid":
-            return None
-
-        def create_default_template_replica(
-            transaction: UnitOfWork,
-            context: OperationContext,
-            record: CatalogRecord,
-        ) -> CatalogRecord:
-            """Create the default template symlink replica for a UUID primary."""
-            return self.catalog._create_template_link_replica(
-                transaction=transaction,
-                context=context,
-                record=record,
+            return ()
+        return (
+            TemplateLinkSecondaryArtifact(
+                catalog_root=self.catalog.root,
+                files_root=self.catalog.root / self.catalog.spec.files_root,
                 directory_template=directory_template,
                 filename_template=filename_template,
-            )
-
-        return create_default_template_replica
+            ),
+        )
 
 
 __all__ = ["CatalogApplication"]

@@ -28,7 +28,6 @@ from ogcat.hooks import (
     coerce_hook_iterable,
     validate_hook_objects,
 )
-from ogcat.materialization import reference_intent, writer_intent
 from ogcat.models import ArtifactLocator, CatalogRecord, JsonValue, MetadataDict, normalize_metadata
 from ogcat.operation_helpers import (
     artifact_locator_from_context,
@@ -38,12 +37,8 @@ from ogcat.operation_helpers import (
 from ogcat.operation_runner import (
     AddOperationRequest,
     AddOperationRunner,
-    ArtifactLocatorFactory,
-    DerivedMetadataCollector,
     OperationRunner,
     OperationServices,
-    RecordPostProcessor,
-    StoragePlanFactory,
 )
 from ogcat.plugins import PluginRegistry
 from ogcat.record_set import CatalogRecordSet
@@ -51,7 +46,6 @@ from ogcat.reference_planning import plan_reference_locator
 from ogcat.replicas import (
     ReplicaMode,
     ReplicaViewPlan,
-    materialize_template_link_replica,
     plan_replica_view,
 )
 from ogcat.repository import CatalogRepository
@@ -1108,45 +1102,6 @@ class Catalog:
             naming_metadata=normalized_naming_metadata,
         )
 
-    def _create_template_link_replica(
-        self,
-        *,
-        transaction: UnitOfWork,
-        context: OperationContext,
-        record: CatalogRecord,
-        directory_template: str,
-        filename_template: str,
-    ) -> CatalogRecord:
-        """Create and record the default template symlink replica."""
-        materialized = materialize_template_link_replica(
-            catalog_root=self.root,
-            files_root=self.root / self.spec.files_root,
-            record=record,
-            directory_template=directory_template,
-            filename_template=filename_template,
-            register_rollback=lambda action, description: transaction.register_rollback(
-                action,
-                description=description,
-            ),
-        )
-        if materialized is None:
-            return record
-        updated_record = replace(record, naming_metadata=materialized.naming_metadata)
-        updated_record = transaction.update_staged_record(updated_record)
-        self._emit_operation_audit(
-            context,
-            event_type="replica",
-            message="Template symlink replica created.",
-            details={
-                "replica_role": "template_link",
-                "replica_mode": "symlink",
-                "replica_path": str(materialized.target_path),
-                "primary_path": str(materialized.primary_path),
-            },
-            locator=record.locator,
-        )
-        return updated_record
-
     def _add_artifact_in_transaction(
         self,
         *,
@@ -1285,56 +1240,6 @@ class Catalog:
                 else f"{event.phase.label} hooks completed."
             ),
             details=details,
-        )
-
-    def _run_add_operation(
-        self,
-        *,
-        transaction: UnitOfWork,
-        commit: bool,
-        operation_type: str,
-        record_type: str,
-        schema: RecordSchema,
-        schema_record_type: str | None,
-        metadata: MetadataDict,
-        storage_mode: str | None,
-        original_path: str | Path | None,
-        original_filename: str | None,
-        suffixes: list[str] | None,
-        derived_metadata: MetadataDict,
-        naming_metadata: MetadataDict | None,
-        time_added: str | None,
-        source: OperationSource,
-        locator_factory: ArtifactLocatorFactory,
-        storage_plan_factory: StoragePlanFactory | None = None,
-        artifact_writer: ArtifactWriter | None = None,
-        derived_metadata_collector: DerivedMetadataCollector | None = None,
-        record_post_processor: RecordPostProcessor | None = None,
-    ) -> CatalogRecord:
-        """Run the shared add operation lifecycle for file and record-only adds."""
-        return self._application().run_add_operation(
-            transaction=transaction,
-            commit=commit,
-            operation_type=operation_type,
-            record_type=record_type,
-            schema=schema,
-            schema_record_type=schema_record_type,
-            metadata=metadata,
-            storage_mode=storage_mode,
-            original_path=original_path,
-            original_filename=original_filename,
-            suffixes=suffixes,
-            derived_metadata=derived_metadata,
-            naming_metadata=naming_metadata,
-            time_added=time_added,
-            source=source,
-            locator_factory=locator_factory,
-            materialization_intent=(
-                reference_intent() if artifact_writer is None else writer_intent(artifact_writer)
-            ),
-            storage_plan_factory=storage_plan_factory,
-            derived_metadata_collector=derived_metadata_collector,
-            record_post_processor=record_post_processor,
         )
 
     def _application(self) -> CatalogApplication:
