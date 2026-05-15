@@ -11,6 +11,7 @@ import ogcat.storage_planning as storage_planning
 from ogcat import ArtifactLocator, Catalog, CatalogSpec, PluginRegistry, RecordSchema
 from ogcat.hooks import OperationContext, OperationSource
 from ogcat.models import MetadataDict
+from ogcat.reference_planning import plan_reference_locator
 from ogcat.storage import (
     LocalStorageAdapter,
     adapter_for_locator,
@@ -29,21 +30,21 @@ def test_storage_planning_uuid_path_preserves_catalog_and_storage_relative_paths
     """UUID path planning keeps catalog-relative and objects-relative metadata distinct."""
     catalog_root = tmp_path / "catalog"
     objects_root = catalog_root / "data" / "objects"
-    target, catalog_relative_path, storage_relative_path = storage_planning._uuid_storage_path(
+    planned = storage_planning.uuid_storage_path(
         catalog_root=catalog_root,
         objects_root=objects_root,
         artifact_uuid="abcdef123456",
         original_path=tmp_path / "archive.tar.gz",
     )
 
-    assert target == objects_root / "ab" / "abcdef123456.tar.gz"
-    assert catalog_relative_path == "data/objects/ab/abcdef123456.tar.gz"
-    assert storage_relative_path == "ab/abcdef123456.tar.gz"
+    assert planned.target == objects_root / "ab" / "abcdef123456.tar.gz"
+    assert planned.catalog_relative_path == "data/objects/ab/abcdef123456.tar.gz"
+    assert planned.storage_relative_path == "ab/abcdef123456.tar.gz"
 
 
 def test_storage_planning_joins_urlpath_roots_without_path_coercion() -> None:
     """URL path joins should preserve the protocol while normalizing boundary slashes."""
-    assert storage_planning._join_urlpath("s3://bucket/prefix/", "/nested/file.nc") == (
+    assert storage_planning.join_urlpath("s3://bucket/prefix/", "/nested/file.nc") == (
         "s3://bucket/prefix/nested/file.nc"
     )
 
@@ -58,7 +59,7 @@ def test_storage_planning_relative_path_prefers_local_storage_root(
         relative_path="data/objects/ab/artifact.nc",
     )
 
-    assert storage_planning._storage_relative_path_for_locator(locator, storage_root=storage_root) == (
+    assert storage_planning.storage_relative_path_for_locator(locator, storage_root=storage_root) == (
         "ab/artifact.nc"
     )
 
@@ -78,15 +79,37 @@ def test_storage_planning_relative_path_falls_back_to_locator_metadata(
     )
 
     assert (
-        storage_planning._storage_relative_path_for_locator(
+        storage_planning.storage_relative_path_for_locator(
             external_locator,
             storage_root=storage_root,
         )
         == "external/artifact.nc"
     )
-    assert storage_planning._storage_relative_path_for_locator(url_locator, storage_root=storage_root) == (
+    assert storage_planning.storage_relative_path_for_locator(url_locator, storage_root=storage_root) == (
         "prefix/artifact.nc"
     )
+
+
+def test_reference_planning_resolves_local_path_reference(tmp_path: Path) -> None:
+    """Reference planning resolves path-backed references and preserves local path metadata."""
+    source = tmp_path / "source.nc"
+    source.write_text("payload", encoding="utf-8")
+
+    plan = plan_reference_locator(source, uri=None, urlpath=None)
+
+    assert plan.locator == ArtifactLocator.from_path(source.resolve())
+    assert plan.local_path == source.resolve()
+
+
+def test_reference_planning_resolves_uri_and_urlpath_references() -> None:
+    """Reference planning keeps URI and URL-path references path-free."""
+    uri_plan = plan_reference_locator(None, uri="https://example.org/data.nc", urlpath=None)
+    urlpath_plan = plan_reference_locator(None, uri=None, urlpath="s3://bucket/data.nc")
+
+    assert uri_plan.locator == ArtifactLocator(kind="uri", value="https://example.org/data.nc")
+    assert uri_plan.local_path is None
+    assert urlpath_plan.locator == ArtifactLocator.from_urlpath("s3://bucket/data.nc")
+    assert urlpath_plan.local_path is None
 
 
 def test_plan_artifact_storage_uses_uuid_primary_without_writing(tmp_path: Path) -> None:
@@ -283,7 +306,7 @@ def test_urlpath_storage_root_does_not_populate_stored_relpath(
             ),
         ),
     )
-    monkeypatch.setattr(storage_planning, "_urlpath_exists_if_supported", lambda _urlpath: False)
+    monkeypatch.setattr(storage_planning, "urlpath_exists_if_supported", lambda _urlpath: False)
 
     plan = catalog.plan_artifact_storage(
         source,
@@ -338,7 +361,7 @@ def test_plan_artifact_storage_urlpath_root_uses_available_collision_check(
         seen.append(urlpath)
         return urlpath.endswith("/fixed.nc")
 
-    monkeypatch.setattr(storage_planning, "_urlpath_exists_if_supported", fake_exists)
+    monkeypatch.setattr(storage_planning, "urlpath_exists_if_supported", fake_exists)
 
     plan = catalog.plan_artifact_storage(
         source,

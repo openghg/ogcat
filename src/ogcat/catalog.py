@@ -48,6 +48,7 @@ from ogcat.operation_runner import (
 )
 from ogcat.plugins import PluginRegistry
 from ogcat.record_set import CatalogRecordSet
+from ogcat.reference_planning import plan_reference_locator
 from ogcat.replicas import (
     ReplicaMode,
     ReplicaViewPlan,
@@ -66,9 +67,9 @@ from ogcat.storage import (
 )
 from ogcat.storage_planning import (
     PrimaryLocation,
-    _render_planned_locator,
-    _storage_relative_path_for_locator,
-    _uuid_storage_path,
+    render_planned_locator,
+    storage_relative_path_for_locator,
+    uuid_storage_path,
 )
 from ogcat.tinydb_repository import TinyDbCatalogRepository
 from ogcat.transactions import UnitOfWork
@@ -257,18 +258,21 @@ class Catalog:
                 date_added=timestamp[:10],
             )
             if resolved_primary_location == "uuid":
-                target, catalog_relative_path, storage_relative_path = _uuid_storage_path(
+                uuid_path = uuid_storage_path(
                     catalog_root=self.root,
                     objects_root=objects_root,
                     artifact_uuid=artifact_uuid,
                     original_path=source,
                 )
-                naming_metadata["primary_storage_relative_path"] = storage_relative_path
+                naming_metadata["primary_storage_relative_path"] = uuid_path.storage_relative_path
                 naming_metadata["primary_resolved_directory"] = directory_from_relative_path(
-                    storage_relative_path
+                    uuid_path.storage_relative_path
                 )
-                naming_metadata["primary_resolved_filename"] = target.name
-                return ArtifactLocator.from_path(target, relative_path=catalog_relative_path)
+                naming_metadata["primary_resolved_filename"] = uuid_path.target.name
+                return ArtifactLocator.from_path(
+                    uuid_path.target,
+                    relative_path=uuid_path.catalog_relative_path,
+                )
 
             storage_adapter = LocalStorageAdapter()
             target, _catalog_relative_path, _resolved_filename = render_storage_location(
@@ -294,7 +298,7 @@ class Catalog:
         ) -> StoragePlan:
             """Build the storage plan for a managed local file."""
             storage_root = objects_root if resolved_primary_location == "uuid" else files_root
-            storage_relative_path = _storage_relative_path_for_locator(locator, storage_root=storage_root)
+            storage_relative_path = storage_relative_path_for_locator(locator, storage_root=storage_root)
             return plan_storage(
                 locator,
                 target_kind="file",
@@ -443,12 +447,7 @@ class Catalog:
         if locator is None:
             directory_template = _require_template(schema.directory_template, field_name="directory_template")
             filename_template = _require_template(schema.filename_template, field_name="filename_template")
-            (
-                planned_locator,
-                storage_relative_path,
-                resolved_directory,
-                resolved_filename,
-            ) = _render_planned_locator(
+            planned = render_planned_locator(
                 catalog_root=self.root,
                 files_root=self.root / self.spec.files_root,
                 objects_root=self.root / self.spec.objects_root,
@@ -461,6 +460,10 @@ class Catalog:
                 date_added=timestamp[:10],
                 primary_location=resolved_primary_location,
             )
+            planned_locator = planned.locator
+            storage_relative_path = planned.storage_relative_path
+            resolved_directory = planned.resolved_directory
+            resolved_filename = planned.resolved_filename
         else:
             planned_locator = locator
             storage_relative_path = locator.relative_path
@@ -658,7 +661,9 @@ class Catalog:
         Returns:
             Persisted or staged reference record.
         """
-        locator, local_path = _reference_locator_and_path(reference, uri=uri, urlpath=urlpath)
+        reference_plan = plan_reference_locator(reference, uri=uri, urlpath=urlpath)
+        locator = reference_plan.locator
+        local_path = reference_plan.local_path
         resolved_original_path = original_path
         resolved_original_filename = original_filename
         resolved_suffixes = suffixes
@@ -1717,36 +1722,6 @@ def _merge_metadata(
     if mode == "replace":
         return dict(updates)
     return {**current, **updates}
-
-
-def _reference_locator_and_path(
-    reference: str | Path | ArtifactLocator | None,
-    *,
-    uri: str | None,
-    urlpath: str | None,
-) -> tuple[ArtifactLocator, Path | None]:
-    """Return the locator and local path metadata for a reference input."""
-    supplied = [value is not None for value in (reference, uri, urlpath)]
-    if sum(supplied) != 1:
-        raise ValueError("Pass exactly one of reference, uri, or urlpath.")
-    if uri is not None:
-        return ArtifactLocator(kind="uri", value=str(uri)), None
-    if urlpath is not None:
-        return ArtifactLocator.from_urlpath(str(urlpath)), None
-    assert reference is not None
-    if isinstance(reference, ArtifactLocator):
-        path = reference.as_path()
-        if path is None:
-            return reference, None
-        resolved_path = path.expanduser().resolve()
-        return ArtifactLocator.from_path(resolved_path, relative_path=reference.relative_path), resolved_path
-    if isinstance(reference, str):
-        if "://" in reference:
-            return ArtifactLocator(kind="uri", value=reference), None
-        path = Path(reference).expanduser().resolve()
-        return ArtifactLocator.from_path(path), path
-    path = Path(reference).expanduser().resolve()
-    return ArtifactLocator.from_path(path), path
 
 
 def _coerce_metadata_input(

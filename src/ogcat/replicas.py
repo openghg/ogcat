@@ -16,12 +16,12 @@ from typing import Literal
 
 from ogcat.models import CatalogRecord, MetadataDict
 from ogcat.naming import (
-    _RESERVED_TEMPLATE_FIELDS,
-    _normalise_segment,
-    _split_name_and_suffixes,
+    RESERVED_TEMPLATE_FIELDS,
     build_naming_context,
+    normalise_segment,
     render_storage_location,
     render_template,
+    split_name_and_suffixes,
 )
 from ogcat.operation_helpers import directory_from_relative_path
 
@@ -249,7 +249,7 @@ def replica_template_context(record: CatalogRecord) -> dict[str, object]:
     uuid_value = str(artifact_uuid or record_id)
     original_name = _record_original_name(record)
     naming_metadata = {
-        key: value for key, value in record.user_metadata.items() if key not in _RESERVED_TEMPLATE_FIELDS
+        key: value for key, value in record.user_metadata.items() if key not in RESERVED_TEMPLATE_FIELDS
     }
     context.update(
         build_naming_context(
@@ -262,7 +262,7 @@ def replica_template_context(record: CatalogRecord) -> dict[str, object]:
     )
     locator_path = record.path()
     locator_name = "" if locator_path is None else locator_path.name
-    locator_stem, locator_suffix = _split_name_and_suffixes(locator_name)
+    locator_stem, locator_suffix = split_name_and_suffixes(locator_name)
 
     context.update(
         {
@@ -277,7 +277,7 @@ def replica_template_context(record: CatalogRecord) -> dict[str, object]:
             "locator_kind": record.locator.kind,
             "locator_value": record.locator.value,
             "locator_filename": locator_name,
-            "locator_stem": _normalise_segment(locator_stem) if locator_stem else "",
+            "locator_stem": normalise_segment(locator_stem) if locator_stem else "",
             "locator_suffix": locator_suffix,
             "stored_relpath": record.stored_relpath or "",
             "path": "" if locator_path is None else str(locator_path),
@@ -481,7 +481,7 @@ def _render_replica_path(root: Path, template: str, context: dict[str, object]) 
     parts = [part for part in rendered.replace("\\", "/").split("/") if part]
     if not parts:
         raise ValueError("Replica template rendered an empty path.")
-    normalised_parts = [_normalise_segment(part) for part in parts]
+    normalised_parts = [normalise_segment(part) for part in parts]
     if any(part in {".", ".."} for part in normalised_parts) or Path(rendered).is_absolute():
         raise ValueError(f"Replica template must render a relative path below the view root: {rendered}")
     return root.joinpath(*normalised_parts)

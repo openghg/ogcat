@@ -9,25 +9,57 @@ from __future__ import annotations
 
 import importlib.util
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, TypeAlias
 
 from ogcat.models import ArtifactLocator
-from ogcat.naming import _split_name_and_suffixes, build_naming_context, render_storage_location
+from ogcat.naming import build_naming_context, render_storage_location, split_name_and_suffixes
 from ogcat.operation_helpers import directory_from_relative_path
 from ogcat.storage import LocalStorageAdapter
 
 PrimaryLocation: TypeAlias = Literal["uuid", "template"]
-PlannedLocatorResult: TypeAlias = tuple[ArtifactLocator, str | None, str | None, str | None]
 
 
-def _uuid_storage_path(
+@dataclass(frozen=True, slots=True)
+class PlannedLocator:
+    """Rendered locator and path metadata for a planned storage target.
+
+    Args:
+        locator: Target artifact locator.
+        storage_relative_path: Path relative to the relevant storage root.
+        resolved_directory: Rendered storage directory, when available.
+        resolved_filename: Rendered final path component, when available.
+    """
+
+    locator: ArtifactLocator
+    storage_relative_path: str | None
+    resolved_directory: str | None
+    resolved_filename: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class UuidStoragePath:
+    """Local UUID storage path and relative path metadata.
+
+    Args:
+        target: Local UUID target path.
+        catalog_relative_path: Target path relative to the catalog root.
+        storage_relative_path: Target path relative to the objects root.
+    """
+
+    target: Path
+    catalog_relative_path: str
+    storage_relative_path: str
+
+
+def uuid_storage_path(
     *,
     catalog_root: Path,
     objects_root: Path,
     artifact_uuid: str,
     original_path: Path,
-) -> tuple[Path, str, str]:
+) -> UuidStoragePath:
     """Return the local UUID primary path and relative path metadata.
 
     Args:
@@ -39,7 +71,7 @@ def _uuid_storage_path(
             suffixes.
 
     Returns:
-        Target path, catalog-relative path, and objects-root-relative path.
+        Local UUID storage path and relative path metadata.
     """
     storage_relative_path = _uuid_storage_relative_path(
         artifact_uuid=artifact_uuid,
@@ -47,17 +79,21 @@ def _uuid_storage_path(
     )
     target = objects_root / storage_relative_path
     catalog_relative_path = target.relative_to(catalog_root).as_posix()
-    return target, catalog_relative_path, storage_relative_path
+    return UuidStoragePath(
+        target=target,
+        catalog_relative_path=catalog_relative_path,
+        storage_relative_path=storage_relative_path,
+    )
 
 
-def _render_uuid_planned_locator(
+def render_uuid_planned_locator(
     *,
     catalog_root: Path,
     objects_root: Path,
     storage_root: str | Path | None,
     artifact_uuid: str,
     original_path: Path,
-) -> PlannedLocatorResult:
+) -> PlannedLocator:
     """Render a UUID primary locator for local or fsspec storage roots.
 
     Args:
@@ -70,8 +106,7 @@ def _render_uuid_planned_locator(
             suffixes.
 
     Returns:
-        Locator, storage-relative path, resolved directory, and resolved
-        filename.
+        Rendered locator and path metadata.
     """
     storage_relative_path = _uuid_storage_relative_path(
         artifact_uuid=artifact_uuid,
@@ -81,25 +116,25 @@ def _render_uuid_planned_locator(
     resolved_filename = Path(storage_relative_path).name
 
     if storage_root is not None and _is_urlpath_root(storage_root):
-        return (
-            ArtifactLocator.from_urlpath(_join_urlpath(str(storage_root), storage_relative_path)),
-            storage_relative_path,
-            resolved_directory,
-            resolved_filename,
+        return PlannedLocator(
+            locator=ArtifactLocator.from_urlpath(join_urlpath(str(storage_root), storage_relative_path)),
+            storage_relative_path=storage_relative_path,
+            resolved_directory=resolved_directory,
+            resolved_filename=resolved_filename,
         )
 
     target_root = objects_root if storage_root is None else Path(storage_root).expanduser().resolve()
     target = target_root / storage_relative_path
     relative_path = target.relative_to(catalog_root).as_posix() if storage_root is None else None
-    return (
-        ArtifactLocator.from_path(target, relative_path=relative_path),
-        storage_relative_path,
-        resolved_directory,
-        resolved_filename,
+    return PlannedLocator(
+        locator=ArtifactLocator.from_path(target, relative_path=relative_path),
+        storage_relative_path=storage_relative_path,
+        resolved_directory=resolved_directory,
+        resolved_filename=resolved_filename,
     )
 
 
-def _render_planned_locator(
+def render_planned_locator(
     *,
     catalog_root: Path,
     files_root: Path,
@@ -112,7 +147,7 @@ def _render_planned_locator(
     storage_root: str | Path | None,
     date_added: str,
     primary_location: PrimaryLocation,
-) -> PlannedLocatorResult:
+) -> PlannedLocator:
     """Render schema naming templates into a local or fsspec target locator.
 
     Args:
@@ -129,8 +164,7 @@ def _render_planned_locator(
         primary_location: Primary placement policy to render.
 
     Returns:
-        Locator, storage-relative path, resolved directory, and resolved
-        filename.
+        Rendered locator and path metadata.
     """
     naming_source = source_path or Path("artifact")
     naming_context = build_naming_context(
@@ -143,7 +177,7 @@ def _render_planned_locator(
     artifact_uuid = operation_id
     naming_context["artifact_uuid"] = artifact_uuid
     if primary_location == "uuid":
-        return _render_uuid_planned_locator(
+        return render_uuid_planned_locator(
             catalog_root=catalog_root,
             objects_root=objects_root,
             storage_root=storage_root,
@@ -170,15 +204,15 @@ def _render_planned_locator(
     )
     relative_path = target.relative_to(catalog_root).as_posix() if storage_root is None else None
     storage_relative_path = target.relative_to(local_files_root).as_posix()
-    return (
-        ArtifactLocator.from_path(target, relative_path=relative_path),
-        storage_relative_path,
-        directory_from_relative_path(storage_relative_path),
-        resolved_filename,
+    return PlannedLocator(
+        locator=ArtifactLocator.from_path(target, relative_path=relative_path),
+        storage_relative_path=storage_relative_path,
+        resolved_directory=directory_from_relative_path(storage_relative_path),
+        resolved_filename=resolved_filename,
     )
 
 
-def _urlpath_exists_if_supported(urlpath: str) -> bool:
+def urlpath_exists_if_supported(urlpath: str) -> bool:
     """Return whether a URL path exists when fsspec is installed.
 
     Args:
@@ -205,12 +239,12 @@ def _is_urlpath_root(value: str | Path) -> bool:
     return isinstance(value, str) and "://" in value
 
 
-def _join_urlpath(root_url: str, relative_path: str) -> str:
+def join_urlpath(root_url: str, relative_path: str) -> str:
     """Join an fsspec URL root and relative path without local path coercion."""
     return f"{root_url.rstrip('/')}/{relative_path.lstrip('/')}"
 
 
-def _storage_relative_path_for_locator(locator: ArtifactLocator, *, storage_root: Path) -> str | None:
+def storage_relative_path_for_locator(locator: ArtifactLocator, *, storage_root: Path) -> str | None:
     """Return a storage-root-relative path for a locator when available.
 
     Args:
@@ -236,7 +270,7 @@ def _render_urlpath_template_locator(
     directory_template: str,
     filename_template: str,
     naming_context: dict[str, object],
-) -> PlannedLocatorResult:
+) -> PlannedLocator:
     """Render a template-managed fsspec URL-path locator.
 
     Args:
@@ -257,20 +291,33 @@ def _render_urlpath_template_locator(
         directory_template=directory_template,
         filename_template=filename_template,
         context=naming_context,
-        exists=lambda candidate: _urlpath_exists_if_supported(
-            _join_urlpath(normalized_root_url, candidate.relative_to(fake_root).as_posix())
+        exists=lambda candidate: urlpath_exists_if_supported(
+            join_urlpath(normalized_root_url, candidate.relative_to(fake_root).as_posix())
         ),
     )
     storage_relative_path = target.relative_to(fake_root).as_posix()
-    return (
-        ArtifactLocator.from_urlpath(_join_urlpath(normalized_root_url, storage_relative_path)),
-        storage_relative_path,
-        directory_from_relative_path(storage_relative_path),
-        resolved_filename,
+    return PlannedLocator(
+        locator=ArtifactLocator.from_urlpath(join_urlpath(normalized_root_url, storage_relative_path)),
+        storage_relative_path=storage_relative_path,
+        resolved_directory=directory_from_relative_path(storage_relative_path),
+        resolved_filename=resolved_filename,
     )
 
 
 def _uuid_storage_relative_path(*, artifact_uuid: str, original_path: Path) -> str:
     """Return the objects-root-relative path for a UUID primary artifact."""
-    _stem, suffix = _split_name_and_suffixes(original_path.name)
+    _stem, suffix = split_name_and_suffixes(original_path.name)
     return f"{artifact_uuid[:2]}/{artifact_uuid}{suffix}"
+
+
+__all__ = [
+    "PlannedLocator",
+    "PrimaryLocation",
+    "UuidStoragePath",
+    "join_urlpath",
+    "render_planned_locator",
+    "render_uuid_planned_locator",
+    "storage_relative_path_for_locator",
+    "urlpath_exists_if_supported",
+    "uuid_storage_path",
+]
