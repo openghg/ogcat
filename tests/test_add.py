@@ -1,3 +1,4 @@
+import os
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -49,6 +50,23 @@ def test_add_file_uses_generic_default_storage_layout(tmp_path: Path) -> None:
     assert record.suffixes == [".nc"]
     assert record.storage_mode == "copy"
     assert record.naming_metadata["primary_location"] == "uuid"
+
+
+def test_add_file_template_replica_uses_relative_symlink_target(tmp_path: Path) -> None:
+    """Default template replicas use relative links so movable catalogs are less brittle."""
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "relative.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+
+    record = catalog.add_file(source)
+    replica_path = _template_replica_path(record)
+
+    assert replica_path.is_symlink()
+    assert not Path(os.readlink(replica_path)).is_absolute()
+    assert replica_path.resolve() == _stored_path(record)
 
 
 def test_add_file_can_store_primary_at_template_path(tmp_path: Path) -> None:

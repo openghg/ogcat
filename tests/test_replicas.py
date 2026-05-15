@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -51,6 +52,7 @@ def test_apply_symlink_view_creates_links_and_is_idempotent(tmp_path: Path) -> N
     link_path = result.created[0].target_path
 
     assert link_path.is_symlink()
+    assert not Path(os.readlink(link_path)).is_absolute()
     assert link_path.resolve() == primary_path
 
     second_result = catalog.plan_view(
@@ -60,6 +62,32 @@ def test_apply_symlink_view_creates_links_and_is_idempotent(tmp_path: Path) -> N
 
     assert second_result.created == []
     assert second_result.up_to_date[0].target_path == link_path
+
+
+def test_apply_skip_errors_reports_symlink_oserror_as_skipped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """skip_errors=True reports symlink failures in both skipped and errors."""
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+    catalog.add_file(_source_file(tmp_path, "alpha.nc"), metadata={"product": "flux"})
+    plan = catalog.plan_view(tmp_path / "view", "{product}/{id}_{original_filename}")
+
+    def fail_symlink_to(
+        self: Path,
+        target: str | Path,
+        target_is_directory: bool = False,
+    ) -> None:
+        raise OSError("simulated symlink failure")
+
+    monkeypatch.setattr(Path, "symlink_to", fail_symlink_to)
+
+    with pytest.raises(ValueError, match="simulated symlink failure"):
+        plan.apply()
+    result = plan.apply(skip_errors=True)
+
+    assert result.skipped[0].state == ReplicaState.ERROR
+    assert result.errors[0].state == ReplicaState.ERROR
 
 
 def test_view_reports_template_collisions(tmp_path: Path) -> None:

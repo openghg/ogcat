@@ -91,9 +91,10 @@ class ReplicaApplyResult:
 
     @property
     def skipped(self) -> list[ReplicaPlanItem]:
-        """Return replicas skipped because they were not actionable."""
+        """Return replicas skipped or left unapplied when errors were skipped."""
         skipped_states = {
             ReplicaState.COLLISION,
+            ReplicaState.ERROR,
             ReplicaState.UNSUPPORTED,
             ReplicaState.MISSING_TARGET,
         }
@@ -328,7 +329,7 @@ def materialize_template_link_replica(
             lambda path=target: path.unlink(missing_ok=True),
             f"remove template symlink replica {target}",
         )
-    target.symlink_to(primary_path)
+    target.symlink_to(_relative_symlink_target(primary_path, link_path=target))
 
     naming_metadata = dict(record.naming_metadata)
     naming_metadata.update(
@@ -440,7 +441,7 @@ def _apply_symlink_item(item: ReplicaPlanItem) -> ReplicaPlanItem:
     if existing_state is not None:
         return replace(item, state=existing_state[0], message=existing_state[1])
     item.target_path.parent.mkdir(parents=True, exist_ok=True)
-    item.target_path.symlink_to(item.source_path)
+    item.target_path.symlink_to(_relative_symlink_target(item.source_path, link_path=item.target_path))
     return replace(item, state=ReplicaState.CREATED)
 
 
@@ -464,6 +465,14 @@ def _symlink_points_to(link_path: Path, source_path: Path) -> bool:
     else:
         link_target = link_target.resolve()
     return link_target == source_path.resolve()
+
+
+def _relative_symlink_target(source_path: Path, *, link_path: Path) -> str | Path:
+    """Return a relative symlink target when the platform can represent one."""
+    try:
+        return os.path.relpath(source_path, start=link_path.parent)
+    except ValueError:
+        return source_path
 
 
 def _render_replica_path(root: Path, template: str, context: dict[str, object]) -> Path:
