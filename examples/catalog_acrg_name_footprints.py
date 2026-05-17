@@ -1,9 +1,10 @@
-"""Create an ogcat catalog for ACRG NAME footprint files on Blue Pebble.
+"""Create an ogcat catalog for ACRG NAME footprint collections on Blue Pebble.
 
-This example catalogs existing footprint files as external path-backed artifacts.
-It uses `Catalog.add_artifact(...)` together with `ArtifactLocator.path(...)`, so
-the files stay where they already live on the shared filesystem. Nothing is
-copied or moved into the catalog.
+This example catalogs existing footprint directories as logical collection
+artifacts. Each record represents one footprint series, with the monthly NetCDF
+files recorded as collection members through a relative ``collection_pattern``.
+The files stay where they already live on the shared filesystem. Nothing is
+copied, moved, or opened by ogcat.
 
 The script is aimed at the ACRG shared footprint tree on Blue Pebble, for
 example:
@@ -26,9 +27,13 @@ Records created by this script include metadata for:
 - `met_model`
 - `domain`
 - `species`
-- `year`
-- `month`
-- `start_date`
+- `years`
+- `year_start`
+- `year_end`
+- `month_start`
+- `month_end`
+- `member_count`
+- `collection_pattern`
 
 The current `fp_NAME` tree implies `model=NAME`, but that field is still written
 explicitly so the records remain readable and future comparisons with other LPDM
@@ -49,7 +54,9 @@ from pathlib import Path
 
 from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn, TimeElapsedColumn
 
-from ogcat import ArtifactLocator, Catalog, CatalogSpec, MetadataFieldDescription, RecordSchema
+from ogcat import Catalog, CatalogSpec, MetadataFieldDescription, RecordSchema
+
+FOOTPRINT_COLLECTION_RECORD_TYPE = "footprint_collection"
 
 FOOTPRINT_FILE_RE = re.compile(
     r"^(?P<site>[A-Za-z0-9]+)[-_](?P<inlet>\d{1,4}m)agl"
@@ -60,6 +67,7 @@ FOOTPRINT_FILE_RE = re.compile(
     r"|(?P<domain_only>[A-Za-z0-9-]+))"
     r"_(?P<year>\d{4})(?P<month>\d{2})\.nc$"
 )
+FOOTPRINT_MEMBER_DATE_RE = re.compile(r"_(?P<year>\d{4})(?P<month>\d{2})\.nc$")
 
 
 @dataclass(slots=True)
@@ -75,24 +83,77 @@ class FootprintMetadata:
     year: int
     month: int
 
+
+@dataclass(frozen=True, slots=True)
+class FootprintCollectionKey:
+    """Stable grouping key for one logical footprint collection."""
+
+    collection_root: Path
+    collection_pattern: str
+    site: str
+    inlet: str
+    model: str
+    met_model: str | None
+    domain: str
+    species: str | None
+
+
+@dataclass(slots=True)
+class FootprintCollection:
+    """Parsed metadata for one logical footprint collection."""
+
+    key: FootprintCollectionKey
+    paths: list[Path]
+    members: list[FootprintMetadata]
+
+    def add_member(self, path: Path, metadata: FootprintMetadata) -> None:
+        """Add one footprint member file to this collection."""
+        self.paths.append(path)
+        self.members.append(metadata)
+
+    @property
+    def collection_root(self) -> Path:
+        """Return the directory that contains this collection's member files."""
+        return self.key.collection_root
+
+    @property
+    def collection_pattern(self) -> str:
+        """Return the member pattern relative to the collection root."""
+        return self.key.collection_pattern
+
     def to_user_metadata(self) -> dict[str, object]:
-        """Convert parsed metadata into catalog user metadata."""
+        """Convert parsed collection metadata into catalog user metadata."""
+        months = sorted({(member.year, member.month) for member in self.members})
+        years = sorted({year for year, _month in months})
+        start_year, start_month = months[0]
+        end_year, end_month = months[-1]
         return {
-            "site": self.site,
-            "inlet": self.inlet,
-            "model": self.model,
-            "met_model": self.met_model,
-            "domain": self.domain,
-            "species": self.species,
-            "year": self.year,
-            "month": self.month,
-            "start_date": f"{self.year:04d}-{self.month:02d}-01",
+            "collection_root": str(self.collection_root),
+            "site": self.key.site,
+            "inlet": self.key.inlet,
+            "model": self.key.model,
+            "met_model": self.key.met_model,
+            "domain": self.key.domain,
+            "species": self.key.species,
+            "years": years,
+            "year_start": years[0],
+            "year_end": years[-1],
+            "month_start": f"{start_year:04d}-{start_month:02d}",
+            "month_end": f"{end_year:04d}-{end_month:02d}",
+            "member_count": len(self.paths),
+            "collection_pattern": self.collection_pattern,
         }
 
 
 def _metadata_fields() -> list[MetadataFieldDescription]:
-    """Return descriptive metadata fields for the footprint catalog."""
+    """Return descriptive metadata fields for the footprint collection catalog."""
     return [
+        MetadataFieldDescription(
+            name="collection_root",
+            description="Directory that contains this footprint collection's member files.",
+            example="/group/chem/acrg/LPDM/fp_NAME/EASTASIA/BCOB-10magl/inert",
+            required=True,
+        ),
         MetadataFieldDescription(
             name="site",
             description="ACRG site code extracted from the footprint filename.",
@@ -128,23 +189,65 @@ def _metadata_fields() -> list[MetadataFieldDescription]:
             example="inert",
         ),
         MetadataFieldDescription(
-            name="year",
-            description="Calendar year for the monthly footprint file.",
+            name="years",
+            description="Calendar years represented by this footprint collection.",
+            example=[2023, 2024],
+            required=True,
+        ),
+        MetadataFieldDescription(
+            name="year_start",
+            description="First calendar year represented by this footprint collection.",
+            example=2023,
+            required=True,
+        ),
+        MetadataFieldDescription(
+            name="year_end",
+            description="Last calendar year represented by this footprint collection.",
             example=2024,
             required=True,
         ),
         MetadataFieldDescription(
-            name="month",
-            description="Calendar month for the monthly footprint file.",
-            example=1,
+            name="month_start",
+            description="First YYYY-MM month represented by this footprint collection.",
+            example="2023-01",
+        ),
+        MetadataFieldDescription(
+            name="month_end",
+            description="Last YYYY-MM month represented by this footprint collection.",
+            example="2024-12",
+        ),
+        MetadataFieldDescription(
+            name="member_count",
+            description="Number of NetCDF member files represented by this collection record.",
+            example=24,
             required=True,
         ),
         MetadataFieldDescription(
-            name="start_date",
-            description="Convenience monthly start date derived from year and month.",
-            example="2024-01-01",
+            name="collection_pattern",
+            description="Relative pattern that identifies collection member files.",
+            example="BCOB-10magl_NAME_UMG_EASTASIA_inert_*.nc",
+            required=True,
         ),
     ]
+
+
+def _footprint_collection_schema() -> RecordSchema:
+    """Return the named schema used by ACRG footprint collection records."""
+    return RecordSchema(
+        description="ACRG NAME footprint series represented as one logical collection.",
+        metadata_fields=_metadata_fields(),
+        display_fields=[
+            "id",
+            "site",
+            "inlet",
+            "domain",
+            "species",
+            "year_start",
+            "year_end",
+            "member_count",
+            "path",
+        ],
+    )
 
 
 def parse_footprint_path(path: Path, *, default_model: str = "NAME") -> FootprintMetadata | None:
@@ -187,6 +290,60 @@ def parse_footprint_path(path: Path, *, default_model: str = "NAME") -> Footprin
         year=year,
         month=month,
     )
+
+
+def group_footprint_collections(paths: list[Path]) -> tuple[list[FootprintCollection], list[Path]]:
+    """Group footprint files into logical collection records.
+
+    Args:
+        paths: Candidate NetCDF paths discovered from a mounted tree or a saved
+            recursive listing.
+
+    Returns:
+        A sorted list of footprint collections and a list of paths skipped
+        because their filenames did not match the supported patterns.
+    """
+    grouped: dict[FootprintCollectionKey, FootprintCollection] = {}
+    skipped: list[Path] = []
+
+    for path in paths:
+        metadata = parse_footprint_path(path)
+        if metadata is None:
+            skipped.append(path)
+            continue
+
+        key = FootprintCollectionKey(
+            collection_root=path.parent,
+            collection_pattern=_collection_pattern_for_member(path),
+            site=metadata.site,
+            inlet=metadata.inlet,
+            model=metadata.model,
+            met_model=metadata.met_model,
+            domain=metadata.domain,
+            species=metadata.species,
+        )
+        collection = grouped.get(key)
+        if collection is None:
+            collection = FootprintCollection(key=key, paths=[], members=[])
+            grouped[key] = collection
+        collection.add_member(path, metadata)
+
+    collections = sorted(
+        grouped.values(),
+        key=lambda collection: (str(collection.collection_root), collection.collection_pattern),
+    )
+    for collection in collections:
+        collection.paths.sort()
+        collection.members.sort(key=lambda member: (member.year, member.month))
+    return collections, skipped
+
+
+def _collection_pattern_for_member(path: Path) -> str:
+    """Return the member glob for files in the same footprint series."""
+    pattern, replacements = FOOTPRINT_MEMBER_DATE_RE.subn("_*.nc", path.name)
+    if replacements == 1:
+        return pattern
+    return "*.nc"
 
 
 def discover_paths_from_source_root(source_root: Path) -> list[Path]:
@@ -245,20 +402,11 @@ def build_catalog(
     catalog_name: str,
     append: bool,
 ) -> tuple[Catalog, int, list[Path]]:
-    """Build a catalog from a footprint tree or saved listing."""
+    """Build a catalog of footprint collections from a tree or saved listing."""
     if source_root is None and listing_path is None:
         raise ValueError("Provide at least one of --source-root or --listing.")
 
-    if (catalog_root / "catalog.json").exists():
-        catalog = Catalog.open(catalog_root)
-        if not append and catalog.describe()["record_count"] != 0:
-            raise ValueError("Catalog already exists and is not empty. Use --append to add more records.")
-    else:
-        spec = CatalogSpec(
-            catalog_name=catalog_name,
-            default_schema=RecordSchema(metadata_fields=_metadata_fields()),
-        )
-        catalog = Catalog.create(catalog_root, spec)
+    catalog = _open_or_create_catalog(catalog_root, catalog_name=catalog_name, append=append)
 
     discovered_paths: dict[str, Path] = {}
     if source_root is not None:
@@ -269,10 +417,9 @@ def build_catalog(
             discovered_paths[str(path)] = path
 
     all_paths = list(discovered_paths.values())
-    batch_size = 250
-    skipped: list[Path] = []
+    collections, skipped = group_footprint_collections(all_paths)
     added_count = 0
-    print(f"Discovered {len(all_paths)} candidate NetCDF files.")
+    print(f"Discovered {len(all_paths)} candidate NetCDF files in {len(collections)} collection(s).")
 
     progress = Progress(
         TextColumn("[progress.description]{task.description}"),
@@ -282,42 +429,64 @@ def build_catalog(
         transient=False,
     )
     with progress:
-        task_id = progress.add_task("Cataloging footprint files", total=len(all_paths))
-        pending_artifacts: list[dict[str, object]] = []
-        for index, path in enumerate(all_paths, start=1):
-            if index == 1 or index % batch_size == 0 or index == len(all_paths):
+        task_id = progress.add_task("Cataloging footprint collections", total=len(collections))
+        for index, collection in enumerate(collections, start=1):
+            if index == 1 or index % 50 == 0 or index == len(collections):
                 print(
-                    f"Processing file {index:,} of {len(all_paths):,}: {path.name}",
+                    f"Processing collection {index:,} of {len(collections):,}: {collection.collection_root}",
                     flush=True,
                 )
-            metadata = parse_footprint_path(path)
-            if metadata is None:
-                skipped.append(path)
-                progress.advance(task_id)
-                continue
-
-            pending_artifacts.append(
-                {
-                    "record_type": "external_reference",
-                    "locator": ArtifactLocator.path(path),
-                    "metadata": metadata.to_user_metadata(),
-                    "original_filename": path.name,
-                    "suffixes": path.suffixes,
-                }
-            )
-
-            if len(pending_artifacts) >= batch_size:
-                catalog.add_artifacts(pending_artifacts)
-                added_count += len(pending_artifacts)
-                pending_artifacts.clear()
+            _add_footprint_collection(catalog, collection)
+            added_count += 1
 
             progress.advance(task_id)
 
-        if pending_artifacts:
-            catalog.add_artifacts(pending_artifacts)
-            added_count += len(pending_artifacts)
-
     return catalog, added_count, skipped
+
+
+def _open_or_create_catalog(catalog_root: Path, *, catalog_name: str, append: bool) -> Catalog:
+    """Open or create a footprint catalog with the named collection schema."""
+    if (catalog_root / "catalog.json").exists():
+        catalog = Catalog.open(catalog_root)
+        if not append and catalog.describe()["record_count"] != 0:
+            raise ValueError("Catalog already exists and is not empty. Use --append to add more records.")
+        _ensure_footprint_collection_schema(catalog)
+        return catalog
+
+    spec = CatalogSpec(
+        catalog_name=catalog_name,
+        record_schemas={FOOTPRINT_COLLECTION_RECORD_TYPE: _footprint_collection_schema()},
+    )
+    return Catalog.create(catalog_root, spec)
+
+
+def _ensure_footprint_collection_schema(catalog: Catalog) -> None:
+    """Add the footprint collection schema when opening older catalogs."""
+    if FOOTPRINT_COLLECTION_RECORD_TYPE not in catalog.list_record_schemas():
+        catalog.add_record_schema(FOOTPRINT_COLLECTION_RECORD_TYPE, _footprint_collection_schema())
+
+
+def _add_footprint_collection(catalog: Catalog, collection: FootprintCollection) -> None:
+    """Record one footprint collection without requiring listing roots to exist."""
+    metadata = collection.to_user_metadata()
+    common_kwargs = {
+        "record_type": FOOTPRINT_COLLECTION_RECORD_TYPE,
+        "metadata": metadata,
+        "collection_pattern": collection.collection_pattern,
+        "member_format": "netcdf",
+        "member_suffixes": [".nc"],
+        "reader_hint": "xarray.open_mfdataset",
+        "suffixes": [],
+    }
+    if collection.collection_root.is_dir():
+        catalog.add_collection(collection.collection_root, **common_kwargs)
+    else:
+        catalog.add_collection(
+            uri=str(collection.collection_root),
+            original_path=str(collection.collection_root),
+            original_filename=collection.collection_root.name,
+            **common_kwargs,
+        )
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

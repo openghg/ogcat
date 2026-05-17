@@ -37,6 +37,10 @@ Use the three catalog add methods for different storage responsibilities:
 - ``Catalog.add_reference(...)`` is for artifacts that already exist. It records
   a local path, URI, URI locator, or URL-path locator without copying, moving,
   or writing artifact data.
+- ``Catalog.add_collection(...)`` is for existing logical datasets whose members
+  live under one collection root, such as a directory of monthly NetCDF files or
+  a remote prefix. It records one artifact with collection classification
+  metadata and does not scan, copy, move, or open member files.
 - ``Catalog.add_artifact(...)`` with a ``StoragePlan`` and an artifact writer is
   for workflow outputs. ogcat plans and records the artifact, while the writer
   performs the actual filesystem or storage operation.
@@ -197,6 +201,65 @@ Use ``ArtifactLocator.from_urlpath(...)`` or ``urlpath=`` with
 ``add_reference(...)`` when the location should be interpreted by fsspec-backed
 storage adapters. Install the optional dependency with
 ``ogcat[fsspec]`` before a writer performs fsspec-backed storage work.
+
+## Collection artifacts
+
+Use ``add_collection(...)`` when one logical dataset is made from multiple
+member artifacts that should be selected and opened together. Common examples
+are monthly or yearly NetCDF files for one model/product series, directories of
+tiles, and remote object-store prefixes.
+
+```python
+footprints = catalog.add_collection(
+    Path("/group/chem/acrg/LPDM/fp_NAME/EASTASIA/BCOB-10magl/inert"),
+    record_type="footprint_collection",
+    metadata={
+        "site": "BCOB",
+        "domain": "EASTASIA",
+        "years": [2023, 2024],
+        "member_count": 24,
+    },
+    collection_pattern="BCOB-10magl_NAME_UMG_EASTASIA_inert_*.nc",
+    member_format="netcdf",
+    member_suffixes=[".nc"],
+    reader_hint="xarray.open_mfdataset",
+)
+```
+
+A local path-backed collection must be an existing directory. When the root is
+not mounted locally, pass ``uri=`` or ``urlpath=`` instead; ogcat records the
+locator and classification metadata without checking the remote contents.
+
+```python
+remote_footprints = catalog.add_collection(
+    uri="/group/chem/acrg/LPDM/fp_NAME/EASTASIA/BCOB-10magl/inert",
+    record_type="footprint_collection",
+    metadata={"site": "BCOB", "domain": "EASTASIA"},
+    collection_pattern="BCOB-10magl_NAME_UMG_EASTASIA_inert_*.nc",
+    member_format="netcdf",
+    member_suffixes=[".nc"],
+    reader_hint="xarray.open_mfdataset",
+)
+```
+
+Collection metadata is stored under
+``derived_metadata["classification"]``. The most useful fields are flattened for
+ordinary search:
+
+```python
+records = catalog.search(
+    where={
+        "artifact_kind": "collection",
+        "member_format": "netcdf",
+        "collection_pattern": "BCOB-10magl_NAME_UMG_EASTASIA_inert_*.nc",
+    }
+)
+```
+
+ogcat does not interpret the member pattern beyond validating that it is a safe
+relative pattern. Downstream code is responsible for resolving the root and
+opening members, for example with xarray when ``reader_hint`` is
+``"xarray.open_mfdataset"``.
 
 ## Catalog layout
 

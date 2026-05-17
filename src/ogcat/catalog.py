@@ -19,6 +19,7 @@ from ogcat.audit import (
     JsonlAuditSink,
 )
 from ogcat.catalog_application import CatalogApplication
+from ogcat.classification import CLASSIFICATION_METADATA_KEY, collection_classification_metadata
 from ogcat.hooks import (
     ArtifactWriter,
     HookLifecycleEvent,
@@ -547,6 +548,108 @@ class Catalog:
             original_filename=resolved_original_filename,
             suffixes=resolved_suffixes,
             derived_metadata=derived_metadata,
+            naming_metadata=naming_metadata,
+            time_added=time_added,
+            source=source,
+            transaction=transaction,
+        )
+
+    def add_collection(
+        self,
+        collection: str | Path | ArtifactLocator | None = None,
+        *,
+        uri: str | None = None,
+        urlpath: str | None = None,
+        record_type: str = "collection",
+        metadata: Mapping[Any, Any] | None = None,
+        collection_pattern: str = "*",
+        member_format: str | None = None,
+        member_suffixes: Sequence[str] | None = None,
+        reader_hint: str | None = None,
+        original_path: str | Path | None = None,
+        original_filename: str | None = None,
+        suffixes: list[str] | None = None,
+        derived_metadata: Mapping[Any, Any] | None = None,
+        naming_metadata: Mapping[Any, Any] | None = None,
+        time_added: str | None = None,
+        source: OperationSource | None = None,
+        transaction: UnitOfWork | None = None,
+    ) -> CatalogRecord:
+        """Record a directory-backed logical collection as one artifact.
+
+        Collection semantics are explicit: a plain directory reference remains
+        a directory unless callers opt into this method.
+
+        Args:
+            collection: Local directory, URI-like string, or explicit artifact
+                locator for the collection root.
+            uri: Optional explicit URI collection root. Pass exactly one of
+                ``collection``, ``uri``, or ``urlpath``.
+            urlpath: Optional fsspec-style URL-path collection root. Pass
+                exactly one of ``collection``, ``uri``, or ``urlpath``.
+            record_type: Logical type of record to create.
+            metadata: JSON-compatible user metadata.
+            collection_pattern: Relative pattern describing intended members,
+                for example ``"*.nc"``.
+            member_format: Optional format label for collection members.
+            member_suffixes: Optional suffixes expected for collection members.
+            reader_hint: Optional human-readable downstream reader hint.
+            original_path: Optional source path or URI override. Inferred for
+                local collection roots when omitted.
+            original_filename: Optional source filename override. Inferred for
+                local collection roots when omitted.
+            suffixes: Optional source suffix list override. Inferred for local
+                collection roots when omitted.
+            derived_metadata: Optional derived metadata to persist alongside
+                collection classification.
+            naming_metadata: Optional naming metadata to persist.
+            time_added: Optional timestamp override.
+            source: Optional operation source for hooks.
+            transaction: Optional caller-owned unit of work.
+
+        Returns:
+            Persisted or staged collection record.
+
+        Raises:
+            ValueError: If a local collection root is not an existing directory
+                or if collection metadata is invalid.
+        """
+        reference_plan = plan_reference_locator(collection, uri=uri, urlpath=urlpath)
+        locator = reference_plan.locator
+        local_path = reference_plan.local_path
+        if local_path is not None:
+            _require_collection_directory(local_path)
+
+        resolved_original_path = original_path
+        resolved_original_filename = original_filename
+        resolved_suffixes = suffixes
+        if local_path is not None:
+            if resolved_original_path is None:
+                resolved_original_path = local_path
+            if resolved_original_filename is None:
+                resolved_original_filename = local_path.name
+            if resolved_suffixes is None:
+                resolved_suffixes = local_path.suffixes
+
+        collection_classification = collection_classification_metadata(
+            collection_pattern=collection_pattern,
+            member_format=member_format,
+            member_suffixes=member_suffixes,
+            reader_hint=reader_hint,
+        )
+        resolved_derived_metadata = _with_collection_classification(
+            derived_metadata,
+            collection_classification=collection_classification,
+        )
+        return self.add_artifact(
+            record_type=record_type,
+            locator=locator,
+            metadata=metadata,
+            storage_mode="reference",
+            original_path=resolved_original_path,
+            original_filename=resolved_original_filename,
+            suffixes=resolved_suffixes,
+            derived_metadata=resolved_derived_metadata,
             naming_metadata=naming_metadata,
             time_added=time_added,
             source=source,
@@ -1581,6 +1684,42 @@ def _validate_artifact_batch_item(item: object, index: int) -> dict[str, object]
         raise ValueError(f"artifact batch item {index} must not supply {forbidden}")
 
     return item
+
+
+def _require_collection_directory(path: Path) -> None:
+    """Raise when a local collection root is not an accessible directory."""
+    try:
+        is_directory = path.is_dir()
+    except OSError as exc:
+        raise ValueError(f"Collection path is not an accessible directory: {path}") from exc
+    if not is_directory:
+        raise ValueError(f"Collection path must be an existing directory: {path}")
+
+
+def _with_collection_classification(
+    derived_metadata: Mapping[Any, Any] | None,
+    *,
+    collection_classification: MetadataDict,
+) -> MetadataDict:
+    """Return derived metadata with collection classification enforced."""
+    resolved = (
+        {}
+        if derived_metadata is None
+        else normalize_metadata(derived_metadata, field_name="derived_metadata")
+    )
+    existing_classification = resolved.get(CLASSIFICATION_METADATA_KEY)
+    if isinstance(existing_classification, Mapping):
+        merged_classification = {
+            **existing_classification,
+            **collection_classification,
+        }
+    else:
+        merged_classification = dict(collection_classification)
+    resolved[CLASSIFICATION_METADATA_KEY] = normalize_metadata(
+        merged_classification,
+        field_name=f"derived_metadata.{CLASSIFICATION_METADATA_KEY}",
+    )
+    return resolved
 
 
 def _operation_audit_details(context: OperationContext) -> dict[str, object]:
