@@ -19,6 +19,7 @@ from ogcat import (
 )
 from ogcat.catalog_application import CatalogApplication
 from ogcat.materialization import reference_intent
+from ogcat.models import MetadataDict
 from ogcat.operation_runner import AddOperationRequest, OperationRunner
 from ogcat.secondary_artifacts import SecondaryArtifactResult, SecondaryArtifactRole
 from ogcat.storage import StoragePlan
@@ -320,7 +321,7 @@ def test_add_file_template_secondary_emits_replica_audit(tmp_path: Path) -> None
 
 def test_secondary_artifacts_run_in_order_and_share_metadata(tmp_path: Path) -> None:
     """Later secondary operations see metadata updates from earlier operations."""
-    calls: list[tuple[str, dict[str, object]]] = []
+    calls: list[tuple[str, MetadataDict]] = []
 
     class FirstSecondaryArtifact:
         role: SecondaryArtifactRole = "template_link"
