@@ -7,17 +7,50 @@ metadata when possible, and exposes search through both Python and CLI.
 
 ## Current Architecture
 
-The main pieces are:
+The main pieces now sit in four rough layers. These are working boundaries, not
+a formal framework:
+
+- **Presentation/API:** `Catalog`, `CatalogRecordSet`, and the CLI expose user
+  workflows. They should keep public argument handling and user-facing
+  compatibility behavior visible, while delegating operation choreography.
+- **Application/orchestration:** `CatalogApplication`, `AddOperationRunner`,
+  operation request objects, hooks, audit emission, and units of work coordinate
+  complete operations. This layer owns sequencing, rollback boundaries, and
+  runner dependencies.
+- **Domain/policy:** storage planning, materialisation targets, naming,
+  validation, cheap classification, replica-view planning, secondary artifact
+  policy, and future collection-artifact policy own catalog rules.
+- **Data/infrastructure:** `CatalogRepository`, `TinyDbCatalogRepository`,
+  storage adapters, filesystem/fsspec helpers, and bundled writers own
+  persistence and side effects.
+
+The most important responsibility split is that `Catalog` is the public facade,
+not the operation engine. `Catalog` selects the public operation and validates
+public inputs. Application services and runners decide how to execute the
+operation. Domain planning modules decide where artifacts and secondary
+artifacts belong. Repositories and storage adapters perform persistence and
+filesystem-like effects.
+
+Key concrete types are:
 
 - `CatalogSpec`: the serialisable catalog definition stored in `catalog.json`
-- `Catalog`: the user-facing API for creating, opening, adding, searching, and resolving record paths
+- `Catalog`: the public API facade for creating, opening, adding, searching, and resolving record paths
+- `CatalogApplication`: the internal application service that builds add-operation requests
+- `AddOperationRunner`: the current lifecycle runner for `add_file()` and `add_artifact()`
+- `StoragePlan` and materialisation targets: explicit storage/write decisions for primary artifacts
+- `SecondaryArtifactOperation`: ordered follow-up operations such as template-link symlinks
 - `CatalogRepository`: a protocol for record storage
 - `TinyDbCatalogRepository`: the current repository implementation
 - `CatalogRecord`: the stored record model
-- naming helpers: template rendering for managed storage paths
-- extractors: optional post-ingest metadata extraction
-- operation runners: internal coordinators for validated catalog operation lifecycles
-- CLI: a thin wrapper around the catalog API
+
+Related refactor tracking:
+
+- [#84](https://github.com/openghg/ogcat/issues/84): umbrella `Catalog` facade and operation-boundary refactor
+- [#87](https://github.com/openghg/ogcat/issues/87): application orchestration extraction
+- [#88](https://github.com/openghg/ogcat/issues/88): template symlinks as secondary artifact operations
+- [#89](https://github.com/openghg/ogcat/issues/89): replica module and interface-test cleanup
+- [#92](https://github.com/openghg/ogcat/issues/92): naming-template protected fields and internal identifiers
+- [#70](https://github.com/openghg/ogcat/issues/70): collection artifacts for directory-backed datasets
 
 The catalog root is self-describing:
 
@@ -116,6 +149,25 @@ Required secondary artifacts, such as the default human-readable template symlin
 storage, are modeled as ordered secondary operations. They run after the primary record is staged
 and has an id, but before commit, so their filesystem effects and record metadata updates remain
 part of the same rollback boundary.
+
+## Collection Artifacts And Directory Targets
+
+Collection artifacts are logical records for directory-backed datasets, such as a directory of
+NetCDF files or a future generated `.zarr` store. Architecturally, collection-ness should not be a
+third physical storage target kind. Physical targets remain file-like or directory-like; collection
+semantics live in domain policy and derived classification metadata.
+
+That means the existing operation model should still apply:
+
+- the primary artifact plan chooses the canonical file or directory locator
+- the materialisation intent decides whether a writer produces that target, skips writing for a
+  record-only reference, or delegates to a future directory writer
+- collection policy records cheap metadata such as member pattern, member format, and reader hints
+- secondary artifact operations remain separate follow-up work after the primary record is staged
+
+Keeping collection semantics above storage adapters avoids making `Catalog` branch on special
+directory cases and keeps remote or user-managed collections possible without scanning member files
+by default.
 
 ## Why Templates and Metadata Live in `catalog.json`
 
