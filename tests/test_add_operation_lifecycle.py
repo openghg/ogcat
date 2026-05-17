@@ -294,6 +294,27 @@ def test_add_file_lifecycle_preserves_hook_order_and_file_storage(tmp_path: Path
     assert record.derived_metadata["extract_hook"] == "add_file"
 
 
+def test_add_file_template_secondary_emits_replica_audit(tmp_path: Path) -> None:
+    """Template-link secondaries keep the existing replica audit contract."""
+    source = tmp_path / "audited.nc"
+    source.write_text("payload", encoding="utf-8")
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+
+    record = catalog.add_file(source)
+
+    replica_path = Path(str(record.naming_metadata["template_replica_path"]))
+    primary_path = Path(str(record.stored_abspath))
+    replica_events = catalog.audit_events(event_type="replica")
+    assert len(replica_events) == 1
+    event = replica_events[0]
+    assert event.message == "Template symlink replica created."
+    assert event.record_id == record.id
+    assert event.details["replica_role"] == "template_link"
+    assert event.details["replica_mode"] == "symlink"
+    assert event.details["replica_path"] == str(replica_path)
+    assert event.details["primary_path"] == str(primary_path)
+
+
 def test_record_only_add_artifact_skips_artifact_write(tmp_path: Path) -> None:
     """Record-only add_artifact stores the locator without creating the target."""
     target = tmp_path / "generated.txt"

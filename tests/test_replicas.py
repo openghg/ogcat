@@ -61,7 +61,7 @@ def test_template_link_secondary_artifact_materializes_metadata_and_rollback(
         directory_template="{year_added}/{original_stem}",
         filename_template="{original_filename}",
     )
-    link_path = root / "data" / "files" / "2026" / "alpha" / "alpha.nc"
+    expected_link_path = root / "data" / "files" / "2026" / "alpha" / "alpha.nc"
 
     with catalog.transaction() as transaction:
         context = OperationContext(
@@ -77,14 +77,15 @@ def test_template_link_secondary_artifact_materializes_metadata_and_rollback(
         result = operation.run(transaction, context, record)
         assert result is not None
         link_path = Path(str(result.naming_metadata_updates["template_replica_path"]))
+        assert link_path == expected_link_path
         assert result.role == "template_link"
         assert result.mode == "symlink"
         assert link_path.is_symlink()
         assert not Path(os.readlink(link_path)).is_absolute()
         assert link_path.resolve() == primary_path
 
-    assert not link_path.exists()
-    assert not link_path.is_symlink()
+    assert not expected_link_path.exists()
+    assert not expected_link_path.is_symlink()
 
 
 def test_plan_view_does_not_create_links(tmp_path: Path) -> None:
