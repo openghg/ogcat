@@ -7,7 +7,16 @@ from pathlib import Path
 
 import pytest
 
-from ogcat import Catalog, CatalogRecord, CatalogSpec, ReplicaState
+from ogcat import (
+    ArtifactLocator,
+    Catalog,
+    CatalogRecord,
+    CatalogSpec,
+    OperationContext,
+    OperationSource,
+    ReplicaState,
+)
+from ogcat.secondary_artifacts import TemplateLinkSecondaryArtifact
 
 
 def _record_id(record: CatalogRecord) -> str:
@@ -22,6 +31,61 @@ def _source_file(tmp_path: Path, name: str, text: str = "payload") -> Path:
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text(text, encoding="utf-8")
     return source
+
+
+def test_template_link_secondary_artifact_materializes_metadata_and_rollback(
+    tmp_path: Path,
+) -> None:
+    """Template-link secondary operations create relative symlinks with rollback."""
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="files"))
+    primary_path = root / "data" / "objects" / "ab" / "abcdef.nc"
+    primary_path.parent.mkdir(parents=True, exist_ok=True)
+    primary_path.write_text("payload", encoding="utf-8")
+    record = CatalogRecord(
+        catalog="files",
+        time_added="2026-05-15T00:00:00Z",
+        id="record-1",
+        record_type="managed_file",
+        locator=ArtifactLocator.path(
+            primary_path,
+            relative_path="data/objects/ab/abcdef.nc",
+        ),
+        original_filename="alpha.nc",
+        suffixes=[".nc"],
+        naming_metadata={"artifact_uuid": "abcdef"},
+    )
+    operation = TemplateLinkSecondaryArtifact(
+        catalog_root=root,
+        files_root=root / "data" / "files",
+        directory_template="{year_added}/{original_stem}",
+        filename_template="{original_filename}",
+    )
+    expected_link_path = root / "data" / "files" / "2026" / "alpha" / "alpha.nc"
+
+    with catalog.transaction() as transaction:
+        context = OperationContext(
+            catalog_root=root,
+            operation_id="operation-1",
+            operation_type="add_file",
+            record_type="managed_file",
+            user_metadata={},
+            derived_metadata={},
+            register_rollback=transaction.register_rollback,
+            source=OperationSource(kind="test"),
+        )
+        result = operation.run(transaction, context, record)
+        assert result is not None
+        link_path = Path(str(result.naming_metadata_updates["template_replica_path"]))
+        assert link_path == expected_link_path
+        assert result.role == "template_link"
+        assert result.mode == "symlink"
+        assert link_path.is_symlink()
+        assert not Path(os.readlink(link_path)).is_absolute()
+        assert link_path.resolve() == primary_path
+
+    assert not expected_link_path.exists()
+    assert not expected_link_path.is_symlink()
 
 
 def test_plan_view_does_not_create_links(tmp_path: Path) -> None:

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -42,6 +42,7 @@ from ogcat.operation_helpers import (
     naming_metadata_from_storage_plan,
     normalize_metadata_for_schema,
 )
+from ogcat.secondary_artifacts import SecondaryArtifactOperation, SecondaryArtifactResult
 from ogcat.spec import RecordSchema
 from ogcat.storage import StoragePlan
 from ogcat.transactions import OperationState, RollbackFailure, UnitOfWork
@@ -50,7 +51,6 @@ from ogcat.validation import ValidationReport
 ArtifactLocatorFactory = Callable[[OperationContext], ArtifactLocator]
 StoragePlanFactory = Callable[[OperationContext, ArtifactLocator], StoragePlan | None]
 DerivedMetadataCollector = Callable[[OperationContext, ArtifactLocator], None]
-RecordPostProcessor = Callable[[UnitOfWork, OperationContext, CatalogRecord], CatalogRecord]
 _PhaseSetter = Callable[[str], None]
 
 
@@ -144,7 +144,7 @@ class AddOperationRequest:
     materialization_intent: MaterializationIntent
     storage_plan_factory: StoragePlanFactory | None = None
     derived_metadata_collector: DerivedMetadataCollector | None = None
-    record_post_processor: RecordPostProcessor | None = None
+    secondary_artifact_operations: tuple[SecondaryArtifactOperation, ...] = ()
 
 
 @dataclass(slots=True)
@@ -443,15 +443,62 @@ class AddOperationRunner(OperationRunner):
             },
             locator=add_plan.locator,
         )
-        if self.request.record_post_processor is not None:
-            set_phase("record-post-processing")
-            persisted = self.request.record_post_processor(
+        persisted = self._run_secondary_artifacts(
+            add_plan=add_plan,
+            record=persisted,
+            set_phase=set_phase,
+        )
+        set_phase(HOOK_PHASES["after_record_write"].name)
+        hook_dispatcher.after_record_write(add_plan.context)
+        return persisted
+
+    def _run_secondary_artifacts(
+        self,
+        *,
+        add_plan: _AddOperationPlan,
+        record: CatalogRecord,
+        set_phase: _PhaseSetter,
+    ) -> CatalogRecord:
+        """Run required secondary artifact operations for the staged record."""
+        persisted = record
+        for operation in self.request.secondary_artifact_operations:
+            set_phase(f"secondary-artifact:{operation.role}")
+            result = operation.run(
                 self.request.transaction,
                 add_plan.context,
                 persisted,
             )
-        set_phase(HOOK_PHASES["after_record_write"].name)
-        hook_dispatcher.after_record_write(add_plan.context)
+            if result is None:
+                continue
+            persisted = self._apply_secondary_artifact_result(
+                add_plan=add_plan,
+                record=persisted,
+                result=result,
+            )
+        return persisted
+
+    def _apply_secondary_artifact_result(
+        self,
+        *,
+        add_plan: _AddOperationPlan,
+        record: CatalogRecord,
+        result: SecondaryArtifactResult,
+    ) -> CatalogRecord:
+        """Persist secondary artifact metadata and emit its audit event."""
+        persisted = record
+        if result.naming_metadata_updates:
+            naming_metadata = dict(record.naming_metadata)
+            naming_metadata.update(result.naming_metadata_updates)
+            persisted = self.request.transaction.update_staged_record(
+                replace(record, naming_metadata=naming_metadata)
+            )
+        self.dependencies.emit_operation_audit(
+            add_plan.context,
+            event_type=result.event_type,
+            message=result.message,
+            details=dict(result.audit_details),
+            locator=record.locator,
+        )
         return persisted
 
     def _commit_if_owned(

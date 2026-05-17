@@ -18,8 +18,12 @@ from ogcat import (
     ValidationReport,
 )
 from ogcat.catalog_application import CatalogApplication
+from ogcat.materialization import reference_intent
+from ogcat.models import MetadataDict
 from ogcat.operation_runner import AddOperationRequest, OperationRunner
+from ogcat.secondary_artifacts import SecondaryArtifactResult, SecondaryArtifactRole
 from ogcat.storage import StoragePlan
+from ogcat.transactions import UnitOfWork
 
 
 def test_add_file_facade_delegates_to_application_service(
@@ -144,6 +148,44 @@ def test_add_file_application_request_uses_copy_materialization(
     assert request.materialization_intent.write_mode == "copy"
     assert request.materialization_intent.ogcat_owned is True
     assert type(request.materialization_intent.writer).__name__ == "CopyArtifactWriter"
+    assert len(request.secondary_artifact_operations) == 1
+    assert request.secondary_artifact_operations[0].role == "template_link"
+
+
+def test_add_file_template_primary_request_has_no_template_link_secondary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Template-primary file requests do not schedule a template-link secondary."""
+    requests: list[AddOperationRequest] = []
+
+    class FakeRunner(OperationRunner):
+        def __init__(self, request: AddOperationRequest) -> None:
+            self.request = request
+
+        def run(self) -> CatalogRecord:
+            return CatalogRecord(
+                catalog="files",
+                time_added="2026-05-15T00:00:00Z",
+                id="runner",
+                record_type=self.request.record_type,
+                locator=ArtifactLocator.path(tmp_path / "stored.nc"),
+            )
+
+    def build_fake_runner(self: Catalog, request: AddOperationRequest) -> OperationRunner:
+        requests.append(request)
+        return FakeRunner(request)
+
+    monkeypatch.setattr(Catalog, "_build_add_operation_runner", build_fake_runner)
+    source = tmp_path / "source.nc"
+    source.write_text("payload", encoding="utf-8")
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+
+    catalog.add_file(source, operation="copy", primary_location="template")
+
+    request = requests[0]
+    assert request.operation_type == "add_file"
+    assert request.secondary_artifact_operations == ()
 
 
 def test_add_artifact_application_request_uses_writer_materialization(
@@ -254,6 +296,103 @@ def test_add_file_lifecycle_preserves_hook_order_and_file_storage(tmp_path: Path
     assert record.stored_abspath is not None
     assert Path(record.stored_abspath).exists()
     assert record.derived_metadata["extract_hook"] == "add_file"
+
+
+def test_add_file_template_secondary_emits_replica_audit(tmp_path: Path) -> None:
+    """Template-link secondaries keep the existing replica audit contract."""
+    source = tmp_path / "audited.nc"
+    source.write_text("payload", encoding="utf-8")
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+
+    record = catalog.add_file(source)
+
+    replica_path = Path(str(record.naming_metadata["template_replica_path"]))
+    primary_path = Path(str(record.stored_abspath))
+    replica_events = catalog.audit_events(event_type="replica")
+    assert len(replica_events) == 1
+    event = replica_events[0]
+    assert event.message == "Template symlink replica created."
+    assert event.record_id == record.id
+    assert event.details["replica_role"] == "template_link"
+    assert event.details["replica_mode"] == "symlink"
+    assert event.details["replica_path"] == str(replica_path)
+    assert event.details["primary_path"] == str(primary_path)
+
+
+def test_secondary_artifacts_run_in_order_and_share_metadata(tmp_path: Path) -> None:
+    """Later secondary operations see metadata updates from earlier operations."""
+    calls: list[tuple[str, MetadataDict]] = []
+
+    class FirstSecondaryArtifact:
+        role: SecondaryArtifactRole = "template_link"
+
+        def run(
+            self,
+            transaction: UnitOfWork,
+            context: OperationContext,
+            record: CatalogRecord,
+        ) -> SecondaryArtifactResult:
+            calls.append(("first", dict(record.naming_metadata)))
+            return SecondaryArtifactResult(
+                role=self.role,
+                mode="symlink",
+                message="First secondary applied.",
+                naming_metadata_updates={"first_secondary": "done"},
+            )
+
+    class SecondSecondaryArtifact:
+        role: SecondaryArtifactRole = "template_link"
+
+        def run(
+            self,
+            transaction: UnitOfWork,
+            context: OperationContext,
+            record: CatalogRecord,
+        ) -> SecondaryArtifactResult:
+            calls.append(("second", dict(record.naming_metadata)))
+            assert record.naming_metadata["first_secondary"] == "done"
+            return SecondaryArtifactResult(
+                role=self.role,
+                mode="symlink",
+                message="Second secondary applied.",
+                naming_metadata_updates={"second_secondary": "saw-first"},
+            )
+
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+    locator = ArtifactLocator.path(tmp_path / "external.txt")
+
+    with catalog.transaction() as transaction:
+        record = catalog._application().run_add_operation(
+            transaction=transaction,
+            commit=True,
+            operation_type="add_artifact",
+            record_type="ordered_secondary",
+            schema=RecordSchema(),
+            schema_record_type="ordered_secondary",
+            metadata={},
+            storage_mode=None,
+            original_path=None,
+            original_filename=None,
+            suffixes=None,
+            derived_metadata={},
+            naming_metadata={"initial": "metadata"},
+            time_added="2026-05-17T00:00:00Z",
+            source=OperationSource(kind="test", descriptor="secondary order"),
+            locator_factory=lambda context: locator,
+            materialization_intent=reference_intent(),
+            secondary_artifact_operations=(
+                FirstSecondaryArtifact(),
+                SecondSecondaryArtifact(),
+            ),
+        )
+
+    assert [call[0] for call in calls] == ["first", "second"]
+    assert calls[0][1]["initial"] == "metadata"
+    assert "first_secondary" not in calls[0][1]
+    assert calls[1][1]["first_secondary"] == "done"
+    assert record.naming_metadata["first_secondary"] == "done"
+    assert record.naming_metadata["second_secondary"] == "saw-first"
+    assert catalog.repository.all()[0].naming_metadata == record.naming_metadata
 
 
 def test_record_only_add_artifact_skips_artifact_write(tmp_path: Path) -> None:
@@ -412,6 +551,36 @@ def test_hook_failure_after_writer_rolls_back_artifact_and_record(tmp_path: Path
     assert rollback_calls == ["writer"]
     assert not target.exists()
     assert catalog.repository.all() == []
+
+
+def test_after_record_hook_failure_rolls_back_template_secondary(
+    tmp_path: Path,
+) -> None:
+    """Failures after template-link creation roll back the symlink, primary, and record."""
+    root = tmp_path / "catalog"
+    source = tmp_path / "secondary.nc"
+    source.write_text("payload", encoding="utf-8")
+    files_root = root / "data" / "files"
+    objects_root = root / "data" / "objects"
+
+    class FailingAfterRecordHook:
+        def after_record_write(self, context: OperationContext) -> None:
+            created_links = [path for path in files_root.rglob("*.nc") if path.is_symlink()]
+            assert created_links, "template secondary should exist before after_record_write"
+            raise RuntimeError("stop after secondary artifact")
+
+    catalog = Catalog.create(
+        root,
+        CatalogSpec(catalog_name="files"),
+        plugins=PluginRegistry([FailingAfterRecordHook()]),
+    )
+
+    with pytest.raises(RuntimeError, match="stop after secondary artifact"):
+        catalog.add_file(source)
+
+    assert catalog.repository.all() == []
+    assert list(files_root.rglob("*.nc")) == []
+    assert list(objects_root.rglob("*.nc")) == []
 
 
 def test_operation_runner_preserves_failure_audit_phase_and_rollback(tmp_path: Path) -> None:
