@@ -554,6 +554,66 @@ def test_add_file_template_primary_rejects_artifact_uuid_metadata(tmp_path: Path
     assert list((root / "data" / "files").rglob("reserved.nc")) == []
 
 
+@pytest.mark.parametrize("field_name", ["artifact_uuid", "id", "operation_id", "uuid"])
+def test_add_file_rejects_internal_identifiers_in_template_replicas(
+    tmp_path: Path,
+    field_name: str,
+) -> None:
+    """Default template replicas reject internal identifier template fields."""
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "reserved.nc"
+    source.write_text("dummy", encoding="utf-8")
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(
+        root,
+        CatalogSpec(
+            catalog_name="files",
+            default_schema=RecordSchema(
+                directory_template="{year_added}",
+                filename_template=f"{{{field_name}}}{{original_suffix}}",
+            ),
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=f"Naming templates cannot use internal template field\\(s\\): {field_name}",
+    ):
+        catalog.add_file(source)
+
+    assert catalog.repository.all() == []
+    assert list((root / "data" / "files").rglob("reserved.nc")) == []
+    assert list((root / "data" / "objects").rglob("reserved.nc")) == []
+
+
+def test_add_file_allows_domain_identifier_metadata_in_template_replicas(
+    tmp_path: Path,
+) -> None:
+    """Domain identifiers remain available through explicit metadata names."""
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "named.nc"
+    source.write_text("dummy", encoding="utf-8")
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(
+        root,
+        CatalogSpec(
+            catalog_name="files",
+            default_schema=RecordSchema(
+                directory_template="{dataset_id}",
+                filename_template="{dataset_id}{original_suffix}",
+            ),
+        ),
+    )
+
+    record = catalog.add_file(source, metadata={"dataset_id": "site-a-2026"})
+
+    expected_replica = root / "data" / "files" / "site-a-2026" / "site-a-2026.nc"
+    assert _template_replica_path(record) == expected_replica
+    assert expected_replica.is_symlink()
+
+
 def test_add_file_preserves_dotted_stems_and_simple_suffixes(tmp_path: Path) -> None:
     source_dir = tmp_path / "source"
     source_dir.mkdir()

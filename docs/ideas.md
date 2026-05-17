@@ -245,10 +245,9 @@ Questions to resolve in that PR:
 - should repository `insert(...)` return the assigned id, or the full persisted
   `CatalogRecord`?
 - what is the cleanest shape for batch insert return values?
-- how should managed-file naming behave if templates want `{id}` before the
-  record is persisted?
-- should id-based naming remain supported, or should it become discouraged or
-  removed from the default design?
+- follow-up from #92: managed storage templates should not depend on `{id}`
+  before the record is persisted; generated replica views may use persisted
+  record ids after write
 - how much query expressiveness should the repository interface expose before it
   becomes too backend-specific?
 

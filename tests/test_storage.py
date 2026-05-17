@@ -425,6 +425,32 @@ def test_plan_artifact_storage_template_primary_rejects_artifact_uuid_metadata(
         )
 
 
+@pytest.mark.parametrize("field_name", ["artifact_uuid", "id", "operation_id", "uuid"])
+def test_plan_artifact_storage_template_primary_rejects_internal_template_fields(
+    tmp_path: Path,
+    field_name: str,
+) -> None:
+    """Dry-run template planning rejects internal identifier template fields."""
+    source = tmp_path / "source.nc"
+    source.write_text("payload", encoding="utf-8")
+    catalog = Catalog.create(
+        tmp_path / "catalog",
+        CatalogSpec(
+            catalog_name="files",
+            default_schema=RecordSchema(
+                directory_template="{year_added}",
+                filename_template=f"{{{field_name}}}{{original_suffix}}",
+            ),
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=f"Naming templates cannot use internal template field\\(s\\): {field_name}",
+    ):
+        catalog.plan_artifact_storage(source, primary_location="template")
+
+
 def test_add_artifact_uses_planned_timestamp_for_date_named_paths(tmp_path: Path) -> None:
     """Records created from plans keep the timestamp used for date templates."""
     catalog = Catalog.create(

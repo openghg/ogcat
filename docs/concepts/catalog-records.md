@@ -65,7 +65,10 @@ suffix list.
 
 ``naming_metadata``
 :   Internal metadata used to evaluate directory and filename templates.  You
-    do not normally need to read or set this directly.
+    do not normally need to read or set this directly. Fields such as
+    ``artifact_uuid`` are storage-planning details and are not public naming
+    template inputs; use explicit user metadata such as ``dataset_id`` for
+    domain identifiers that should appear in human-readable paths.
 
 ## Searching across namespaces
 

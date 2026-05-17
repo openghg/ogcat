@@ -666,8 +666,9 @@ This pattern records an external URI first, then creates a managed local copy
 with a custom writer. It is useful when downloads are performed by ``requests``,
 ``curl``, an authenticated client, or a project-specific API.
 
-The catalog can use UUIDs in storage names so the downloaded filename does not
-need to be meaningful:
+The catalog can use its default UUID primary placement so the downloaded source
+filename does not need to be meaningful. The schema template remains
+human-readable:
 
 ```python
 from pathlib import Path
@@ -680,7 +681,7 @@ catalog = Catalog.create(
         catalog_name="downloads",
         default_schema=RecordSchema(
             directory_template="downloads/{year_added}",
-            filename_template="{uuid}{original_suffix}",
+            filename_template="{title_slug|original_stem}{original_suffix}",
         ),
     ),
 )

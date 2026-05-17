@@ -125,7 +125,11 @@ The context includes:
 - `year_month_or_original_stem`
 - `title_slug` when `title` metadata is present
 - all user metadata fields
-- the generated record id
+
+Internal identifiers such as `id`, `uuid`, `operation_id`, and `artifact_uuid`
+are reserved for record identity, audit, and storage planning. They are not
+public storage-template inputs. Use explicit metadata names such as
+`dataset_id` when a domain identifier should appear in a human-readable path.
 
 ### Collision handling
 
