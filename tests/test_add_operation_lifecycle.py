@@ -18,8 +18,11 @@ from ogcat import (
     ValidationReport,
 )
 from ogcat.catalog_application import CatalogApplication
+from ogcat.materialization import reference_intent
 from ogcat.operation_runner import AddOperationRequest, OperationRunner
+from ogcat.secondary_artifacts import SecondaryArtifactResult, SecondaryArtifactRole
 from ogcat.storage import StoragePlan
+from ogcat.transactions import UnitOfWork
 
 
 def test_add_file_facade_delegates_to_application_service(
@@ -313,6 +316,82 @@ def test_add_file_template_secondary_emits_replica_audit(tmp_path: Path) -> None
     assert event.details["replica_mode"] == "symlink"
     assert event.details["replica_path"] == str(replica_path)
     assert event.details["primary_path"] == str(primary_path)
+
+
+def test_secondary_artifacts_run_in_order_and_share_metadata(tmp_path: Path) -> None:
+    """Later secondary operations see metadata updates from earlier operations."""
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    class FirstSecondaryArtifact:
+        role: SecondaryArtifactRole = "template_link"
+
+        def run(
+            self,
+            transaction: UnitOfWork,
+            context: OperationContext,
+            record: CatalogRecord,
+        ) -> SecondaryArtifactResult:
+            calls.append(("first", dict(record.naming_metadata)))
+            return SecondaryArtifactResult(
+                role=self.role,
+                mode="symlink",
+                message="First secondary applied.",
+                naming_metadata_updates={"first_secondary": "done"},
+            )
+
+    class SecondSecondaryArtifact:
+        role: SecondaryArtifactRole = "template_link"
+
+        def run(
+            self,
+            transaction: UnitOfWork,
+            context: OperationContext,
+            record: CatalogRecord,
+        ) -> SecondaryArtifactResult:
+            calls.append(("second", dict(record.naming_metadata)))
+            assert record.naming_metadata["first_secondary"] == "done"
+            return SecondaryArtifactResult(
+                role=self.role,
+                mode="symlink",
+                message="Second secondary applied.",
+                naming_metadata_updates={"second_secondary": "saw-first"},
+            )
+
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+    locator = ArtifactLocator.path(tmp_path / "external.txt")
+
+    with catalog.transaction() as transaction:
+        record = catalog._application().run_add_operation(
+            transaction=transaction,
+            commit=True,
+            operation_type="add_artifact",
+            record_type="ordered_secondary",
+            schema=RecordSchema(),
+            schema_record_type="ordered_secondary",
+            metadata={},
+            storage_mode=None,
+            original_path=None,
+            original_filename=None,
+            suffixes=None,
+            derived_metadata={},
+            naming_metadata={"initial": "metadata"},
+            time_added="2026-05-17T00:00:00Z",
+            source=OperationSource(kind="test", descriptor="secondary order"),
+            locator_factory=lambda context: locator,
+            materialization_intent=reference_intent(),
+            secondary_artifact_operations=(
+                FirstSecondaryArtifact(),
+                SecondSecondaryArtifact(),
+            ),
+        )
+
+    assert [call[0] for call in calls] == ["first", "second"]
+    assert calls[0][1]["initial"] == "metadata"
+    assert "first_secondary" not in calls[0][1]
+    assert calls[1][1]["first_secondary"] == "done"
+    assert record.naming_metadata["first_secondary"] == "done"
+    assert record.naming_metadata["second_secondary"] == "saw-first"
+    assert catalog.repository.all()[0].naming_metadata == record.naming_metadata
 
 
 def test_record_only_add_artifact_skips_artifact_write(tmp_path: Path) -> None:
