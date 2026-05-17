@@ -44,6 +44,18 @@ template-link symlink created after a UUID-primary file record is staged.
    :members:
    :member-order: bysource
 
+.. automodule:: ogcat.template_replicas
+   :members:
+   :member-order: bysource
+
+.. automodule:: ogcat.replica_context
+   :members:
+   :member-order: bysource
+
+.. automodule:: ogcat.replica_links
+   :members:
+   :member-order: bysource
+
 Repository boundary
 -------------------
 
