@@ -689,7 +689,7 @@ def test_add_file_rolls_back_record_when_naming_fails(
     def fail_render_storage_location(*args: object, **kwargs: object) -> None:
         raise ValueError("simulated naming failure")
 
-    monkeypatch.setattr("ogcat.replicas.render_storage_location", fail_render_storage_location)
+    monkeypatch.setattr("ogcat.template_replicas.render_storage_location", fail_render_storage_location)
 
     with pytest.raises(ValueError, match="simulated naming failure"):
         catalog.add_file(source)
@@ -715,7 +715,7 @@ def test_add_file_rolls_back_record_after_staged_insert_before_file_write(
     def fail_before_file_write(*args: object, **kwargs: object) -> None:
         raise RuntimeError("simulated post-insert failure")
 
-    monkeypatch.setattr("ogcat.replicas.render_storage_location", fail_before_file_write)
+    monkeypatch.setattr("ogcat.template_replicas.render_storage_location", fail_before_file_write)
 
     with pytest.raises(RuntimeError, match="simulated post-insert failure"):
         catalog.add_file(source)

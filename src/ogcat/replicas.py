@@ -6,27 +6,20 @@ artifacts but do not change catalog records.
 
 from __future__ import annotations
 
-import os
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal
 
-from ogcat.models import CatalogRecord, MetadataDict
-from ogcat.naming import (
-    RESERVED_TEMPLATE_FIELDS,
-    build_naming_context,
-    normalise_segment,
-    render_storage_location,
-    render_template,
-    split_name_and_suffixes,
+from ogcat.models import CatalogRecord
+from ogcat.naming import normalise_segment, render_template
+from ogcat.replica_context import replica_template_context
+from ogcat.replica_links import (
+    relative_symlink_target,
+    symlink_points_to,
 )
-from ogcat.operation_helpers import directory_from_relative_path
-
-ReplicaMode = Literal["symlink"]
-ReplicaRole = Literal["template_link", "view_link"]
+from ogcat.replica_types import ReplicaMode, ReplicaRole
 
 
 class ReplicaState(StrEnum):
@@ -110,29 +103,6 @@ class ReplicaApplyResult:
             ReplicaState.ERROR,
         }
         return [item for item in self.items if item.state in error_states]
-
-
-@dataclass(frozen=True, slots=True)
-class TemplateLinkReplicaMaterialization:
-    """Materialized default template replica details.
-
-    Args:
-        primary_path: Local primary path the symlink points at.
-        target_path: Local template replica symlink path.
-        catalog_relative_path: Replica path relative to the catalog root.
-        storage_relative_path: Replica path relative to the readable files root.
-        resolved_directory: Rendered template replica directory.
-        resolved_filename: Rendered template replica filename.
-        naming_metadata: Naming metadata to merge onto the catalog record.
-    """
-
-    primary_path: Path
-    target_path: Path
-    catalog_relative_path: str
-    storage_relative_path: str
-    resolved_directory: str
-    resolved_filename: str
-    naming_metadata: MetadataDict
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,120 +208,6 @@ def plan_replica_view(
     )
 
 
-def replica_template_context(record: CatalogRecord) -> dict[str, object]:
-    """Build a template context from record metadata and locator fields."""
-    context: dict[str, object] = {}
-    context.update(record.derived_metadata)
-    context.update(record.user_metadata)
-
-    artifact_uuid = record.naming_metadata.get("artifact_uuid")
-    record_id = "" if record.id is None else str(record.id)
-    uuid_value = str(artifact_uuid or record_id)
-    original_name = _record_original_name(record)
-    naming_metadata = {
-        key: value for key, value in record.user_metadata.items() if key not in RESERVED_TEMPLATE_FIELDS
-    }
-    context.update(
-        build_naming_context(
-            record_id=record_id,
-            operation_id=uuid_value,
-            original_path=Path(original_name),
-            metadata=naming_metadata,
-            date_added=record.time_added[:10],
-        )
-    )
-    locator_path = record.path()
-    locator_name = "" if locator_path is None else locator_path.name
-    locator_stem, locator_suffix = split_name_and_suffixes(locator_name)
-
-    context.update(
-        {
-            "id": record_id,
-            "uuid": uuid_value,
-            "artifact_uuid": uuid_value,
-            "operation_id": uuid_value,
-            "date_added": record.time_added[:10],
-            "year_added": record.time_added[:4],
-            "record_type": record.record_type,
-            "storage_mode": record.storage_mode or "",
-            "locator_kind": record.locator.kind,
-            "locator_value": record.locator.value,
-            "locator_filename": locator_name,
-            "locator_stem": normalise_segment(locator_stem) if locator_stem else "",
-            "locator_suffix": locator_suffix,
-            "stored_relpath": record.stored_relpath or "",
-            "path": "" if locator_path is None else str(locator_path),
-        }
-    )
-    return context
-
-
-def materialize_template_link_replica(
-    *,
-    catalog_root: Path,
-    files_root: Path,
-    record: CatalogRecord,
-    directory_template: str,
-    filename_template: str,
-    register_rollback: Callable[[Callable[[], None], str], object] | None = None,
-) -> TemplateLinkReplicaMaterialization | None:
-    """Create the default template symlink replica for a path-backed record.
-
-    Args:
-        catalog_root: Catalog root used for catalog-relative path metadata.
-        files_root: Human-readable template replica root.
-        record: Record whose primary path should be linked.
-        directory_template: Directory template to render.
-        filename_template: Filename template to render.
-        register_rollback: Optional rollback registration callback accepting an
-            action and a human-readable description.
-
-    Returns:
-        Materialized replica details, or ``None`` if the record is not
-        path-backed.
-    """
-    primary_path = record.path()
-    if primary_path is None:
-        return None
-    target, _catalog_relative_path, resolved_filename = render_storage_location(
-        files_root=files_root,
-        directory_template=directory_template,
-        filename_template=filename_template,
-        context=replica_template_context(record),
-        exists=lambda candidate: candidate.exists() or candidate.is_symlink(),
-    )
-    catalog_relative_path = target.relative_to(catalog_root).as_posix()
-    storage_relative_path = target.relative_to(files_root).as_posix()
-    resolved_directory = directory_from_relative_path(storage_relative_path) or ""
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if register_rollback is not None:
-        register_rollback(
-            lambda path=target: path.unlink(missing_ok=True),
-            f"remove template symlink replica {target}",
-        )
-    target.symlink_to(_relative_symlink_target(primary_path, link_path=target))
-
-    naming_metadata = dict(record.naming_metadata)
-    naming_metadata.update(
-        {
-            "template_replica_path": str(target),
-            "template_replica_relative_path": catalog_relative_path,
-            "template_replica_storage_relative_path": storage_relative_path,
-            "template_resolved_directory": resolved_directory,
-            "template_resolved_filename": resolved_filename,
-        }
-    )
-    return TemplateLinkReplicaMaterialization(
-        primary_path=primary_path,
-        target_path=target,
-        catalog_relative_path=catalog_relative_path,
-        storage_relative_path=storage_relative_path,
-        resolved_directory=resolved_directory,
-        resolved_filename=resolved_filename,
-        naming_metadata=naming_metadata,
-    )
-
-
 def _plan_record_replica(
     *,
     root: Path,
@@ -441,7 +297,7 @@ def _apply_symlink_item(item: ReplicaPlanItem) -> ReplicaPlanItem:
     if existing_state is not None:
         return replace(item, state=existing_state[0], message=existing_state[1])
     item.target_path.parent.mkdir(parents=True, exist_ok=True)
-    item.target_path.symlink_to(_relative_symlink_target(item.source_path, link_path=item.target_path))
+    item.target_path.symlink_to(relative_symlink_target(item.source_path, link_path=item.target_path))
     return replace(item, state=ReplicaState.CREATED)
 
 
@@ -449,30 +305,9 @@ def _existing_target_state(target_path: Path, source_path: Path) -> tuple[Replic
     """Return the state implied by an existing target path."""
     if not target_path.exists() and not target_path.is_symlink():
         return None
-    if target_path.is_symlink() and _symlink_points_to(target_path, source_path):
+    if target_path.is_symlink() and symlink_points_to(target_path, source_path):
         return ReplicaState.UP_TO_DATE, f"Replica already points at {source_path}"
     return ReplicaState.COLLISION, f"Replica path already exists: {target_path}"
-
-
-def _symlink_points_to(link_path: Path, source_path: Path) -> bool:
-    """Return whether a symlink points at a source path."""
-    try:
-        link_target = Path(os.readlink(link_path))
-    except OSError:
-        return False
-    if not link_target.is_absolute():
-        link_target = (link_path.parent / link_target).resolve()
-    else:
-        link_target = link_target.resolve()
-    return link_target == source_path.resolve()
-
-
-def _relative_symlink_target(source_path: Path, *, link_path: Path) -> str | Path:
-    """Return a relative symlink target when the platform can represent one."""
-    try:
-        return os.path.relpath(source_path, start=link_path.parent)
-    except ValueError:
-        return source_path
 
 
 def _render_replica_path(root: Path, template: str, context: dict[str, object]) -> Path:
@@ -485,19 +320,6 @@ def _render_replica_path(root: Path, template: str, context: dict[str, object]) 
     if any(part in {".", ".."} for part in normalised_parts) or Path(rendered).is_absolute():
         raise ValueError(f"Replica template must render a relative path below the view root: {rendered}")
     return root.joinpath(*normalised_parts)
-
-
-def _record_original_name(record: CatalogRecord) -> str:
-    """Return the best filename-like value available for a record."""
-    if record.original_filename:
-        return record.original_filename
-    locator_path = record.path()
-    if locator_path is not None:
-        return locator_path.name
-    locator_value = record.locator.value.rstrip("/")
-    if locator_value:
-        return locator_value.rsplit("/", 1)[-1]
-    return "artifact"
 
 
 def _format_blocking_items(items: Sequence[ReplicaPlanItem]) -> str:
@@ -513,8 +335,5 @@ __all__ = [
     "ReplicaRole",
     "ReplicaState",
     "ReplicaViewPlan",
-    "TemplateLinkReplicaMaterialization",
-    "materialize_template_link_replica",
     "plan_replica_view",
-    "replica_template_context",
 ]

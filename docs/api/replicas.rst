@@ -11,8 +11,6 @@ Secondary artifact internals are documented on the internals page.
 
 .. autofunction:: ogcat.replicas.plan_replica_view
 
-.. autofunction:: ogcat.replicas.replica_template_context
-
 .. autoclass:: ogcat.ReplicaViewPlan
    :members:
    :member-order: bysource

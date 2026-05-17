@@ -8,15 +8,12 @@ from pathlib import Path
 import pytest
 
 from ogcat import (
-    ArtifactLocator,
     Catalog,
     CatalogRecord,
     CatalogSpec,
-    OperationContext,
-    OperationSource,
     ReplicaState,
 )
-from ogcat.secondary_artifacts import TemplateLinkSecondaryArtifact
+from ogcat.replicas import plan_replica_view
 
 
 def _record_id(record: CatalogRecord) -> str:
@@ -33,68 +30,17 @@ def _source_file(tmp_path: Path, name: str, text: str = "payload") -> Path:
     return source
 
 
-def test_template_link_secondary_artifact_materializes_metadata_and_rollback(
-    tmp_path: Path,
-) -> None:
-    """Template-link secondary operations create relative symlinks with rollback."""
-    root = tmp_path / "catalog"
-    catalog = Catalog.create(root, CatalogSpec(catalog_name="files"))
-    primary_path = root / "data" / "objects" / "ab" / "abcdef.nc"
-    primary_path.parent.mkdir(parents=True, exist_ok=True)
-    primary_path.write_text("payload", encoding="utf-8")
-    record = CatalogRecord(
-        catalog="files",
-        time_added="2026-05-15T00:00:00Z",
-        id="record-1",
-        record_type="managed_file",
-        locator=ArtifactLocator.path(
-            primary_path,
-            relative_path="data/objects/ab/abcdef.nc",
-        ),
-        original_filename="alpha.nc",
-        suffixes=[".nc"],
-        naming_metadata={"artifact_uuid": "abcdef"},
-    )
-    operation = TemplateLinkSecondaryArtifact(
-        catalog_root=root,
-        files_root=root / "data" / "files",
-        directory_template="{year_added}/{original_stem}",
-        filename_template="{original_filename}",
-    )
-    expected_link_path = root / "data" / "files" / "2026" / "alpha" / "alpha.nc"
-
-    with catalog.transaction() as transaction:
-        context = OperationContext(
-            catalog_root=root,
-            operation_id="operation-1",
-            operation_type="add_file",
-            record_type="managed_file",
-            user_metadata={},
-            derived_metadata={},
-            register_rollback=transaction.register_rollback,
-            source=OperationSource(kind="test"),
-        )
-        result = operation.run(transaction, context, record)
-        assert result is not None
-        link_path = Path(str(result.naming_metadata_updates["template_replica_path"]))
-        assert link_path == expected_link_path
-        assert result.role == "template_link"
-        assert result.mode == "symlink"
-        assert link_path.is_symlink()
-        assert not Path(os.readlink(link_path)).is_absolute()
-        assert link_path.resolve() == primary_path
-
-    assert not expected_link_path.exists()
-    assert not expected_link_path.is_symlink()
-
-
 def test_plan_view_does_not_create_links(tmp_path: Path) -> None:
     """Planning a view is a dry run with no filesystem side effects."""
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
     record = catalog.add_file(_source_file(tmp_path, "alpha.nc"), metadata={"product": "flux"})
     view_root = tmp_path / "view"
 
-    plan = catalog.plan_view(view_root, "{product}/{id}_{original_filename}")
+    plan = plan_replica_view(
+        root=view_root,
+        template="{product}/{id}_{original_filename}",
+        records=[record],
+    )
 
     assert len(plan.items) == 1
     item = plan.items[0]
@@ -111,7 +57,11 @@ def test_apply_symlink_view_creates_links_and_is_idempotent(tmp_path: Path) -> N
     primary_path = record.path()
     assert primary_path is not None
 
-    plan = catalog.plan_view(tmp_path / "view", "{product}/{id}_{original_filename}")
+    plan = plan_replica_view(
+        root=tmp_path / "view",
+        template="{product}/{id}_{original_filename}",
+        records=[record],
+    )
     result = plan.apply()
     link_path = result.created[0].target_path
 
@@ -119,9 +69,10 @@ def test_apply_symlink_view_creates_links_and_is_idempotent(tmp_path: Path) -> N
     assert not Path(os.readlink(link_path)).is_absolute()
     assert link_path.resolve() == primary_path
 
-    second_result = catalog.plan_view(
-        tmp_path / "view",
-        "{product}/{id}_{original_filename}",
+    second_result = plan_replica_view(
+        root=tmp_path / "view",
+        template="{product}/{id}_{original_filename}",
+        records=[record],
     ).apply()
 
     assert second_result.created == []
@@ -134,8 +85,12 @@ def test_apply_skip_errors_reports_symlink_oserror_as_skipped(
 ) -> None:
     """skip_errors=True reports symlink failures in both skipped and errors."""
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
-    catalog.add_file(_source_file(tmp_path, "alpha.nc"), metadata={"product": "flux"})
-    plan = catalog.plan_view(tmp_path / "view", "{product}/{id}_{original_filename}")
+    record = catalog.add_file(_source_file(tmp_path, "alpha.nc"), metadata={"product": "flux"})
+    plan = plan_replica_view(
+        root=tmp_path / "view",
+        template="{product}/{id}_{original_filename}",
+        records=[record],
+    )
 
     def fail_symlink_to(
         self: Path,
@@ -157,11 +112,11 @@ def test_apply_skip_errors_reports_symlink_oserror_as_skipped(
 def test_view_reports_template_collisions(tmp_path: Path) -> None:
     """Plans report duplicate rendered paths before creating any links."""
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
-    catalog.add_file(_source_file(tmp_path, "alpha.nc"), metadata={"product": "flux"})
-    catalog.add_file(_source_file(tmp_path, "beta.nc"), metadata={"product": "flux"})
+    first = catalog.add_file(_source_file(tmp_path, "alpha.nc"), metadata={"product": "flux"})
+    second = catalog.add_file(_source_file(tmp_path, "beta.nc"), metadata={"product": "flux"})
     view_root = tmp_path / "view"
 
-    plan = catalog.plan_view(view_root, "same-name.nc")
+    plan = plan_replica_view(root=view_root, template="same-name.nc", records=[first, second])
 
     assert len(plan.collisions) == 2
     with pytest.raises(ValueError, match="same-name.nc"):
@@ -172,9 +127,13 @@ def test_view_reports_template_collisions(tmp_path: Path) -> None:
 def test_view_reports_unsupported_non_path_locators(tmp_path: Path) -> None:
     """URI records are reported as unsupported for local symlink views."""
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
-    catalog.add_reference(uri="https://example.org/data.nc", metadata={"product": "remote"})
+    record = catalog.add_reference(uri="https://example.org/data.nc", metadata={"product": "remote"})
 
-    plan = catalog.plan_view(tmp_path / "view", "{product}/{id}.nc")
+    plan = plan_replica_view(
+        root=tmp_path / "view",
+        template="{product}/{id}.nc",
+        records=[record],
+    )
 
     assert len(plan.unsupported) == 1
     assert plan.unsupported[0].state == ReplicaState.UNSUPPORTED
@@ -192,7 +151,11 @@ def test_view_reports_missing_primary_targets(tmp_path: Path) -> None:
     assert primary_path is not None
     primary_path.unlink()
 
-    plan = catalog.plan_view(tmp_path / "view", "{product}/{id}.nc")
+    plan = plan_replica_view(
+        root=tmp_path / "view",
+        template="{product}/{id}.nc",
+        records=[record],
+    )
 
     assert len(plan.missing_targets) == 1
     with pytest.raises(ValueError, match="Primary target does not exist"):
@@ -207,7 +170,11 @@ def test_apply_rechecks_missing_primary_targets_after_planning(tmp_path: Path) -
     record = catalog.add_file(_source_file(tmp_path, "alpha.nc"), metadata={"product": "flux"})
     primary_path = record.path()
     assert primary_path is not None
-    plan = catalog.plan_view(tmp_path / "view", "{product}/{id}.nc")
+    plan = plan_replica_view(
+        root=tmp_path / "view",
+        template="{product}/{id}.nc",
+        records=[record],
+    )
     target_path = plan.items[0].target_path
     primary_path.unlink()
 
@@ -226,10 +193,14 @@ def test_apply_rechecks_missing_primary_targets_after_planning(tmp_path: Path) -
 def test_plan_view_rejects_normalized_parent_segments(tmp_path: Path) -> None:
     """Whitespace-padded parent-directory segments must not escape the view root."""
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
-    catalog.add_file(_source_file(tmp_path, "alpha.nc"), metadata={"product": " .. "})
+    record = catalog.add_file(_source_file(tmp_path, "alpha.nc"), metadata={"product": " .. "})
 
     with pytest.raises(ValueError, match="relative path below the view root"):
-        catalog.plan_view(tmp_path / "view", "{product}/{id}.nc")
+        plan_replica_view(
+            root=tmp_path / "view",
+            template="{product}/{id}.nc",
+            records=[record],
+        )
 
 
 def test_view_regeneration_uses_updated_metadata_without_moving_primary(tmp_path: Path) -> None:

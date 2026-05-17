@@ -9,7 +9,8 @@ from typing import Literal, Protocol
 
 from ogcat.hooks import OperationContext
 from ogcat.models import CatalogRecord, MetadataDict
-from ogcat.replicas import ReplicaMode, materialize_template_link_replica
+from ogcat.replica_types import ReplicaMode
+from ogcat.template_replicas import materialize_template_link_replica
 from ogcat.transactions import UnitOfWork
 
 SecondaryArtifactRole = Literal["template_link"]
