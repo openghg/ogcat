@@ -12,6 +12,8 @@ import pytest
 from ogcat import Catalog
 
 EXAMPLE_PATH = Path(__file__).resolve().parents[1] / "examples" / "catalog_fluxes.py"
+DATA_DIR = Path(__file__).resolve().parents[1] / "examples" / "data"
+PERSONAL_FLUXES_LISTING = DATA_DIR / "personal_fluxes_recursive_ls.txt"
 
 
 @pytest.fixture
@@ -32,18 +34,18 @@ def test_discover_paths_from_listing_skips_directory_entries(
     listing.write_text(
         "\n".join(
             [
-                "/group/chem/acrg/ES/fluxes:",
+                "/group/chem/acrg/OC/fluxes:",
                 "EDGAR",
                 "EUROPE",
                 "CTE-HR-ffCO2-2021_to2022.nc",
-                "/group/chem/acrg/ES/fluxes/EDGAR:",
+                "/group/chem/acrg/OC/fluxes/EDGAR:",
                 "EDGAR_v8.0",
                 "EDGAR_v6.0.tar.gz",
-                "/group/chem/acrg/ES/fluxes/EDGAR/EDGAR_v8.0:",
+                "/group/chem/acrg/OC/fluxes/EDGAR/EDGAR_v8.0:",
                 "WASTE",
-                "/group/chem/acrg/ES/fluxes/EDGAR/EDGAR_v8.0/WASTE:",
+                "/group/chem/acrg/OC/fluxes/EDGAR/EDGAR_v8.0/WASTE:",
                 "v8.0_FT2022_GHG_CO2_2000_WASTE_flx.nc",
-                "/group/chem/acrg/ES/fluxes/EUROPE:",
+                "/group/chem/acrg/OC/fluxes/EUROPE:",
             ]
         ),
         encoding="utf-8",
@@ -52,18 +54,27 @@ def test_discover_paths_from_listing_skips_directory_entries(
     paths = [source.path.as_posix() for source in catalog_fluxes.discover_paths_from_listing(listing)]
 
     assert paths == [
-        "/group/chem/acrg/ES/fluxes/CTE-HR-ffCO2-2021_to2022.nc",
-        "/group/chem/acrg/ES/fluxes/EDGAR/EDGAR_v6.0.tar.gz",
-        "/group/chem/acrg/ES/fluxes/EDGAR/EDGAR_v8.0/WASTE/v8.0_FT2022_GHG_CO2_2000_WASTE_flx.nc",
+        "/group/chem/acrg/OC/fluxes/CTE-HR-ffCO2-2021_to2022.nc",
+        "/group/chem/acrg/OC/fluxes/EDGAR/EDGAR_v6.0.tar.gz",
+        "/group/chem/acrg/OC/fluxes/EDGAR/EDGAR_v8.0/WASTE/v8.0_FT2022_GHG_CO2_2000_WASTE_flx.nc",
     ]
 
 
+def test_vendored_personal_flux_listing_is_sanitized() -> None:
+    """The flux listing fixture should not preserve personal source naming."""
+    text = PERSONAL_FLUXES_LISTING.read_text(encoding="utf-8")
+
+    assert "/group/chem/acrg/ES/fluxes" not in text
+    assert "eric" not in text.lower()
+    assert "/group/chem/acrg/OC/fluxes" in text
+
+
 def test_parse_flux_metadata_for_europe_edgar_sector(catalog_fluxes: ModuleType) -> None:
-    path = Path("/group/chem/acrg/ES/fluxes/EUROPE/CO2/edgarv8/agric/EUROPE-co2-edgarv8-agric-2012.nc")
+    path = Path("/group/chem/acrg/OC/fluxes/EUROPE/CO2/edgarv8/agric/EUROPE-co2-edgarv8-agric-2012.nc")
 
     metadata = catalog_fluxes.parse_flux_metadata(
         path,
-        source_root=Path("/group/chem/acrg/ES/fluxes"),
+        source_root=Path("/group/chem/acrg/OC/fluxes"),
         discovery_mode="listing",
     )
 
@@ -78,11 +89,11 @@ def test_parse_flux_metadata_for_europe_edgar_sector(catalog_fluxes: ModuleType)
 
 
 def test_parse_flux_metadata_for_archive_and_date_range(catalog_fluxes: ModuleType) -> None:
-    path = Path("/group/chem/acrg/ES/fluxes/GridFEDv2024.0/GCP-GridFEDv2024.0_2012.zip")
+    path = Path("/group/chem/acrg/OC/fluxes/GridFEDv2024.0/GCP-GridFEDv2024.0_2012.zip")
 
     metadata = catalog_fluxes.parse_flux_metadata(
         path,
-        source_root=Path("/group/chem/acrg/ES/fluxes"),
+        source_root=Path("/group/chem/acrg/OC/fluxes"),
         discovery_mode="listing",
     )
 
@@ -95,11 +106,11 @@ def test_parse_flux_metadata_for_archive_and_date_range(catalog_fluxes: ModuleTy
 
 
 def test_parse_flux_metadata_for_compressed_netcdf(catalog_fluxes: ModuleType) -> None:
-    path = Path("/group/chem/acrg/ES/fluxes/APO/JenaCarboscope/apo99XS_v2022_daily.nc.gz")
+    path = Path("/group/chem/acrg/OC/fluxes/APO/JenaCarboscope/apo99XS_v2022_daily.nc.gz")
 
     metadata = catalog_fluxes.parse_flux_metadata(
         path,
-        source_root=Path("/group/chem/acrg/ES/fluxes"),
+        source_root=Path("/group/chem/acrg/OC/fluxes"),
         discovery_mode="listing",
     )
 
@@ -167,15 +178,15 @@ def test_build_catalog_from_listing_creates_external_reference_records(
     listing.write_text(
         "\n".join(
             [
-                "/group/chem/acrg/ES/fluxes:",
+                "/group/chem/acrg/OC/fluxes:",
                 "EUROPE",
-                "/group/chem/acrg/ES/fluxes/EUROPE:",
+                "/group/chem/acrg/OC/fluxes/EUROPE:",
                 "CO2",
-                "/group/chem/acrg/ES/fluxes/EUROPE/CO2:",
+                "/group/chem/acrg/OC/fluxes/EUROPE/CO2:",
                 "edgarv8",
-                "/group/chem/acrg/ES/fluxes/EUROPE/CO2/edgarv8:",
+                "/group/chem/acrg/OC/fluxes/EUROPE/CO2/edgarv8:",
                 "agric",
-                "/group/chem/acrg/ES/fluxes/EUROPE/CO2/edgarv8/agric:",
+                "/group/chem/acrg/OC/fluxes/EUROPE/CO2/edgarv8/agric:",
                 "EUROPE-co2-edgarv8-agric-2012.nc",
             ]
         ),
@@ -199,6 +210,33 @@ def test_build_catalog_from_listing_creates_external_reference_records(
     assert isinstance(classification, dict)
     assert classification["format"] == "netcdf"
     assert classification["artifact_kind"] == "file"
+
+
+def test_build_catalog_from_vendored_personal_flux_listing(
+    catalog_fluxes: ModuleType, tmp_path: Path
+) -> None:
+    """The vendored flux listing fixture validates realistic listing mode."""
+    catalog, added_count = catalog_fluxes.build_catalog(
+        catalog_root=tmp_path / "catalog",
+        source_root=None,
+        listing_path=PERSONAL_FLUXES_LISTING,
+        enrich=False,
+    )
+    records = catalog.search()
+    gridfed = catalog.get_one(where={"product": "GridFEDv2024.0", "year": 2012})
+    apo = catalog.get_one(
+        where={
+            "species": "APO",
+            "temporal_resolution": "daily",
+            "file_role": "compressed_netcdf",
+        }
+    )
+
+    assert added_count == 12
+    assert len(records) == 12
+    assert all("/OC/fluxes/" in str(record.locator.value) for record in records)
+    assert gridfed.user_metadata["archive_format"] == "zip"
+    assert apo.user_metadata["file_role"] == "compressed_netcdf"
 
 
 def test_build_catalog_from_mounted_scan_adds_filesystem_metadata(

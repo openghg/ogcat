@@ -38,21 +38,30 @@ fixed set of reserved fields plus three metadata namespaces.
     local directory shape, and safe archive member names; it is separate from
     content metadata extraction.
 
-    Classification uses this initial vocabulary:
+Classification uses this initial vocabulary:
 
-    | Field | Values |
-    |-------|--------|
-    | ``artifact_kind`` | ``file``, ``directory``, ``zarr_store``, ``archive``, ``remote_resource``, ``opaque`` |
-    | ``format`` | ``netcdf``, ``zarr``, ``zip``, ``gzip``, ``tar``, ``text``, ``unknown`` |
-    | ``archive_format`` | ``zip``, ``gzip``, or ``tar`` when the artifact is an archive or compressed file |
-    | ``inner_format`` | The safely inferred inner format for simple suffix chains such as ``.nc.gz`` or local zip archives with one file |
+- ``artifact_kind``: ``file``, ``directory``, ``collection``, ``zarr_store``,
+  ``archive``, ``remote_resource``, or ``opaque``.
+- ``format``: ``collection``, ``netcdf``, ``zarr``, ``zip``, ``gzip``,
+  ``tar``, ``text``, or ``unknown``.
+- ``archive_format``: ``zip``, ``gzip``, or ``tar`` when the artifact is an
+  archive or compressed file.
+- ``inner_format``: the safely inferred inner format for simple suffix chains
+  such as ``.nc.gz`` or local zip archives with one file.
+- ``collection_pattern``: relative member pattern for explicit collection
+  artifacts.
+- ``member_format``: caller-supplied or suffix-inferred member format for
+  collection artifacts.
+- ``member_suffixes``: expected member suffix list for collection artifacts.
+- ``reader_hint``: optional downstream reader hint such as
+  ``xarray.open_mfdataset``.
 
-    ``format`` is a normalized class, not the literal suffix. Text-like
-    suffixes such as ``.csv``, ``.json``, ``.md``, ``.tsv``, and ``.txt`` are
-    intentionally classified as the broad ``text`` format until ogcat needs a
-    more detailed text subtype vocabulary. Use the classification ``suffixes``
-    field or the record's top-level ``suffixes`` field when you need to search
-    or display the literal suffix list.
+``format`` is a normalized class, not the literal suffix. Text-like suffixes
+such as ``.csv``, ``.json``, ``.md``, ``.tsv``, and ``.txt`` are intentionally
+classified as the broad ``text`` format until ogcat needs a more detailed text
+subtype vocabulary. Use the classification ``suffixes`` field or the record's
+top-level ``suffixes`` field when you need to search or display the literal
+suffix list.
 
 ``naming_metadata``
 :   Internal metadata used to evaluate directory and filename templates.  You
@@ -72,8 +81,10 @@ Use an explicit dotted path to target a specific namespace:
 short aliases ``user.species`` and ``derived.netcdf.dims.time``.
 
 Selected classification fields also have a flattened fallback after ordinary
-``derived_metadata`` lookup, so searches such as ``where={"format": "zip"}``
-and ``where={"artifact_kind": "zarr_store"}`` work for classified records.
+``derived_metadata`` lookup, so searches such as ``where={"format": "zip"}``,
+``where={"artifact_kind": "zarr_store"}``, and
+``where={"artifact_kind": "collection", "member_format": "netcdf"}`` work for
+classified records.
 Use dotted paths such as
 ``derived_metadata.classification.inner_format`` when you need to bypass normal
 namespace precedence.

@@ -185,7 +185,9 @@ rollback, and transaction examples.
 
 Use `add_file()` when ogcat should manage a local copy or move into the catalog's `data/objects/` tree.
 Use `add_reference()` when the artifact already exists and ogcat should only record a local path,
-URI, URL path, or explicit `ArtifactLocator`. Use `add_artifact()` with an `OperationSource` and
+URI, URL path, or explicit `ArtifactLocator`. Use `add_collection()` when one logical dataset is
+represented by several members under a directory, URI, or URL-path root, such as a monthly NetCDF
+series opened with `xarray.open_mfdataset`. Use `add_artifact()` with an `OperationSource` and
 artifact writer when a plugin or helper should materialise new data before the record is written.
 See `ogcat.writers` for small helper wrappers around in-memory data, path-backed transforms, and zip
 extraction examples.

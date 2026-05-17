@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import zipfile
 from collections.abc import Sequence
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import cast
 from urllib.parse import urlsplit
 
@@ -16,7 +16,11 @@ CLASSIFICATION_SEARCH_FIELDS = frozenset(
         "artifact_kind",
         "format",
         "archive_format",
+        "collection_pattern",
         "inner_format",
+        "member_format",
+        "member_suffixes",
+        "reader_hint",
     }
 )
 
@@ -93,6 +97,52 @@ def classify_artifact(
     return metadata
 
 
+def collection_classification_metadata(
+    *,
+    collection_pattern: str = "*",
+    member_format: str | None = None,
+    member_suffixes: Sequence[str] | None = None,
+    reader_hint: str | None = None,
+) -> MetadataDict:
+    """Build explicit classification metadata for a logical collection.
+
+    Collection classification is opt-in policy. It records the caller's cheap
+    description of directory members without scanning, opening, or validating
+    member files.
+
+    Args:
+        collection_pattern: Relative glob/pattern that describes intended
+            collection members.
+        member_format: Optional format label for collection members.
+        member_suffixes: Optional suffixes expected for collection members.
+            When omitted, suffixes are inferred from ``collection_pattern``.
+        reader_hint: Optional human-readable hint for downstream readers.
+
+    Returns:
+        Metadata suitable for ``derived_metadata["classification"]``.
+
+    Raises:
+        ValueError: If collection metadata contains unsafe or empty values.
+    """
+    pattern = _normalize_collection_pattern(collection_pattern)
+    suffixes = _normalize_member_suffixes(member_suffixes, collection_pattern=pattern)
+    format_name = _normalize_optional_label(member_format, field_name="member_format")
+    if format_name is None:
+        format_name = _format_from_suffixes(suffixes)
+
+    metadata: MetadataDict = {
+        "artifact_kind": "collection",
+        "format": "collection",
+        "collection_pattern": pattern,
+        "member_format": format_name,
+        "member_suffixes": cast(JsonValue, list(suffixes)),
+    }
+    normalized_reader_hint = _normalize_optional_label(reader_hint, field_name="reader_hint")
+    if normalized_reader_hint is not None:
+        metadata["reader_hint"] = normalized_reader_hint
+    return metadata
+
+
 def _resolve_suffixes(
     *,
     suffixes: Sequence[str] | None,
@@ -117,6 +167,63 @@ def _resolve_suffixes(
         if inferred:
             return inferred
     return []
+
+
+def _normalize_collection_pattern(collection_pattern: str) -> str:
+    """Return a safe relative collection member pattern."""
+    if not isinstance(collection_pattern, str):
+        raise TypeError(f"collection_pattern must be a string, got {type(collection_pattern).__name__}.")
+    pattern = collection_pattern.strip()
+    if not pattern:
+        raise ValueError("collection_pattern cannot be empty.")
+    posix_path = PurePosixPath(pattern)
+    windows_path = PureWindowsPath(pattern)
+    if (
+        "\\" in pattern
+        or posix_path.is_absolute()
+        or windows_path.is_absolute()
+        or windows_path.drive
+        or ".." in posix_path.parts
+        or ".." in windows_path.parts
+    ):
+        raise ValueError(
+            "collection_pattern must be a relative POSIX pattern without drive, backslash, or '..' segments."
+        )
+    return pattern
+
+
+def _normalize_member_suffixes(
+    member_suffixes: Sequence[str] | None,
+    *,
+    collection_pattern: str,
+) -> list[str]:
+    """Return normalized member suffixes, inferring from the pattern when needed."""
+    if isinstance(member_suffixes, str):
+        raise TypeError("member_suffixes must be a sequence of suffix strings, not a bare string.")
+    raw_suffixes = (
+        list(PurePosixPath(collection_pattern).suffixes) if member_suffixes is None else list(member_suffixes)
+    )
+    normalized: list[str] = []
+    for index, suffix in enumerate(raw_suffixes):
+        if not isinstance(suffix, str):
+            raise TypeError(f"member_suffixes[{index}] must be a string, got {type(suffix).__name__}.")
+        suffix_text = suffix.strip()
+        if not suffix_text:
+            raise ValueError("member_suffixes cannot contain empty values.")
+        normalized.append(suffix_text if suffix_text.startswith(".") else f".{suffix_text}")
+    return normalized
+
+
+def _normalize_optional_label(value: str | None, *, field_name: str) -> str | None:
+    """Return a stripped optional label or raise for empty strings."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError(f"{field_name} must be a string, got {type(value).__name__}.")
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{field_name} cannot be empty.")
+    return normalized
 
 
 def _suffixes_from_candidate(candidate: str | Path, *, locator_kind: str) -> list[str]:

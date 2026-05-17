@@ -1,4 +1,4 @@
-"""Catalog ACRG flux data as external path-backed artifacts.
+"""Catalog personal flux data as external path-backed artifacts.
 
 This example is intentionally a stress-test script rather than a new ogcat core
 feature. It can build a catalog from a mounted flux tree or from a saved
@@ -41,9 +41,9 @@ try:
 except ImportError:  # pragma: no cover - exercised on non-Unix platforms
     pwd = None
 
-DEFAULT_SOURCE_ROOT = Path("/group/chem/acrg/ES/fluxes")
-DEFAULT_CATALOG_NAME = "acrg-fluxes"
-DEFAULT_VIEW_CATALOG_NAME = "acrg-fluxes-symlink-view"
+DEFAULT_SOURCE_ROOT = Path("/group/chem/acrg/OC/fluxes")
+DEFAULT_CATALOG_NAME = "personal-fluxes"
+DEFAULT_VIEW_CATALOG_NAME = "personal-fluxes-symlink-view"
 DEFAULT_DIRECTORY_TEMPLATE = (
     "{mtime_year|year}/{top_collection|unknown}/{species|unknown}/{product|original_stem}"
 )

@@ -116,6 +116,7 @@ print(example_flux_cdl())
 | Method | Use it when | Storage effect |
 | --- | --- | --- |
 | `add_reference(...)` | The artifact already exists and should stay where it is. | Records a local path, URI, or URL path; does not copy, move, or write data. |
+| `add_collection(...)` | One logical dataset is represented by several members under a directory, URI, or URL path root. | Records one collection artifact with member-pattern metadata; does not scan, copy, move, or open member files. |
 | `add_file(...)` | ogcat should manage a local copy or move a finished file into catalog storage. | Copies or moves one local file into the catalog object storage root and, by default, creates a readable template symlink under `files_root`. |
 | `add_artifact(...)` with a `StoragePlan` and writer | Domain code should create the output while ogcat handles planning, record creation, and rollback hooks. | The writer materialises the planned file or directory, then ogcat records it. |
 
@@ -170,6 +171,45 @@ catalog.add_reference(
         "processing_stage": "remote_catalogue_entry",
     },
 )
+```
+
+## Add a directory-backed collection
+
+Use `add_collection(...)` when users should search for one dataset even though
+the data live in several member files. This is common for yearly or monthly
+NetCDF series that are opened together with `xarray.open_mfdataset`.
+
+```python
+footprint_dir = external_dir / "name-footprints" / "EASTASIA" / "BCOB-10magl" / "inert"
+footprint_dir.mkdir(parents=True)
+for month in ["202301", "202302"]:
+    (footprint_dir / f"BCOB-10magl_NAME_UMG_EASTASIA_inert_{month}.nc").write_text(
+        "tiny placeholder\n",
+        encoding="utf-8",
+    )
+
+footprint_collection = catalog.add_collection(
+    footprint_dir,
+    record_type="verification_games_obs",
+    metadata={
+        "title": "BCOB EASTASIA NAME footprint series",
+        "product": "NAME",
+        "species": "inert",
+        "domain": "EASTASIA",
+        "year": "2023",
+        "keywords": ["footprint", "collection"],
+        "provenance": "raw",
+        "format": "netcdf",
+        "processing_stage": "downloaded",
+        "site": "BCOB",
+    },
+    collection_pattern="BCOB-10magl_NAME_UMG_EASTASIA_inert_*.nc",
+    member_format="netcdf",
+    member_suffixes=[".nc"],
+    reader_hint="xarray.open_mfdataset",
+)
+
+print(footprint_collection.locator.kind, footprint_collection.derived_metadata["classification"])
 ```
 
 ## Add a managed copy
