@@ -6,9 +6,13 @@ direction is to keep `Catalog`, `CatalogRecordSet`, and the CLI as public
 presentation surfaces while moving orchestration, domain policy, and persistence
 behind clearer internal interfaces.
 
+The diagrams use GitHub-rendered Mermaid fences. This snapshot is excluded from
+the Sphinx documentation build until the architecture and docs rendering setup
+are stable enough to publish diagrams in the generated docs site.
+
 ## Layer Map
 
-```text
+```mermaid
 flowchart TD
   CLI["CLI presentation"]
   Catalog["Catalog facade"]
@@ -49,7 +53,7 @@ flowchart TD
 
 ## Primary Add Flow
 
-```text
+```mermaid
 sequenceDiagram
   participant User
   participant Catalog
@@ -108,7 +112,7 @@ sequenceDiagram
 
 ## Data Model Sketch
 
-```text
+```mermaid
 classDiagram
   class CatalogSpec {
     catalog_name
