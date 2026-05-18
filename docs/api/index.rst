@@ -17,6 +17,7 @@ Public API
    catalog
    audit
    models
+   classification
    search
    storage
    replicas

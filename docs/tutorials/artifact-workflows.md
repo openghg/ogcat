@@ -7,9 +7,9 @@ network-specific work.
 ## CAMS zip to processed boundary conditions
 
 This workflow tracks a raw CAMS download, extracts its NetCDF members into a
-pipeline-controlled directory, records those members as one collection artifact,
-and writes a processed Zarr store with provenance linking the output back to
-the raw inputs.
+UUID-managed collection directory, records those members as one collection
+artifact, and writes a processed Zarr store with provenance linking the output
+back to the raw inputs.
 
 The example uses the CAMS global inversion-optimised greenhouse gas fluxes and
 concentrations dataset from the Copernicus Atmosphere Data Store:
@@ -42,10 +42,10 @@ version string because the workflow does not interpret it further.
 
 ### Catalog spec
 
-The raw download and extracted NetCDF collection are explicit references. They
-do not use schema templates because ogcat is not choosing their storage
-locations. The processed boundary-condition schema does use templates because
-ogcat owns the Zarr output target.
+The raw download is an explicit reference. The extracted NetCDF collection and
+processed boundary-condition store are ogcat-owned outputs. The collection uses
+UUID primary storage because the member filenames already carry the useful human
+meaning; the processed Zarr store uses a human-readable schema template.
 
 ```python
 from pathlib import Path
@@ -158,66 +158,68 @@ raw_zip_record = catalog.add_reference(
 )
 ```
 
-### 2. Extract and record the NetCDF collection
+### 2. Extract the NetCDF collection into managed storage
 
-The extraction location is chosen by the pipeline, not by a catalog naming
-template. This is useful for raw scientific inputs: the physical files stay in a
-domain-controlled workspace, while ogcat records the logical collection and the
-member pattern that downstream code should read.
+Here the extraction is an ogcat-managed write. A writer validates the archive
+members, extracts the NetCDF files into the planned UUID directory target, and
+returns collection classification metadata. General ``add_artifact(...)`` writes
+do not schedule template-link replicas, so the managed collection has only the
+UUID primary location.
 
 ```python
 import fnmatch
 import shutil
 import zipfile
 
-
-def extract_cams_members(
-    zip_path: Path,
-    target_dir: Path,
-    *,
-    member_pattern: str,
-    expected_members: list[str],
-) -> list[Path]:
-    """Extract matching CAMS members into a pipeline-controlled directory."""
-    if target_dir.exists():
-        raise FileExistsError(target_dir)
-    target_dir.mkdir(parents=True)
-
-    try:
-        with zipfile.ZipFile(zip_path) as archive:
-            members = {
-                Path(member.filename).name: member
-                for member in archive.infolist()
-                if not member.is_dir() and fnmatch.fnmatch(Path(member.filename).name, member_pattern)
-            }
-            expected_names = sorted(expected_members)
-            matched_names = sorted(members)
-            if matched_names != expected_names:
-                missing = sorted(set(expected_names) - set(matched_names))
-                unexpected = sorted(set(matched_names) - set(expected_names))
-                raise ValueError(f"Unexpected CAMS members: missing={missing}, unexpected={unexpected}.")
-
-            extracted: list[Path] = []
-            for name in expected_names:
-                member = members[name]
-                destination = target_dir / Path(member.filename).name
-                with archive.open(member) as source_file, destination.open("wb") as target_file:
-                    shutil.copyfileobj(source_file, target_file)
-                extracted.append(destination)
-    except Exception:
-        shutil.rmtree(target_dir, ignore_errors=True)
-        raise
-
-    return sorted(extracted)
-
-
-extracted_dir = Path("raw-cams-work/cams73_latest_co2_conc_surface_inst_202001-202212")
-extract_cams_members(
-    downloaded_zip,
-    extracted_dir,
-    member_pattern=CAMS_MEMBER_PATTERN,
-    expected_members=CAMS_EXPECTED_MEMBERS,
+from ogcat import (
+    OperationSource,
+    collection_classification_metadata,
+    path_source,
+    source_writer,
 )
+
+
+def write_cams_collection_archive(
+    source: OperationSource,
+    target_dir: Path,
+) -> dict[str, object]:
+    """Extract the expected CAMS NetCDF members into a managed directory."""
+    if source.path is None:
+        raise ValueError("CAMS collection writer requires a local zip source path.")
+
+    with zipfile.ZipFile(source.path) as archive:
+        members: dict[str, zipfile.ZipInfo] = {}
+        for member in archive.infolist():
+            member_name = Path(member.filename).name
+            if member.is_dir() or not fnmatch.fnmatch(member_name, CAMS_MEMBER_PATTERN):
+                continue
+            if member_name in members:
+                raise ValueError(f"Duplicate CAMS archive member basename: {member_name}")
+            members[member_name] = member
+
+        expected_names = sorted(CAMS_EXPECTED_MEMBERS)
+        matched_names = sorted(members)
+        if matched_names != expected_names:
+            missing = sorted(set(expected_names) - set(matched_names))
+            unexpected = sorted(set(matched_names) - set(expected_names))
+            raise ValueError(f"Unexpected CAMS members: missing={missing}, unexpected={unexpected}.")
+
+        for name in expected_names:
+            member = members[name]
+            destination = target_dir / name
+            with archive.open(member) as source_file, destination.open("wb") as target_file:
+                shutil.copyfileobj(source_file, target_file)
+
+    return {
+        "extracted_file_count": len(expected_names),
+        "extracted_names": expected_names,
+        "classification": collection_classification_metadata(
+            collection_pattern=CAMS_MEMBER_PATTERN,
+            member_format="netcdf",
+            member_suffixes=[".nc"],
+            reader_hint="xarray.open_mfdataset",
+        ),
+    }
 
 collection_metadata = {
     "species": "co2",
@@ -234,20 +236,31 @@ collection_metadata = {
     "bc_input_version": "cams73_latest",
 }
 
-collection_record = catalog.add_collection(
-    extracted_dir,
+collection_plan = catalog.plan_artifact_storage(
     record_type="raw_netcdf_collection",
     metadata=collection_metadata,
-    collection_pattern=CAMS_MEMBER_PATTERN,
-    member_format="netcdf",
-    member_suffixes=[".nc"],
-    reader_hint="xarray.open_mfdataset",
+    target_kind="directory",
+    write_mode="write",
+    primary_location="uuid",
+)
+
+collection_record = catalog.add_artifact(
+    record_type="raw_netcdf_collection",
+    storage_plan=collection_plan,
+    metadata=collection_metadata,
+    source=path_source(downloaded_zip, kind="zip_file"),
+    artifact_writer=source_writer(
+        write_cams_collection_archive,
+        target_kind="directory",
+        source_kind="zip_file",
+    ),
 )
 ```
 
-``add_collection(...)`` records one logical dataset. It does not scan, copy,
-move, or open the NetCDF members. The explicit ``collection_pattern`` and
-``reader_hint`` document how the collection should be read.
+The resulting record points at a managed directory under ``data/objects``. It is
+still one logical dataset, not 36 separate file records. The explicit
+``collection_pattern`` and ``reader_hint`` in the classification metadata
+document how downstream code should read the members.
 
 ### 3. Process the collection into a Zarr artifact
 
