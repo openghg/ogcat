@@ -44,6 +44,60 @@ def test_extract_derived_metadata_can_report_extractor_errors(
     }
 
 
+def test_extract_derived_metadata_can_report_extractor_selection_errors(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Broken extractor selection should not fail best-effort metadata extraction."""
+    source = tmp_path / "example.zarr"
+    source.mkdir()
+
+    class BrokenCanExtract:
+        name = "broken_can_extract"
+
+        def can_extract(self, path: Path) -> bool:
+            raise TypeError("simulated selection failure")
+
+        def extract(self, path: Path) -> None:
+            raise AssertionError("selection failure should skip extraction")
+
+    monkeypatch.setattr(extractors, "_EXTRACTORS", (BrokenCanExtract(),))
+
+    assert extract_derived_metadata(source) == {}
+    assert extract_derived_metadata(source, include_errors=True) == {
+        "extractor_errors": {"broken_can_extract": "TypeError: simulated selection failure"}
+    }
+
+
+def test_add_file_zarr_directory_keeps_working_when_extractor_selection_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Default extractor selection errors should not block managed directory ingest."""
+    source = tmp_path / "example.zarr"
+    source.mkdir()
+    (source / "zarr.json").write_text("{}", encoding="utf-8")
+
+    class BrokenCanExtract:
+        name = "broken_can_extract"
+
+        def can_extract(self, path: Path) -> bool:
+            raise TypeError("simulated selection failure")
+
+        def extract(self, path: Path) -> None:
+            raise AssertionError("selection failure should skip extraction")
+
+    monkeypatch.setattr(extractors, "_EXTRACTORS", (BrokenCanExtract(),))
+
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="files"))
+
+    record = catalog.add_file(source, create_template_replica=False)
+
+    stored_path = record.path()
+    assert stored_path is not None
+    assert stored_path.is_dir()
+    assert "extractor_errors" not in record.derived_metadata
+
+
 def test_extract_derived_metadata_can_report_unreadable_netcdf_paths(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

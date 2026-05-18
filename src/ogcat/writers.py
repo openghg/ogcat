@@ -172,6 +172,44 @@ class CopyArtifactWriter:
 
 
 @dataclass(frozen=True, slots=True)
+class CopyDirectoryArtifactWriter:
+    """Artifact writer that copies a local source directory to a directory target."""
+
+    source_kind: str = "local_file"
+    target_kind: ClassVar[TargetKind] = "directory"
+    write_mode: ClassVar[WriteMode] = "copy"
+
+    def write(
+        self,
+        context: OperationContext,
+        source: OperationSource,
+        target: ArtifactLocator,
+    ) -> None:
+        """Copy a local source directory to the target and register rollback."""
+        if source.kind != self.source_kind or source.path is None:
+            raise ValueError(
+                f"copy directory writer requires OperationSource(kind={self.source_kind!r}, path=...)"
+            )
+        if not source.path.is_dir():
+            raise ValueError(f"copy directory writer requires an existing directory: {source.path}")
+        if target.kind != "path":
+            raise ValueError("copy directory writer currently requires a path-backed target")
+        adapter = adapter_for_locator(target)
+        ensure_target_absent(target, adapter=adapter)
+        target_path = require_local_path(target)
+        ensure_parent_directory(target, adapter=adapter)
+        context.rollback(
+            lambda locator=target, storage=adapter: remove_target(
+                locator,
+                target_kind=self.target_kind,
+                adapter=storage,
+            ),
+            description=f"remove copied {self.target_kind} artifact {target.value}",
+        )
+        shutil.copytree(source.path, target_path)
+
+
+@dataclass(frozen=True, slots=True)
 class MoveArtifactWriter:
     """Artifact writer that moves a local source path to a storage target."""
 
@@ -204,6 +242,44 @@ class MoveArtifactWriter:
             description=f"restore moved file from {target_path} to {source.path}",
         )
         adapter.move_from_path(source.path, target)
+
+
+@dataclass(frozen=True, slots=True)
+class MoveDirectoryArtifactWriter:
+    """Artifact writer that moves a local source directory to a directory target."""
+
+    source_kind: str = "local_file"
+    target_kind: ClassVar[TargetKind] = "directory"
+    write_mode: ClassVar[WriteMode] = "move"
+
+    def write(
+        self,
+        context: OperationContext,
+        source: OperationSource,
+        target: ArtifactLocator,
+    ) -> None:
+        """Move a local source directory to the target and register rollback."""
+        if source.kind != self.source_kind or source.path is None:
+            raise ValueError(
+                f"move directory writer requires OperationSource(kind={self.source_kind!r}, path=...)"
+            )
+        if not source.path.is_dir():
+            raise ValueError(f"move directory writer requires an existing directory: {source.path}")
+        if target.kind != "path":
+            raise ValueError("move directory writer currently requires a path-backed target")
+        adapter = adapter_for_locator(target)
+        ensure_target_absent(target, adapter=adapter)
+        target_path = require_local_path(target)
+        ensure_parent_directory(target, adapter=adapter)
+        context.rollback(
+            lambda source_path=source.path, stored_path=target_path: _rollback_moved_target(
+                source_path=source_path,
+                target_path=stored_path,
+                target_kind=self.target_kind,
+            ),
+            description=f"restore moved {self.target_kind} from {target_path} to {source.path}",
+        )
+        shutil.move(str(source.path), str(target_path))
 
 
 def source_writer(
@@ -391,20 +467,27 @@ def _remove_target(target_path: Path, target_kind: TargetKind) -> None:
 
 def _rollback_moved_file(*, source_path: Path, target_path: Path) -> None:
     """Restore a moved file when possible, otherwise remove the moved target."""
+    _rollback_moved_target(source_path=source_path, target_path=target_path, target_kind="file")
+
+
+def _rollback_moved_target(*, source_path: Path, target_path: Path, target_kind: TargetKind) -> None:
+    """Restore a moved target when possible, otherwise remove the moved target."""
     if not target_path.exists():
         return
     if not source_path.exists():
         source_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(target_path), str(source_path))
         return
-    target_path.unlink(missing_ok=True)
+    _remove_target(target_path, target_kind)
 
 
 __all__ = [
     "CopyArtifactWriter",
+    "CopyDirectoryArtifactWriter",
     "FunctionArtifactWriter",
     "MemoryWriteFunction",
     "MoveArtifactWriter",
+    "MoveDirectoryArtifactWriter",
     "PathWriteFunction",
     "SourceWriteFunction",
     "UnzipArtifactWriter",

@@ -191,10 +191,10 @@ class Catalog:
         primary_location: PrimaryLocation = "uuid",
         create_template_replica: bool = True,
     ) -> CatalogRecord:
-        """Add a local file using managed copy or move.
+        """Add a local file or file-like directory store using managed copy or move.
 
         Args:
-            path: Source file to ingest.
+            path: Source file or file-like directory store to ingest.
             metadata: JSON-compatible user metadata.
             operation: ``"copy"`` or ``"move"``. Defaults to the catalog spec.
             record_type: Optional named schema to validate against.

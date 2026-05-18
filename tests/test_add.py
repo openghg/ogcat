@@ -24,6 +24,15 @@ def _template_replica_path(record: CatalogRecord) -> Path:
     return Path(str(record.naming_metadata["template_replica_path"]))
 
 
+def _write_zarr_store(path: Path) -> None:
+    """Write a tiny directory tree that behaves like a Zarr store for ingest tests."""
+    path.mkdir()
+    (path / "zarr.json").write_text("{}", encoding="utf-8")
+    chunks = path / "data"
+    chunks.mkdir()
+    (chunks / "0").write_text("chunk", encoding="utf-8")
+
+
 def test_add_file_uses_generic_default_storage_layout(tmp_path: Path) -> None:
     """Default managed ingest writes a UUID primary and a template symlink replica."""
     source_dir = tmp_path / "source"
@@ -63,6 +72,62 @@ def test_add_file_uses_generic_default_storage_layout(tmp_path: Path) -> None:
     assert record.suffixes == [".nc"]
     assert record.storage_mode == "copy"
     assert record.naming_metadata["primary_location"] == "uuid"
+
+
+def test_add_file_copies_zarr_directory_as_managed_artifact(tmp_path: Path) -> None:
+    """Managed ingest should copy a file-like directory store as one artifact."""
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "example.zarr"
+    _write_zarr_store(source)
+
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="files"))
+
+    record = catalog.add_file(source)
+
+    artifact_uuid = str(record.naming_metadata["artifact_uuid"])
+    expected_primary = root / "data" / "objects" / artifact_uuid[:2] / f"{artifact_uuid}.zarr"
+    replica_path = _template_replica_path(record)
+    classification = record.derived_metadata["classification"]
+    assert isinstance(classification, dict)
+
+    assert source.is_dir()
+    assert _stored_path(record) == expected_primary
+    assert expected_primary.is_dir()
+    assert (expected_primary / "zarr.json").read_text(encoding="utf-8") == "{}"
+    assert (expected_primary / "data" / "0").read_text(encoding="utf-8") == "chunk"
+    assert replica_path.is_symlink()
+    assert replica_path.resolve() == expected_primary
+    assert record.suffixes == [".zarr"]
+    assert record.storage_mode == "copy"
+    assert classification["artifact_kind"] == "zarr_store"
+    assert classification["format"] == "zarr"
+
+
+def test_add_file_moves_zarr_directory_as_managed_artifact(tmp_path: Path) -> None:
+    """Managed move ingest should transfer a file-like directory store."""
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "moved.zarr"
+    _write_zarr_store(source)
+
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="files"))
+
+    record = catalog.add_file(source, operation="move", create_template_replica=False)
+
+    stored_path = _stored_path(record)
+    classification = record.derived_metadata["classification"]
+    assert isinstance(classification, dict)
+
+    assert not source.exists()
+    assert stored_path.is_dir()
+    assert (stored_path / "zarr.json").read_text(encoding="utf-8") == "{}"
+    assert record.storage_mode == "move"
+    assert record.suffixes == [".zarr"]
+    assert classification["artifact_kind"] == "zarr_store"
+    assert classification["format"] == "zarr"
 
 
 def test_add_file_template_replica_uses_relative_symlink_target(tmp_path: Path) -> None:
@@ -917,6 +982,33 @@ def test_add_file_removes_copied_target_when_metadata_extraction_fails(
     assert list((root / "data" / "files").rglob("*.nc")) == []
 
 
+def test_add_file_removes_copied_directory_when_metadata_extraction_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rollback should remove a copied directory target if later metadata extraction fails."""
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "metadata.zarr"
+    _write_zarr_store(source)
+
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="files"))
+
+    def fail_extract(path: Path) -> dict[str, object]:
+        raise ValueError("simulated metadata failure")
+
+    monkeypatch.setattr("ogcat.catalog_application.extract_derived_metadata", fail_extract)
+
+    with pytest.raises(ValueError, match="simulated metadata failure"):
+        catalog.add_file(source, create_template_replica=False)
+
+    assert source.is_dir()
+    assert (source / "zarr.json").exists()
+    assert catalog.describe()["record_count"] == 0
+    assert list((root / "data" / "objects").rglob("*.zarr")) == []
+
+
 def test_add_file_restores_moved_file_when_record_write_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -940,6 +1032,34 @@ def test_add_file_restores_moved_file_when_record_write_fails(
     assert list((root / "data" / "files").rglob("*.nc")) == []
     assert source.exists()
     assert source.read_text(encoding="utf-8") == "dummy"
+    assert catalog.describe()["record_count"] == 0
+
+
+def test_add_file_restores_moved_directory_when_record_write_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rollback should restore a moved directory if record persistence fails."""
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "moved.zarr"
+    _write_zarr_store(source)
+
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="files"))
+
+    def fail_insert(record: CatalogRecord) -> CatalogRecord:
+        raise OSError("simulated record write failure")
+
+    monkeypatch.setattr(catalog.repository, "insert", fail_insert)
+
+    with pytest.raises(OSError, match="simulated record write failure"):
+        catalog.add_file(source, operation="move", create_template_replica=False)
+
+    assert list((root / "data" / "objects").rglob("*.zarr")) == []
+    assert source.is_dir()
+    assert (source / "zarr.json").read_text(encoding="utf-8") == "{}"
+    assert (source / "data" / "0").read_text(encoding="utf-8") == "chunk"
     assert catalog.describe()["record_count"] == 0
 
 
