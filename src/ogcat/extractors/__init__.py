@@ -45,22 +45,38 @@ def extract_derived_metadata(path: str | Path, *, include_errors: bool = False) 
     errors: MetadataDict = {}
 
     for extractor in _EXTRACTORS:
-        if not extractor.can_extract(source):
+        try:
+            can_extract = extractor.can_extract(source)
+        except Exception as exc:
+            # Extractor selection is best-effort too; a broken optional
+            # extractor must not block artifact ingest.
+            if include_errors:
+                errors[_extractor_name(extractor)] = f"{type(exc).__name__}: {exc}"
+            continue
+        if not can_extract:
             continue
         try:
             extracted = extractor.extract(source)
         except Exception as exc:
             # Derived metadata is best-effort and should not block file ingestion.
             if include_errors:
-                errors[extractor.name] = f"{type(exc).__name__}: {exc}"
+                errors[_extractor_name(extractor)] = f"{type(exc).__name__}: {exc}"
             continue
         if extracted is not None:
-            derived[extractor.name] = extracted
+            derived[_extractor_name(extractor)] = extracted
 
     if errors:
         derived["extractor_errors"] = errors
 
     return derived
+
+
+def _extractor_name(extractor: DerivedMetadataExtractor) -> str:
+    """Return a stable extractor name for metadata and error reporting."""
+    try:
+        return str(extractor.name)
+    except Exception:
+        return type(extractor).__name__
 
 
 def _default_extractors() -> tuple[DerivedMetadataExtractor, ...]:

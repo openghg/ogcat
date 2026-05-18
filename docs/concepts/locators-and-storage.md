@@ -33,7 +33,8 @@ directly, but ogcat does not interpret them beyond recording the string value.
 Use the three catalog add methods for different storage responsibilities:
 
 - ``Catalog.add_file(...)`` is for managed local ingest. It copies or moves a
-  local source into the catalog's ``data/objects/`` tree by default.
+  local source file, or a file-like directory store such as ``.zarr``, into the
+  catalog's ``data/objects/`` tree by default.
 - ``Catalog.add_reference(...)`` is for artifacts that already exist. It records
   a local path, URI, URI locator, or URL-path locator without copying, moving,
   or writing artifact data.
@@ -47,10 +48,11 @@ Use the three catalog add methods for different storage responsibilities:
 
 ## Managed files
 
-``catalog.add_file()`` copies or moves the source file into the catalog's
-``data/objects/`` tree by default and records a ``path`` locator pointing at
-that UUID-backed primary copy. The configured directory and filename templates
-create a human-readable symlink replica, not the canonical artifact path.
+``catalog.add_file()`` copies or moves the source file or file-like directory
+store into the catalog's ``data/objects/`` tree by default and records a
+``path`` locator pointing at that UUID-backed primary copy. The configured
+directory and filename templates create a human-readable symlink replica, not
+the canonical artifact path.
 
 ```python
 record = catalog.add_file(

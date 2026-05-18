@@ -33,7 +33,12 @@ from ogcat.storage_planning import (
     plan_primary_storage,
 )
 from ogcat.transactions import UnitOfWork
-from ogcat.writers import CopyArtifactWriter, MoveArtifactWriter
+from ogcat.writers import (
+    CopyArtifactWriter,
+    CopyDirectoryArtifactWriter,
+    MoveArtifactWriter,
+    MoveDirectoryArtifactWriter,
+)
 
 if TYPE_CHECKING:
     from ogcat.catalog import Catalog
@@ -121,9 +126,7 @@ class CatalogApplication:
                 context.derived_metadata.update(extract_derived_metadata(locator_path))
 
         source_description = OperationSource(kind="local_file", path=source, descriptor=str(source))
-        artifact_writer: ArtifactWriter = (
-            CopyArtifactWriter() if operation == "copy" else MoveArtifactWriter()
-        )
+        artifact_writer = _managed_path_writer(source=source, operation=operation)
         materialization_intent = writer_intent(artifact_writer)
         secondary_artifact_operations = self._template_link_secondary_artifacts(
             primary_location=primary_location,
@@ -284,6 +287,13 @@ class CatalogApplication:
                 filename_template=filename_template,
             ),
         )
+
+
+def _managed_path_writer(*, source: Path, operation: str) -> ArtifactWriter:
+    """Return the managed-ingest writer for the source path shape."""
+    if source.is_dir():
+        return CopyDirectoryArtifactWriter() if operation == "copy" else MoveDirectoryArtifactWriter()
+    return CopyArtifactWriter() if operation == "copy" else MoveArtifactWriter()
 
 
 __all__ = ["CatalogApplication"]
