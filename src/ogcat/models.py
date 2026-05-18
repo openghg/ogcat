@@ -14,6 +14,40 @@ JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 MetadataDict: TypeAlias = dict[str, JsonValue]
 
 DATA_ARTIFACT_ID = "data"
+CORE_ARTIFACT_NAMESPACE = "ogcat.core"
+ARTIFACT_SCHEMA_VERSION = "1"
+DATA_TYPE_CLAIM_KIND = "data_type"
+REPRESENTATION_CLAIM_KIND = "representation"
+INTERFACE_CLAIM_KIND = "interface"
+STANDARD_CLAIM_KINDS = frozenset(
+    {
+        DATA_TYPE_CLAIM_KIND,
+        REPRESENTATION_CLAIM_KIND,
+        INTERFACE_CLAIM_KIND,
+    }
+)
+ARTIFACT_EVIDENCE_VALUES = frozenset(
+    {
+        "declared",
+        "inferred",
+        "probed",
+        "validated",
+        "stale",
+        "failed",
+    }
+)
+ARTIFACT_CONFIDENCE_VALUES = ARTIFACT_EVIDENCE_VALUES
+ARTIFACT_SCHEMA_FIELDS = frozenset(
+    {
+        "kind",
+        "name",
+        "namespace",
+        "version",
+        "evidence",
+        "confidence",
+        "metadata",
+    }
+)
 # Descriptive vocabulary from ADR 0002; descriptor roles remain open strings.
 STANDARD_ARTIFACT_ROLES = frozenset(
     {
@@ -29,6 +63,8 @@ STANDARD_ARTIFACT_ROLES = frozenset(
         "archive_copy",
     }
 )
+ArtifactClaimInput: TypeAlias = "ArtifactClaim | Mapping[str, object]"
+ArtifactFacetInput: TypeAlias = "ArtifactFacet | Mapping[str, object]"
 
 
 def normalize_metadata(
@@ -259,6 +295,291 @@ class ArtifactLocator:
 
 
 @dataclass(slots=True)
+class ArtifactClaim:
+    """Namespaced claim about an artifact's data type, representation, or interface.
+
+    Args:
+        kind: Claim category. Core recognizes ``"data_type"``, ``"representation"``,
+            and ``"interface"``, but stores other non-empty strings for plugin-owned
+            claim categories.
+        name: Namespaced claim name, such as ``"bytes"``, ``"netcdf"``, or
+            ``"xarray-dataset"``.
+        namespace: Stable namespace that owns the claim name.
+        version: Version of the namespace-local claim schema.
+        evidence: How the claim was produced.
+        confidence: Confidence/status term for the claim. Defaults to ``evidence``.
+        metadata: JSON-compatible structured details for this claim.
+    """
+
+    kind: str
+    name: str
+    namespace: str = CORE_ARTIFACT_NAMESPACE
+    version: str = ARTIFACT_SCHEMA_VERSION
+    evidence: str = "declared"
+    confidence: str | None = None
+    metadata: MetadataDict = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Normalize claim fields to the supported JSON-safe shape."""
+        self.kind = _coerce_required_schema_text(self.kind, field_name="claim.kind")
+        self.name = _coerce_required_schema_text(self.name, field_name="claim.name")
+        self.namespace = _coerce_required_schema_text(
+            self.namespace,
+            field_name=f"claim[{self.kind}:{self.name}].namespace",
+        )
+        self.version = _coerce_required_schema_text(
+            self.version,
+            field_name=f"claim[{self.kind}:{self.name}].version",
+        )
+        self.evidence = _coerce_artifact_vocabulary(
+            self.evidence,
+            field_name=f"claim[{self.kind}:{self.name}].evidence",
+            allowed=ARTIFACT_EVIDENCE_VALUES,
+        )
+        self.confidence = _coerce_artifact_vocabulary(
+            self.evidence if self.confidence is None else self.confidence,
+            field_name=f"claim[{self.kind}:{self.name}].confidence",
+            allowed=ARTIFACT_CONFIDENCE_VALUES,
+        )
+        self.metadata = normalize_metadata(
+            self.metadata,
+            field_name=f"claim[{self.kind}:{self.name}].metadata",
+        )
+
+    def to_dict(self) -> dict[str, JsonValue]:
+        """Convert the claim to its JSON-compatible dictionary shape."""
+        return {
+            "kind": self.kind,
+            "name": self.name,
+            "namespace": self.namespace,
+            "version": self.version,
+            "evidence": self.evidence,
+            "confidence": self.confidence,
+            "metadata": normalize_metadata(
+                self.metadata,
+                field_name=f"claim[{self.kind}:{self.name}].metadata",
+            ),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object], *, field_name: str = "claim") -> ArtifactClaim:
+        """Build an artifact claim from a plain dictionary."""
+        return cls(
+            kind=_required_schema_mapping_text(data, "kind", field_name=field_name),
+            name=_required_schema_mapping_text(data, "name", field_name=field_name),
+            namespace=_schema_mapping_text_with_default(
+                data,
+                "namespace",
+                field_name=field_name,
+                default=CORE_ARTIFACT_NAMESPACE,
+            ),
+            version=_schema_mapping_text_with_default(
+                data,
+                "version",
+                field_name=field_name,
+                default=ARTIFACT_SCHEMA_VERSION,
+            ),
+            evidence=_schema_mapping_text_with_default(
+                data,
+                "evidence",
+                field_name=field_name,
+                default="declared",
+            ),
+            confidence=_optional_schema_mapping_text(
+                data,
+                "confidence",
+                field_name=field_name,
+                default=None,
+            ),
+            metadata=_schema_metadata_with_extension_fields(data, field_name=field_name),
+        )
+
+
+class DataTypeClaim(ArtifactClaim):
+    """Artifact claim describing the external or source data type."""
+
+    def __init__(
+        self,
+        name: str,
+        *,
+        namespace: str = CORE_ARTIFACT_NAMESPACE,
+        version: str = ARTIFACT_SCHEMA_VERSION,
+        evidence: str = "declared",
+        confidence: str | None = None,
+        metadata: MetadataDict | None = None,
+    ) -> None:
+        """Create a data type claim."""
+        super().__init__(
+            kind=DATA_TYPE_CLAIM_KIND,
+            name=name,
+            namespace=namespace,
+            version=version,
+            evidence=evidence,
+            confidence=confidence,
+            metadata={} if metadata is None else metadata,
+        )
+
+
+class RepresentationClaim(ArtifactClaim):
+    """Artifact claim describing a storage or encoding representation."""
+
+    def __init__(
+        self,
+        name: str,
+        *,
+        namespace: str = CORE_ARTIFACT_NAMESPACE,
+        version: str = ARTIFACT_SCHEMA_VERSION,
+        evidence: str = "declared",
+        confidence: str | None = None,
+        metadata: MetadataDict | None = None,
+    ) -> None:
+        """Create a representation claim."""
+        super().__init__(
+            kind=REPRESENTATION_CLAIM_KIND,
+            name=name,
+            namespace=namespace,
+            version=version,
+            evidence=evidence,
+            confidence=confidence,
+            metadata={} if metadata is None else metadata,
+        )
+
+
+class InterfaceClaim(ArtifactClaim):
+    """Artifact claim describing an access interface exposed by an artifact."""
+
+    def __init__(
+        self,
+        name: str,
+        *,
+        namespace: str = CORE_ARTIFACT_NAMESPACE,
+        version: str = ARTIFACT_SCHEMA_VERSION,
+        evidence: str = "declared",
+        confidence: str | None = None,
+        metadata: MetadataDict | None = None,
+    ) -> None:
+        """Create an interface claim."""
+        super().__init__(
+            kind=INTERFACE_CLAIM_KIND,
+            name=name,
+            namespace=namespace,
+            version=version,
+            evidence=evidence,
+            confidence=confidence,
+            metadata={} if metadata is None else metadata,
+        )
+
+
+@dataclass(slots=True)
+class ArtifactFacet:
+    """Namespaced structured fact about an artifact or claim.
+
+    Args:
+        kind: Facet category, such as ``"stat"``, ``"suffix"``, or a
+            plugin-owned category.
+        name: Namespace-local facet name.
+        namespace: Stable namespace that owns the facet name.
+        version: Version of the namespace-local facet schema.
+        evidence: How the facet was produced.
+        confidence: Confidence/status term for the facet. Defaults to ``evidence``.
+        metadata: JSON-compatible structured fact payload.
+    """
+
+    kind: str
+    name: str
+    namespace: str = CORE_ARTIFACT_NAMESPACE
+    version: str = ARTIFACT_SCHEMA_VERSION
+    evidence: str = "declared"
+    confidence: str | None = None
+    metadata: MetadataDict = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Normalize facet fields to the supported JSON-safe shape."""
+        self.kind = _coerce_required_schema_text(self.kind, field_name="facet.kind")
+        self.name = _coerce_required_schema_text(self.name, field_name="facet.name")
+        self.namespace = _coerce_required_schema_text(
+            self.namespace,
+            field_name=f"facet[{self.kind}:{self.name}].namespace",
+        )
+        self.version = _coerce_required_schema_text(
+            self.version,
+            field_name=f"facet[{self.kind}:{self.name}].version",
+        )
+        self.evidence = _coerce_artifact_vocabulary(
+            self.evidence,
+            field_name=f"facet[{self.kind}:{self.name}].evidence",
+            allowed=ARTIFACT_EVIDENCE_VALUES,
+        )
+        self.confidence = _coerce_artifact_vocabulary(
+            self.evidence if self.confidence is None else self.confidence,
+            field_name=f"facet[{self.kind}:{self.name}].confidence",
+            allowed=ARTIFACT_CONFIDENCE_VALUES,
+        )
+        self.metadata = normalize_metadata(
+            self.metadata,
+            field_name=f"facet[{self.kind}:{self.name}].metadata",
+        )
+
+    def to_dict(self) -> dict[str, JsonValue]:
+        """Convert the facet to its JSON-compatible dictionary shape."""
+        return {
+            "kind": self.kind,
+            "name": self.name,
+            "namespace": self.namespace,
+            "version": self.version,
+            "evidence": self.evidence,
+            "confidence": self.confidence,
+            "metadata": normalize_metadata(
+                self.metadata,
+                field_name=f"facet[{self.kind}:{self.name}].metadata",
+            ),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object], *, field_name: str = "facet") -> ArtifactFacet:
+        """Build an artifact facet from a plain dictionary."""
+        kind = _required_schema_mapping_text(data, "kind", field_name=field_name)
+        return cls(
+            kind=kind,
+            name=_schema_mapping_text_with_default(
+                data,
+                "name",
+                field_name=field_name,
+                default=kind,
+            ),
+            namespace=_schema_mapping_text_with_default(
+                data,
+                "namespace",
+                field_name=field_name,
+                default=CORE_ARTIFACT_NAMESPACE,
+            ),
+            version=_schema_mapping_text_with_default(
+                data,
+                "version",
+                field_name=field_name,
+                default=ARTIFACT_SCHEMA_VERSION,
+            ),
+            evidence=_schema_mapping_text_with_default(
+                data,
+                "evidence",
+                field_name=field_name,
+                default="declared",
+            ),
+            confidence=_optional_schema_mapping_text(
+                data,
+                "confidence",
+                field_name=field_name,
+                default=None,
+            ),
+            metadata=_schema_metadata_with_extension_fields(data, field_name=field_name),
+        )
+
+
+Representation = RepresentationClaim
+Facet = ArtifactFacet
+
+
+@dataclass(slots=True)
 class ArtifactDescriptor:
     """Persistent descriptor for one artifact owned by a catalog record.
 
@@ -268,8 +589,8 @@ class ArtifactDescriptor:
         locator: Optional locator for physical or resolvable artifacts.
         state: Lightweight lifecycle or availability state.
         relationship: JSON-compatible relationship metadata.
-        claims: Placeholder list for future claim descriptors.
-        facets: Placeholder list for future facet descriptors.
+        claims: Artifact claims normalized to explicit JSON-compatible dictionaries.
+        facets: Artifact facets normalized to explicit JSON-compatible dictionaries.
     """
 
     id: str
@@ -277,8 +598,8 @@ class ArtifactDescriptor:
     locator: ArtifactLocator | None = None
     state: str = "available"
     relationship: MetadataDict = field(default_factory=dict)
-    claims: list[MetadataDict] = field(default_factory=list)
-    facets: list[MetadataDict] = field(default_factory=list)
+    claims: list[ArtifactClaimInput] = field(default_factory=list)
+    facets: list[ArtifactFacetInput] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         """Normalize descriptor fields to the supported JSON-safe shape."""
@@ -298,11 +619,11 @@ class ArtifactDescriptor:
             self.relationship,
             field_name=f"artifacts[{self.id}].relationship",
         )
-        self.claims = _coerce_metadata_mapping_list(
+        self.claims = _coerce_artifact_claims(
             self.claims,
             field_name=f"artifacts[{self.id}].claims",
         )
-        self.facets = _coerce_metadata_mapping_list(
+        self.facets = _coerce_artifact_facets(
             self.facets,
             field_name=f"artifacts[{self.id}].facets",
         )
@@ -321,11 +642,17 @@ class ArtifactDescriptor:
                     field_name=f"artifacts[{self.id}].relationship",
                 ),
                 "claims": [
-                    normalize_metadata(claim, field_name=f"artifacts[{self.id}].claims[{index}]")
+                    _coerce_artifact_claim(
+                        claim,
+                        field_name=f"artifacts[{self.id}].claims[{index}]",
+                    )
                     for index, claim in enumerate(self.claims)
                 ],
                 "facets": [
-                    normalize_metadata(facet, field_name=f"artifacts[{self.id}].facets[{index}]")
+                    _coerce_artifact_facet(
+                        facet,
+                        field_name=f"artifacts[{self.id}].facets[{index}]",
+                    )
                     for index, facet in enumerate(self.facets)
                 ],
             },
@@ -349,11 +676,11 @@ class ArtifactDescriptor:
                 data.get("relationship", {}),
                 field_name=f"artifacts[{data['id']}].relationship",
             ),
-            claims=_coerce_metadata_mapping_list(
+            claims=_coerce_artifact_claims(
                 data.get("claims", []),
                 field_name=f"artifacts[{data['id']}].claims",
             ),
-            facets=_coerce_metadata_mapping_list(
+            facets=_coerce_artifact_facets(
                 data.get("facets", []),
                 field_name=f"artifacts[{data['id']}].facets",
             ),
@@ -557,22 +884,147 @@ def _coerce_required_metadata_dict(value: object, *, field_name: str) -> Metadat
     return normalize_metadata(value, field_name=field_name)
 
 
-def _coerce_metadata_mapping_list(value: object, *, field_name: str) -> list[MetadataDict]:
-    """Coerce a list of descriptor metadata mappings."""
+def _coerce_artifact_claims(value: object, *, field_name: str) -> list[ArtifactClaimInput]:
+    """Coerce artifact claim input to normalized claim dictionaries."""
     if value is None:
         return []
     if not isinstance(value, list | tuple):
-        raise TypeError(f"{field_name} must be a list of dictionaries, got {type(value).__name__}")
+        raise TypeError(f"{field_name} must be a list of claim dictionaries, got {type(value).__name__}")
 
-    metadata_items: list[MetadataDict] = []
-    for index, item in enumerate(value):
-        metadata_items.append(
-            _coerce_required_metadata_dict(
-                item,
-                field_name=f"{field_name}[{index}]",
-            )
+    claims = [
+        _coerce_artifact_claim(item, field_name=f"{field_name}[{index}]") for index, item in enumerate(value)
+    ]
+    return cast(list[ArtifactClaimInput], claims)
+
+
+def _coerce_artifact_claim(value: object, *, field_name: str) -> MetadataDict:
+    """Coerce one artifact claim input to a normalized claim dictionary."""
+    if isinstance(value, ArtifactClaim):
+        return value.to_dict()
+    if isinstance(value, Mapping):
+        return ArtifactClaim.from_dict(value, field_name=field_name).to_dict()
+    raise TypeError(f"{field_name} must be an ArtifactClaim or dictionary, got {type(value).__name__}")
+
+
+def _coerce_artifact_facets(value: object, *, field_name: str) -> list[ArtifactFacetInput]:
+    """Coerce artifact facet input to normalized facet dictionaries."""
+    if value is None:
+        return []
+    if not isinstance(value, list | tuple):
+        raise TypeError(f"{field_name} must be a list of facet dictionaries, got {type(value).__name__}")
+
+    facets = [
+        _coerce_artifact_facet(item, field_name=f"{field_name}[{index}]") for index, item in enumerate(value)
+    ]
+    return cast(list[ArtifactFacetInput], facets)
+
+
+def _coerce_artifact_facet(value: object, *, field_name: str) -> MetadataDict:
+    """Coerce one artifact facet input to a normalized facet dictionary."""
+    if isinstance(value, ArtifactFacet):
+        return value.to_dict()
+    if isinstance(value, Mapping):
+        return ArtifactFacet.from_dict(value, field_name=field_name).to_dict()
+    raise TypeError(f"{field_name} must be an ArtifactFacet or dictionary, got {type(value).__name__}")
+
+
+def _required_schema_mapping_text(
+    data: Mapping[str, object],
+    key: str,
+    *,
+    field_name: str,
+) -> str:
+    """Return a required artifact schema text field from a mapping."""
+    if key not in data:
+        raise ValueError(f"{field_name} is missing required key: {key}")
+    return _coerce_required_schema_text(data[key], field_name=f"{field_name}.{key}")
+
+
+def _optional_schema_mapping_text(
+    data: Mapping[str, object],
+    key: str,
+    *,
+    field_name: str,
+    default: str | None,
+) -> str | None:
+    """Return an optional artifact schema text field from a mapping."""
+    if key not in data or data[key] is None:
+        return default
+    return _coerce_required_schema_text(data[key], field_name=f"{field_name}.{key}")
+
+
+def _schema_mapping_text_with_default(
+    data: Mapping[str, object],
+    key: str,
+    *,
+    field_name: str,
+    default: str,
+) -> str:
+    """Return an optional artifact schema text field with a non-null default."""
+    value = _optional_schema_mapping_text(data, key, field_name=field_name, default=default)
+    if value is None:
+        return default
+    return value
+
+
+def _coerce_required_schema_text(value: object, *, field_name: str) -> str:
+    """Coerce a required artifact schema identifier to non-empty text."""
+    text = str(value).strip()
+    if not text:
+        raise ValueError(f"{field_name} cannot be empty")
+    return text
+
+
+def _coerce_artifact_vocabulary(
+    value: object,
+    *,
+    field_name: str,
+    allowed: frozenset[str],
+) -> str:
+    """Validate one artifact schema vocabulary value."""
+    text = _coerce_required_schema_text(value, field_name=field_name)
+    if text not in allowed:
+        allowed_values = ", ".join(sorted(allowed))
+        raise ValueError(f"{field_name} must be one of {allowed_values}; got {text!r}")
+    return text
+
+
+def _schema_metadata_with_extension_fields(
+    data: Mapping[str, object],
+    *,
+    field_name: str,
+) -> MetadataDict:
+    """Return explicit metadata plus legacy extension fields folded into it."""
+    raw_metadata = data.get("metadata", {})
+    if raw_metadata is None:
+        metadata: MetadataDict = {}
+    else:
+        metadata = _coerce_required_metadata_dict(
+            raw_metadata,
+            field_name=f"{field_name}.metadata",
         )
-    return metadata_items
+
+    extra_fields: dict[str, object] = {}
+    for key, value in data.items():
+        normalized_key = str(key)
+        if normalized_key in ARTIFACT_SCHEMA_FIELDS:
+            continue
+        if normalized_key in extra_fields:
+            raise ValueError(
+                f"{field_name} contains duplicate extension key after string normalization: "
+                f"{normalized_key!r}"
+            )
+        extra_fields[normalized_key] = value
+
+    if not extra_fields:
+        return metadata
+
+    extras = normalize_metadata(extra_fields, field_name=field_name)
+    for key, value in extras.items():
+        if key in metadata:
+            raise ValueError(f"{field_name}.metadata duplicates top-level extension key: {key!r}")
+        metadata[key] = value
+    return metadata
 
 
 def _first_data_artifact_locator(artifacts: list[ArtifactDescriptor]) -> ArtifactLocator | None:

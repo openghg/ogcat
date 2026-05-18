@@ -22,8 +22,28 @@ The first descriptor shape is intentionally small and JSON-compatible:
   },
   "state": "available",
   "relationship": {},
-  "claims": [],
-  "facets": []
+  "claims": [
+    {
+      "kind": "interface",
+      "name": "bytes",
+      "namespace": "ogcat.core",
+      "version": "1",
+      "evidence": "validated",
+      "confidence": "validated",
+      "metadata": {}
+    }
+  ],
+  "facets": [
+    {
+      "kind": "suffix",
+      "name": "suffixes",
+      "namespace": "ogcat.core",
+      "version": "1",
+      "evidence": "inferred",
+      "confidence": "inferred",
+      "metadata": {"suffixes": [".nc"]}
+    }
+  ]
 }
 ```
 
@@ -56,6 +76,29 @@ Namespaced metadata was rejected for this slice because artifacts are now part
 of the durable public model, not derived metadata or a plugin-specific
 experiment.
 
+## Claims And Facets
+
+Claims and facets now have a small explicit JSON-compatible envelope. Claims
+describe data type, representation, or interface facts. Facets describe
+structured facts such as suffixes, size, mtime, checksum, archive member
+summaries, manifests, or plugin-specific validation results. See
+[Artifact Claims And Facets](design-note-artifact-claims-and-facets.md) for the
+field definitions and compatibility rules.
+
+The claim envelope is generic and open rather than a closed set of scientific
+formats. Core recognizes ``data_type``, ``representation``, and ``interface``
+claim kinds, but plugins may add namespaced claim and facet names without
+changing core. ``ogcat.core`` is reserved for core names.
+
+Evidence and confidence use the first ADR vocabulary: ``declared``,
+``inferred``, ``probed``, ``validated``, ``stale``, and ``failed``. Suffix-only
+detection should be represented as inferred evidence, not validated truth.
+
+Existing raw dict claims and facets remain readable. Missing namespace,
+version, evidence, confidence, and metadata are filled with defaults when the
+shape is otherwise clear. Older facet payloads with extra top-level fields have
+those fields folded into ``metadata``.
+
 ## Current Limits
 
 `record_type` remains schema and search metadata. It is not an I/O dispatch key.
@@ -64,6 +107,13 @@ Only one current `data_artifact` descriptor is accepted in this slice. Replica
 leadership remains deferred to later `leader` or `write_leader` fields instead
 of overloading `primary`.
 
-`claims` and `facets` are placeholders for later typed reader, writer, and
-converter work. This change does not implement replicas, cache/archive policy,
-mount resolution, permissions, locks, or Intake integration.
+`claims` and `facets` are schema and validation metadata only in this slice.
+This change does not implement reader/open behavior, the reader/writer/converter
+registry, replicas, cache/archive policy, mount resolution, permissions, locks,
+or Intake integration.
+
+`derived_metadata.classification` remains the current home for cheap inferred
+classification fields such as `artifact_kind`, `format`, `archive_format`,
+`inner_format`, `collection_pattern`, `member_format`, `member_suffixes`, and
+`reader_hint`. This slice does not replace that namespace or automatically
+mirror those fields into facets.

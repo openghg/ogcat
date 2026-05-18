@@ -4,7 +4,19 @@ from ogcat.audit import AuditEvent, AuditSink, JsonlAuditSink, read_audit_events
 from ogcat.catalog import Catalog
 from ogcat.classification import classify_artifact, collection_classification_metadata
 from ogcat.hooks import ArtifactWriter, HookManager, HookWarning, OperationContext, OperationSource
-from ogcat.models import ArtifactDescriptor, ArtifactLocator, CatalogRecord, MetadataFieldDescription
+from ogcat.models import (
+    ArtifactClaim,
+    ArtifactDescriptor,
+    ArtifactFacet,
+    ArtifactLocator,
+    CatalogRecord,
+    DataTypeClaim,
+    Facet,
+    InterfaceClaim,
+    MetadataFieldDescription,
+    Representation,
+    RepresentationClaim,
+)
 from ogcat.plugins import PluginRegistry
 from ogcat.record_set import CatalogRecordSet
 from ogcat.replicas import (
@@ -54,7 +66,9 @@ from ogcat.writers import (
 
 __all__ = [
     "ArtifactLocator",
+    "ArtifactClaim",
     "ArtifactDescriptor",
+    "ArtifactFacet",
     "ArtifactWriter",
     "AuditEvent",
     "AuditSink",
@@ -65,10 +79,13 @@ __all__ = [
     "classify_artifact",
     "collection_classification_metadata",
     "CopyArtifactWriter",
+    "DataTypeClaim",
+    "Facet",
     "FsspecStorageAdapter",
     "FunctionArtifactWriter",
     "HookManager",
     "HookWarning",
+    "InterfaceClaim",
     "JsonlAuditSink",
     "LocalStorageAdapter",
     "MetadataFieldDescription",
@@ -85,6 +102,8 @@ __all__ = [
     "ReplicaViewPlan",
     "RollbackFailure",
     "RecordSchema",
+    "Representation",
+    "RepresentationClaim",
     "FieldPath",
     "SearchOp",
     "SearchQuery",
