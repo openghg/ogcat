@@ -58,6 +58,7 @@ def test_add_file_facade_delegates_to_application_service(
     assert captured["record_type"] == "managed_file"
     assert captured["operation"] == "copy"
     assert captured["primary_location"] == "uuid"
+    assert captured["create_template_replica"] is True
 
 
 def test_run_add_operation_delegates_to_operation_runner(
@@ -182,6 +183,42 @@ def test_add_file_template_primary_request_has_no_template_link_secondary(
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
 
     catalog.add_file(source, operation="copy", primary_location="template")
+
+    request = requests[0]
+    assert request.operation_type == "add_file"
+    assert request.secondary_artifact_operations == ()
+
+
+def test_add_file_uuid_primary_can_skip_template_link_secondary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """UUID-primary file requests can skip the template-link secondary."""
+    requests: list[AddOperationRequest] = []
+
+    class FakeRunner(OperationRunner):
+        def __init__(self, request: AddOperationRequest) -> None:
+            self.request = request
+
+        def run(self) -> CatalogRecord:
+            return CatalogRecord(
+                catalog="files",
+                time_added="2026-05-15T00:00:00Z",
+                id="runner",
+                record_type=self.request.record_type,
+                locator=ArtifactLocator.path(tmp_path / "stored.nc"),
+            )
+
+    def build_fake_runner(self: Catalog, request: AddOperationRequest) -> OperationRunner:
+        requests.append(request)
+        return FakeRunner(request)
+
+    monkeypatch.setattr(Catalog, "_build_add_operation_runner", build_fake_runner)
+    source = tmp_path / "source.nc"
+    source.write_text("payload", encoding="utf-8")
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+
+    catalog.add_file(source, operation="copy", create_template_replica=False)
 
     request = requests[0]
     assert request.operation_type == "add_file"
