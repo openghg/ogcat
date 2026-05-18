@@ -14,4 +14,5 @@ ADRs use this status vocabulary:
 :maxdepth: 1
 
 0001-operation-scoped-hook-lifecycle-observation
+0002-virtual-artifact-filesystem-domain-model
 ```
