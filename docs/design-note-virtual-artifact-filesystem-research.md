@@ -192,18 +192,18 @@ Links and replicas solve different problems and should not share one model.
 Possible copy states for future discussion:
 
 - `available`: copy is present and believed current.
-- `stale`: copy exists but no longer matches the current leader/primary.
+- `stale`: copy exists but no longer matches the current leader.
 - `building`: copy is being created.
 - `restoring`: deep-storage copy is being staged for local use.
 - `missing`: catalog says a copy should exist, but it cannot be found.
 - `unverified`: copy exists, but exactness has not been proven.
 - `failed`: creation, verification, or refresh failed.
 
-The "primary vs. secondary artifact" distinction looks like leader-based
-replication only if primary means "write leader for canonical content". The ADR
-must decide whether primary means canonical content, preferred read location,
-write leader, first materialized locator, or simply backward-compatible
-`record.locator`.
+The "primary vs. secondary artifact" distinction should not carry replication
+semantics. Replication should use a separate `leader` or `write_leader`
+concept. Read routing should be separate again: the preferred read location may
+be a local exact copy, a geographically or administratively accessible cache, or
+the leader if no better copy exists.
 
 ## Mounts And Relative Locator Resolution
 
@@ -235,8 +235,9 @@ This is not federation by itself. It is mount-relative locator resolution:
 artifact identity remains catalog-local, while storage access is interpreted
 through the current resolver context.
 
-The ADR should decide whether `relative_path` remains an optional convenience
-field or becomes part of a formal `(mount_ref, relative_path)` locator model.
+`relative_path` should become relative to a `mount_id` or storage-resource
+profile. Today it is relative to a location inside ogcat-managed storage; the
+target model should lift that idea into an explicit resolver layer.
 
 ## Intake Take2 Research Summary
 
@@ -358,9 +359,77 @@ Open question for the ADR: whether artifacts are persisted inline on records,
 stored in a separate artifact registry, or prototyped first under
 `derived_metadata["ogcat"]`.
 
+## Design Clarifications From Discussion
+
+These points reflect follow-up decisions or strong preferences to carry into
+the ADR.
+
+- Do not overload `primary`. For replication, use `leader` or `write_leader`.
+  For read routing, use a separate preferred-location policy that can choose a
+  local copy, accessible HPC cache, geographically near copy, or leader.
+- `Artifact` remains broad: a concrete or virtual thing associated with a
+  record. The model still needs roles or subtypes to distinguish data-bearing
+  artifacts from auxiliary artifacts such as previews, logs, manifests, view
+  links, and derived outputs.
+- A useful role vocabulary may include `data_artifact`, `auxiliary_artifact`,
+  `view_link`, `manifest`, `preview`, `log`, `derived_artifact`, `replica`,
+  `cache_copy`, and `archive_copy`. Application code or plugins may interpret
+  which artifact is "the data" when a record owns several artifacts.
+- If a physical file or urlpath exists, ogcat should expose a low-ceremony path
+  or path-like value. Existing patterns such as `xr.open_dataset(record.locator.value)`
+  should remain easy, and a future convenience property may be warranted. Users
+  should not be worse off than they would be with ordinary filesystem paths.
+- Current symlink "replicas" should be called `view_link` or symlink view
+  artifacts, not replicas.
+- Replica exactness should have reasonable core defaults, such as a file digest
+  for single files or a manifest with member checksums for directories and
+  archive-like collections. Plugins must be able to define stronger or
+  domain-specific exactness rules.
+- Metadata alone is a weak replica invariant, but source-provided identity and
+  version metadata matters for remote sources. For example, a remote service may
+  provide URIs or version identifiers that distinguish exact downloads while a
+  plugin presents a stable logical data source.
+- Replicas in ogcat are primarily about performance and access, not replacing
+  backups or building a distributed database. The immediate problem is avoiding
+  unmanaged duplication across HPC servers, local caches, and temporary working
+  copies.
+- Deep storage and archive copies should be modeled explicitly, but probably as
+  storage-resource policy and artifact state rather than ordinary always-open
+  replicas. A deep-storage copy may require a restore or staging operation
+  before normal readers can access it.
+- Caches, deep-storage copies, and HPC copies can be artifact descriptors; the
+  decision to create them belongs to storage-resource policy, explicit
+  operations, or plugins.
+- `relative_path` should be relative to a `mount_id` or storage-resource
+  profile, not implicitly tied to one local absolute root.
+- Pipelines should not require eager data loading. Operation-owned handles
+  should close when the operation scope ends unless ownership is explicitly
+  returned or transferred to the user. User-owned context-managed handles can
+  live as long as the user keeps their context open.
+- Core should mainly provide interfaces, orchestration, durable metadata, and
+  lifecycle semantics. Features that can be written as plugins should use the
+  same registration path, even when ogcat vendors the most important plugins for
+  basic use.
+- Personal use must stay trivial: TinyDB plus local files on one machine should
+  still provide search, storage organization, logging, provenance, and easy
+  access to the underlying data path.
+- iRODS should be the main reference for data-management concepts; Intake Take2
+  should be the main reference for typed reader/converter/writer pipeline
+  concepts, without making Intake a core dependency.
+- "Collection" has two plausible meanings and the ADR should reserve terms for
+  both: an artifact-level collection such as a directory/prefix/archive of data
+  members, and a record-level collection such as a table, subset, or view of
+  `CatalogRecord` objects, possibly across mounted catalogs.
+
 ## Collections
 
 Collections should be modeled as capabilities layered over storage shape.
+
+This section is about artifact-level collections: one artifact whose members
+form a logical dataset. That is distinct from a record-level collection, which
+would be a catalog subset or table of `CatalogRecord` objects. Record-level
+collections are not a core target for the first ADR, but the terminology should
+leave room for them because they fit naturally with catalog views and mounts.
 
 The storage shape should remain `directory`, `prefix`, `archive`, or similar.
 The collection meaning should live in data type, representation, interface, and
@@ -702,20 +771,18 @@ the ADR makes each slice concrete enough to open as a separate sub-issue.
   separate artifact registry, or prototype metadata under `derived_metadata`?
 - What is canonical for an artifact: record ID, artifact ID, locator, checksum,
   virtual path, or a combination?
-- What does `primary` mean: canonical logical content, preferred read location,
-  write leader, first materialized copy, or backward-compatible
-  `record.locator`?
-- Should current symlink "replica" terminology be renamed before adding true
-  replicas?
-- What invariant defines an exact replica: byte checksum, directory manifest,
-  member checksums, size, metadata, or a type-specific validator?
+- Should `primary` remain only a compatibility concept, become a data-artifact
+  role, or be replaced with a clearer term such as `data_artifact`?
+- How should ogcat expose the simplest usable path or urlpath for records that
+  point to physical data, while still supporting plugins and multi-artifact
+  records?
+- What invariant defines an exact replica by default: byte checksum, directory
+  manifest, member checksums, size, or a type-specific validator?
 - Are caches, deep-storage copies, and HPC copies modeled as artifact roles,
   storage-resource policies, operation outputs, or separate records linked by
   provenance?
 - Should replica/cache/deep-storage work be synchronous in the add operation,
   asynchronous through a durable journal, or user-triggered reconciliation?
-- Should `relative_path` become mount-relative with explicit `mount_id` or
-  storage profile?
 - What is the minimum storage resource model: named root, adapter, vault path
   template, credentials profile, health, and capabilities?
 - Is federation in scope, or should ogcat only interoperate with iRODS, DataLad,
@@ -731,12 +798,14 @@ the ADR makes each slice concrete enough to open as a separate sub-issue.
 - How should plugin capability names be versioned and namespaced?
 - What belongs in core versus optional plugins for bytes/text/directory/archive,
   NetCDF, Zarr, xarray, pandas, Intake, and OpenGHG-specific data?
-- Should collection descriptions require member manifests, pattern facets, or
-  both?
+- Should artifact-level collection descriptions require member manifests,
+  pattern facets, or both?
+- What terminology should distinguish artifact-level collections from
+  record-level catalog subsets/views?
 - When should pipelines stream through handles versus materialize intermediate
   artifacts?
-- Can a pipeline return a lazy user-owned handle, or must all operation-owned
-  handles close before the operation returns?
+- How should handle ownership transfer work when a pipeline returns a lazy
+  user-owned handle?
 - What driver error taxonomy is needed for unsupported, missing, stale,
   permission-denied, transient, and partial-write failures?
 - How should operation provenance be represented before a full provenance graph
@@ -748,6 +817,8 @@ the ADR makes each slice concrete enough to open as a separate sub-issue.
 
 - Existing single-file artifact still works through `record.locator`.
 - A record can own primary data plus preview/log/manifest artifacts.
+- A record with a physical data artifact exposes a path or urlpath usable by
+  plain library calls when permissions and locator resolution allow it.
 - A directory reference is not a collection unless explicitly claimed.
 - Managed zip to NetCDF collection writes one logical collection artifact.
 - One artifact can claim multiple interfaces, for example bytes plus NetCDF plus
@@ -758,10 +829,15 @@ the ADR makes each slice concrete enough to open as a separate sub-issue.
   core catalog use.
 - A symlink/template view is modeled as a link artifact, not an exact replica.
 - A cache copy on another HPC machine can be tracked separately from the
-  primary artifact and marked stale or unavailable.
+  leader artifact and marked stale or unavailable.
 - A deep-storage archive copy can require restore before normal readers can open
   it.
 - A mount-relative locator can resolve to a local POSIX path on one machine and
   an fsspec/SSH urlpath on another without rewriting catalog identity.
 - A composed xarray workflow closes datasets/files automatically after the
   materializing writer finishes.
+- A lazy user-facing handle can be returned only with explicit ownership and
+  cleanup semantics.
+- Artifact-level collections and record-level catalog subsets are named
+  distinctly enough that future mounted catalog views do not collide with
+  directory/prefix/archive collection artifacts.
