@@ -251,20 +251,21 @@ move, or open the NetCDF members. The explicit ``collection_pattern`` and
 
 ### 3. Process the collection into a Zarr artifact
 
-The processing writer is domain code. A small helper turns the collection record
-into an operation source by using the collection's reader and glob hints. The
-writer opens the matching NetCDF members with ``xarray.open_mfdataset()``, calls
-a project-specific ``create_cams_bc()`` function, and writes the returned
-dataset to a single ``.zarr`` store.
+The processing writer is domain code. A small helper uses the collection's
+reader and glob hints to open the matching NetCDF members with
+``xarray.open_mfdataset()`` and pass the opened dataset as the operation-source
+payload. A function writer consumes that dataset, calls a project-specific
+``create_cams_bc()`` function, and writes the returned dataset to a single
+``.zarr`` store.
 
 ```python
-import shutil
-from dataclasses import dataclass
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import xarray as xr
 
-from ogcat import ArtifactLocator, CatalogRecord, OperationContext, OperationSource, memory_source
+from ogcat import CatalogRecord, OperationSource, memory_source, source_writer
 
 
 def create_cams_bc(ds: xr.Dataset, *, species: str, domain: str) -> xr.Dataset:
@@ -272,8 +273,9 @@ def create_cams_bc(ds: xr.Dataset, *, species: str, domain: str) -> xr.Dataset:
     ...
 
 
-def xarray_collection_source(record: CatalogRecord, **metadata: object) -> OperationSource:
-    """Build an operation source from a collection record's xarray hints."""
+@contextmanager
+def xarray_collection_source(record: CatalogRecord, **metadata: object) -> Iterator[OperationSource]:
+    """Open a collection record as an xarray-backed operation source."""
     collection_root = record.path()
     if collection_root is None:
         raise ValueError("Expected collection record to have a local path.")
@@ -291,57 +293,42 @@ def xarray_collection_source(record: CatalogRecord, **metadata: object) -> Opera
     source_metadata = {
         "collection_record_id": record.id,
         "collection_pattern": collection_pattern,
+        "input_file_count": len(input_paths),
         "input_paths": [str(path) for path in input_paths],
         "reader_hint": classification["reader_hint"],
     }
     source_metadata.update(metadata)
-    return memory_source(None, kind="xarray_netcdf_collection", metadata=source_metadata)
 
-
-@dataclass(frozen=True)
-class CamsBoundaryConditionWriter:
-    """Write processed CAMS boundary conditions to a planned Zarr directory."""
-
-    def write(
-        self,
-        context: OperationContext,
-        source: OperationSource,
-        target: ArtifactLocator,
-    ) -> None:
-        target_path = target.as_path()
-        if target_path is None:
-            raise ValueError("CAMS boundary-condition writer requires a path target.")
-        if target_path.exists():
-            raise FileExistsError(target_path)
-
-        input_paths = [Path(path) for path in source.metadata["input_paths"]]
-        species = str(source.metadata.get("species", "co2"))
-        processing_domain = str(source.metadata["processing_domain"])
-
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        context.rollback(
-            lambda path=target_path: shutil.rmtree(path, ignore_errors=True),
-            description=f"remove processed Zarr store {target_path}",
+    with xr.open_mfdataset(input_paths) as ds:
+        yield memory_source(
+            ds,
+            kind="xarray_netcdf_collection",
+            metadata=source_metadata,
         )
 
-        with xr.open_mfdataset(input_paths) as ds:
-            processed = create_cams_bc(ds, species=species, domain=processing_domain)
-            processed.to_zarr(target_path, mode="w")
 
-        context.derived_metadata.update(
-            {
-                "input_record_id": source.metadata["collection_record_id"],
-                "raw_zip_record_id": source.metadata["raw_zip_record_id"],
-                "input_file_count": len(input_paths),
-                "input_collection_pattern": source.metadata["collection_pattern"],
-                "input_reader": source.metadata["reader_hint"],
-                "species": species,
-                "bc_input": "cams",
-                "bc_input_version": "cams73_latest",
-                "domain": processing_domain.lower(),
-                "reader_hint": "xarray.open_zarr",
-            }
-        )
+def write_cams_boundary_conditions(source: OperationSource, target: Path) -> dict[str, object]:
+    """Write processed CAMS boundary conditions from an opened xarray dataset."""
+    if not isinstance(source.payload, xr.Dataset):
+        raise TypeError("Expected source.payload to be an xarray Dataset.")
+
+    species = str(source.metadata.get("species", "co2"))
+    processing_domain = str(source.metadata["processing_domain"])
+    processed = create_cams_bc(source.payload, species=species, domain=processing_domain)
+    processed.to_zarr(target, mode="w")
+
+    return {
+        "input_record_id": source.metadata["collection_record_id"],
+        "raw_zip_record_id": source.metadata["raw_zip_record_id"],
+        "input_file_count": source.metadata["input_file_count"],
+        "input_collection_pattern": source.metadata["collection_pattern"],
+        "input_reader": source.metadata["reader_hint"],
+        "species": species,
+        "bc_input": "cams",
+        "bc_input_version": "cams73_latest",
+        "domain": processing_domain.lower(),
+        "reader_hint": "xarray.open_zarr",
+    }
 ```
 
 Plan and write the processed artifact:
@@ -368,18 +355,23 @@ processed_plan = catalog.plan_artifact_storage(
     metadata=processed_metadata,
 )
 
-processed_record = catalog.add_artifact(
-    record_type="boundary_conditions",
-    storage_plan=processed_plan,
-    metadata=processed_metadata,
-    source=xarray_collection_source(
-        collection_record,
-        raw_zip_record_id=raw_zip_record.id,
-        species="co2",
-        processing_domain="EUROPE",
-    ),
-    artifact_writer=CamsBoundaryConditionWriter(),
-)
+with xarray_collection_source(
+    collection_record,
+    raw_zip_record_id=raw_zip_record.id,
+    species="co2",
+    processing_domain="EUROPE",
+) as source:
+    processed_record = catalog.add_artifact(
+        record_type="boundary_conditions",
+        storage_plan=processed_plan,
+        metadata=processed_metadata,
+        source=source,
+        artifact_writer=source_writer(
+            write_cams_boundary_conditions,
+            target_kind="directory",
+            source_kind="xarray_netcdf_collection",
+        ),
+    )
 ```
 
 The resulting record is a generic directory artifact whose locator points to the
