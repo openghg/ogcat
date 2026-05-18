@@ -627,7 +627,7 @@ xarray unless a plugin provides the reader.
 
 UML-style structural sketch:
 
-```mermaid
+```text
 classDiagram
   class CatalogRecord {
     record_id
@@ -755,7 +755,7 @@ class Converter(Protocol):
 
 Single-file ingest as the future model:
 
-```mermaid
+```text
 flowchart LR
   A["Local source path"] --> B["copy/move writer"]
   B --> C["Primary artifact descriptor"]
@@ -766,7 +766,7 @@ flowchart LR
 
 Managed zip-to-collection flow:
 
-```mermaid
+```text
 flowchart LR
   A["Zip artifact"] --> B["archive reader"]
   B --> C["collection writer"]
@@ -778,7 +778,7 @@ flowchart LR
 
 Remote/deep-storage cache flow:
 
-```mermaid
+```text
 flowchart LR
   A["Archive/deep storage locator"] --> B["restore or cache operation"]
   B --> C["Local cache_copy artifact"]
@@ -789,7 +789,7 @@ flowchart LR
 
 Mount-relative resolution:
 
-```mermaid
+```text
 flowchart LR
   A["Artifact locator: mount_id + relative_path"] --> B["Resolver context"]
   B --> C["local POSIX path on HPC"]

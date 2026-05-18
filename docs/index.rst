@@ -54,4 +54,5 @@ searching records.
    design-note-record-schemas
    design-note-artifact-locators
    design-note-hooks-plugins
+   design-note-virtual-artifact-filesystem-research
    ogcat_long_term_plan
