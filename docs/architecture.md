@@ -145,10 +145,10 @@ there, if at all. That distinction is important for future directory-backed coll
 and `.zarr`-style outputs because `Catalog` should not branch on file versus directory versus
 collection.
 
-Secondary artifacts, such as the default human-readable template symlink for UUID primary storage,
-are modeled as ordered secondary operations. They run after the primary record is staged and has an
-id, but before commit, so their filesystem effects and record metadata updates remain part of the
-same rollback boundary.
+Secondary artifacts, such as the optional default human-readable template symlink for UUID primary
+storage, are modeled as ordered secondary operations. Any selected secondary operations run after
+the primary record is staged and has an id, but before commit, so their filesystem effects and
+record metadata updates remain part of the same rollback boundary.
 
 ## Collection Artifacts And Directory Targets
 
