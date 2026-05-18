@@ -187,7 +187,9 @@ class CopyDirectoryArtifactWriter:
     ) -> None:
         """Copy a local source directory to the target and register rollback."""
         if source.kind != self.source_kind or source.path is None:
-            raise ValueError(f"copy writer requires OperationSource(kind={self.source_kind!r}, path=...)")
+            raise ValueError(
+                f"copy directory writer requires OperationSource(kind={self.source_kind!r}, path=...)"
+            )
         if not source.path.is_dir():
             raise ValueError(f"copy directory writer requires an existing directory: {source.path}")
         if target.kind != "path":
@@ -195,7 +197,7 @@ class CopyDirectoryArtifactWriter:
         adapter = adapter_for_locator(target)
         ensure_target_absent(target, adapter=adapter)
         target_path = require_local_path(target)
-        target_path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_parent_directory(target, adapter=adapter)
         context.rollback(
             lambda locator=target, storage=adapter: remove_target(
                 locator,
@@ -258,7 +260,9 @@ class MoveDirectoryArtifactWriter:
     ) -> None:
         """Move a local source directory to the target and register rollback."""
         if source.kind != self.source_kind or source.path is None:
-            raise ValueError(f"move writer requires OperationSource(kind={self.source_kind!r}, path=...)")
+            raise ValueError(
+                f"move directory writer requires OperationSource(kind={self.source_kind!r}, path=...)"
+            )
         if not source.path.is_dir():
             raise ValueError(f"move directory writer requires an existing directory: {source.path}")
         if target.kind != "path":
@@ -266,7 +270,7 @@ class MoveDirectoryArtifactWriter:
         adapter = adapter_for_locator(target)
         ensure_target_absent(target, adapter=adapter)
         target_path = require_local_path(target)
-        target_path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_parent_directory(target, adapter=adapter)
         context.rollback(
             lambda source_path=source.path, stored_path=target_path: _rollback_moved_target(
                 source_path=source_path,
@@ -482,8 +486,8 @@ __all__ = [
     "CopyDirectoryArtifactWriter",
     "FunctionArtifactWriter",
     "MemoryWriteFunction",
-    "MoveDirectoryArtifactWriter",
     "MoveArtifactWriter",
+    "MoveDirectoryArtifactWriter",
     "PathWriteFunction",
     "SourceWriteFunction",
     "UnzipArtifactWriter",

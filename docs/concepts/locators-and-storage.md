@@ -1,8 +1,13 @@
 # Locators and storage
 
-A *locator* tells ogcat where a catalogued artifact lives.  The locator is
-stored in the catalog record alongside the metadata and is independent of how
-the file ended up there.
+A *locator* tells ogcat where an artifact lives or can be resolved. Artifact
+descriptors store locators for the data artifact and for auxiliary artifacts
+such as view links, manifests, previews, logs, or derived outputs.
+
+The top-level ``record.locator`` remains a compatibility shortcut to the
+record's data artifact locator. This keeps simple calls such as
+``record.path()`` and ``record.locator.value`` useful for ordinary library calls
+while allowing a record to own more than one artifact descriptor.
 
 ## Locator kinds
 
@@ -50,8 +55,8 @@ Use the three catalog add methods for different storage responsibilities:
 
 ``catalog.add_file()`` copies or moves the source file or file-like directory
 store into the catalog's ``data/objects/`` tree by default and records a
-``path`` locator pointing at that UUID-backed primary copy. The configured
-directory and filename templates create a human-readable symlink replica, not
+``path`` locator pointing at that UUID-backed data artifact. The configured
+directory and filename templates create a human-readable symlink view link, not
 the canonical artifact path.
 
 ```python
@@ -63,8 +68,8 @@ record = catalog.add_file(
 print(record.path())      # primary UUID path inside data/objects/
 ```
 
-Pass ``create_template_replica=False`` to keep only the UUID primary copy and
-skip the human-readable template symlink:
+Pass ``create_template_replica=False`` to keep only the UUID data artifact and
+skip the human-readable template symlink view:
 
 ```python
 record = catalog.add_file(
@@ -74,7 +79,7 @@ record = catalog.add_file(
 )
 ```
 
-The human-readable replica location is derived from directory and filename
+The human-readable view-link location is derived from directory and filename
 templates stored in ``catalog.json``. The defaults are:
 
 ```

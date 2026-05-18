@@ -11,7 +11,12 @@ Models and specifications
 
 .. autoclass:: ogcat.CatalogRecord
    :members:
-   :exclude-members: catalog, time_added, id, record_type, locator, stored_abspath, stored_relpath, storage_mode, original_path, original_filename, suffixes, user_metadata, derived_metadata, naming_metadata
+   :exclude-members: catalog, time_added, id, record_type, locator, artifacts, stored_abspath, stored_relpath, storage_mode, original_path, original_filename, suffixes, user_metadata, derived_metadata, naming_metadata
+   :member-order: bysource
+
+.. autoclass:: ogcat.ArtifactDescriptor
+   :members:
+   :exclude-members: id, role, locator, state, relationship, claims, facets
    :member-order: bysource
 
 .. autoclass:: ogcat.ArtifactLocator

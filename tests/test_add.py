@@ -55,6 +55,19 @@ def test_add_file_uses_generic_default_storage_layout(tmp_path: Path) -> None:
     assert expected_replica.is_symlink()
     assert expected_replica.resolve() == expected_primary
     assert _template_replica_path(record) == expected_replica
+    assert [artifact.role for artifact in record.artifacts] == ["data_artifact", "view_link"]
+    assert record.artifacts[0].id == "data"
+    assert record.artifacts[0].locator == record.locator
+    assert record.artifacts[1].id == "template_link"
+    assert record.artifacts[1].locator == ArtifactLocator.path(
+        expected_replica,
+        relative_path=expected_replica.relative_to(root).as_posix(),
+    )
+    assert record.artifacts[1].relationship == {
+        "kind": "view_of",
+        "target_artifact_id": "data",
+        "view_role": "template_link",
+    }
     assert record.original_filename == "example.nc"
     assert record.suffixes == [".nc"]
     assert record.storage_mode == "copy"
@@ -155,6 +168,8 @@ def test_add_file_uuid_primary_can_skip_template_replica(tmp_path: Path) -> None
     assert not expected_replica.is_symlink()
     assert "template_replica_path" not in record.naming_metadata
     assert "template_replica_storage_relative_path" not in record.naming_metadata
+    assert [artifact.role for artifact in record.artifacts] == ["data_artifact"]
+    assert record.artifacts[0].locator == record.locator
     assert record.naming_metadata["primary_location"] == "uuid"
 
 
@@ -1077,6 +1092,9 @@ def test_add_artifact_supports_non_path_locator_records(tmp_path: Path) -> None:
     assert record.record_type == "external_reference"
     assert record.locator.kind == "uri"
     assert record.locator.value == "s3://bucket/example.zarr"
+    assert [artifact.role for artifact in record.artifacts] == ["data_artifact"]
+    assert record.artifacts[0].id == "data"
+    assert record.artifacts[0].locator == record.locator
     assert record.stored_abspath is None
     assert catalog.path(_record_id(record)) is None
 

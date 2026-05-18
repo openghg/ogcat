@@ -225,6 +225,20 @@ def test_search_shortcuts_resolve_for_whole_metadata_namespaces(tmp_path: Path) 
     assert catalog.search(query=SearchQuery.missing("user")) == []
 
 
+def test_search_supports_top_level_artifacts_field(tmp_path: Path) -> None:
+    """Artifact descriptors are searchable as a reserved top-level record field."""
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
+    record = catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/site.zarr"),
+    )
+
+    assert [r.id for r in catalog.search(exists=["artifacts"])] == [record.id]
+    assert [r.id for r in catalog.search(contains={"artifacts": record.artifacts[0].to_dict()})] == [
+        record.id
+    ]
+
+
 def test_search_equality_against_list_requires_exact_list(tmp_path: Path) -> None:
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
     tagged = catalog.add_artifact(
