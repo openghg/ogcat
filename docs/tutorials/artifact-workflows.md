@@ -260,7 +260,11 @@ collection_record = catalog.add_artifact(
 The resulting record points at a managed directory under ``data/objects``. It is
 still one logical dataset, not 36 separate file records. The explicit
 ``collection_pattern`` and ``reader_hint`` in the classification metadata
-document how downstream code should read the members.
+document how downstream code should read the members. This uses the lower-level
+artifact writer path because managed collections are not yet a first-class
+``add_collection(...)`` write target. When that API grows, archive-to-collection
+workflows should be expressible without manually attaching collection
+classification metadata.
 
 ### 3. Process the collection into a Zarr artifact
 
@@ -366,6 +370,7 @@ processed_plan = catalog.plan_artifact_storage(
     target_kind="directory",
     write_mode="write",
     metadata=processed_metadata,
+    primary_location="template",
 )
 
 with xarray_collection_source(
@@ -388,9 +393,10 @@ with xarray_collection_source(
 ```
 
 The resulting record is a generic directory artifact whose locator points to the
-``.zarr`` store. The fact that it can be opened with xarray, and the provenance
-needed to rebuild it, are ordinary metadata rather than special ogcat core
-concepts.
+schema-rendered ``.zarr`` store at
+``boundary_conditions/co2/europe/cams_co2_europe.zarr``. The fact that it can be
+opened with xarray, and the provenance needed to rebuild it, are ordinary
+metadata rather than special ogcat core concepts.
 
 ### Variant: build the fsspec input at processing time
 
@@ -529,6 +535,7 @@ fsspec_processed_plan = catalog.plan_artifact_storage(
     target_kind="directory",
     write_mode="write",
     metadata=fsspec_processed_metadata,
+    primary_location="template",
 )
 
 fsspec_processed_record = catalog.add_artifact(
