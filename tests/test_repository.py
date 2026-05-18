@@ -6,7 +6,7 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
-from ogcat.models import ArtifactLocator, CatalogRecord
+from ogcat.models import ArtifactDescriptor, ArtifactLocator, CatalogRecord
 from ogcat.tinydb_repository import TinyDbCatalogRepository
 
 
@@ -102,6 +102,16 @@ def test_from_dict_upgrades_legacy_path_only_records() -> None:
         "/tmp/catalog/files/example.nc",
         relative_path="files/example.nc",
     )
+    assert record.artifacts == [
+        ArtifactDescriptor(
+            id="data",
+            role="data_artifact",
+            locator=ArtifactLocator.path(
+                "/tmp/catalog/files/example.nc",
+                relative_path="files/example.nc",
+            ),
+        )
+    ]
     assert record.path() == Path("/tmp/catalog/files/example.nc")
 
 
@@ -141,7 +151,69 @@ def test_record_to_dict_stays_json_serialisable() -> None:
         "value": "s3://bucket/example.zarr",
         "relative_path": None,
     }
+    assert payload["artifacts"] == [
+        {
+            "id": "data",
+            "role": "data_artifact",
+            "locator": {
+                "kind": "uri",
+                "value": "s3://bucket/example.zarr",
+                "relative_path": None,
+            },
+            "state": "available",
+            "relationship": {},
+            "claims": [],
+            "facets": [],
+        }
+    ]
     assert json.loads(json.dumps(payload)) == payload
+
+
+def test_record_round_trips_with_data_and_preview_artifacts() -> None:
+    """Records can persist a data artifact plus an auxiliary preview descriptor."""
+    data_locator = ArtifactLocator.path(
+        "/tmp/catalog/files/example.nc",
+        relative_path="files/example.nc",
+    )
+    preview_locator = ArtifactLocator.path(
+        "/tmp/catalog/previews/example.png",
+        relative_path="previews/example.png",
+    )
+    record = CatalogRecord(
+        id="rec_000004",
+        catalog="fluxes",
+        time_added="2026-04-23T12:00:00Z",
+        record_type="managed_file",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/stale-compat.zarr"),
+        artifacts=[
+            ArtifactDescriptor(
+                id="data",
+                role="data_artifact",
+                locator=data_locator,
+                claims=[{"kind": "representation", "name": "netcdf"}],
+            ),
+            ArtifactDescriptor(
+                id="preview",
+                role="preview",
+                locator=preview_locator,
+                relationship={"kind": "derived_from", "target_artifact_id": "data"},
+                facets=[{"kind": "image", "format": "png"}],
+            ),
+        ],
+        user_metadata={"species": "CO2"},
+    )
+
+    payload = record.to_dict()
+    reloaded = CatalogRecord.from_dict(payload)
+
+    assert record.locator == data_locator
+    assert record.path() == Path("/tmp/catalog/files/example.nc")
+    assert payload["locator"] == data_locator.to_dict()
+    artifacts_payload = payload["artifacts"]
+    assert isinstance(artifacts_payload, list)
+    assert isinstance(artifacts_payload[1], dict)
+    assert artifacts_payload[1]["role"] == "preview"
+    assert reloaded == record
 
 
 def test_repository_insert_many(tmp_path: Path) -> None:
@@ -207,6 +279,7 @@ def test_record_without_locator_does_not_resolve_to_current_directory() -> None:
 
     assert record.stored_abspath is None
     assert record.path() is None
+    assert record.artifacts == []
 
 
 def test_empty_path_locator_does_not_resolve_to_current_directory() -> None:

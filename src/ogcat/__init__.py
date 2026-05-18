@@ -4,7 +4,7 @@ from ogcat.audit import AuditEvent, AuditSink, JsonlAuditSink, read_audit_events
 from ogcat.catalog import Catalog
 from ogcat.classification import classify_artifact, collection_classification_metadata
 from ogcat.hooks import ArtifactWriter, HookManager, HookWarning, OperationContext, OperationSource
-from ogcat.models import ArtifactLocator, CatalogRecord, MetadataFieldDescription
+from ogcat.models import ArtifactDescriptor, ArtifactLocator, CatalogRecord, MetadataFieldDescription
 from ogcat.plugins import PluginRegistry
 from ogcat.record_set import CatalogRecordSet
 from ogcat.replicas import (
@@ -54,6 +54,7 @@ from ogcat.writers import (
 
 __all__ = [
     "ArtifactLocator",
+    "ArtifactDescriptor",
     "ArtifactWriter",
     "AuditEvent",
     "AuditSink",

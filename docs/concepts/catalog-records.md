@@ -1,7 +1,12 @@
 # Catalog records
 
-A catalog record represents one catalogued artifact.  Every record contains a
-fixed set of reserved fields plus three metadata namespaces.
+A catalog record is the logical catalog entry used for search, schema
+validation, and user metadata. Every record contains a fixed set of reserved
+fields, one or more artifact descriptors, and three metadata namespaces.
+
+For compatibility, the top-level ``locator`` remains the shortcut to the
+record's data artifact. Code that calls ``record.locator`` or ``record.path()``
+continues to work for ordinary single-artifact records.
 
 ## Reserved fields
 
@@ -9,8 +14,9 @@ fixed set of reserved fields plus three metadata namespaces.
 |-------|-------------|
 | ``id`` | Stable string identifier assigned at ingest time. |
 | ``catalog`` | Name of the catalog that owns the record. |
-| ``record_type`` | Kind of artifact, e.g. ``managed_file`` or ``external_reference``. |
-| ``locator`` | Describes where the artifact lives (see [Locators and storage](locators-and-storage.md)). |
+| ``record_type`` | Logical schema/search type, e.g. ``managed_file`` or ``external_reference``. |
+| ``locator`` | Compatibility shortcut to the data artifact locator (see [Locators and storage](locators-and-storage.md)). |
+| ``artifacts`` | Inline descriptors for the data artifact plus optional auxiliary artifacts, view links, manifests, previews, logs, or derived artifacts. |
 | ``storage_mode`` | How the artifact was stored, e.g. ``copy``, ``move``, or ``external``. |
 | ``original_filename`` | Source filename at ingest time. |
 | ``suffixes`` | File suffix list derived from the source path. |
@@ -70,6 +76,32 @@ suffix list.
     template inputs; use explicit user metadata such as ``dataset_id`` for
     domain identifiers that should appear in human-readable paths.
 
+## Artifact descriptors
+
+``artifacts`` is a JSON-compatible list owned by the record. The first
+``data_artifact`` descriptor is the source for the top-level ``record.locator``
+compatibility value. Existing locator-only records are upgraded on read by
+synthesizing a ``data_artifact`` descriptor from the stored locator.
+
+The first descriptor shape is deliberately small:
+
+```json
+{
+  "id": "data",
+  "role": "data_artifact",
+  "locator": {"kind": "path", "value": "/abs/path/data.nc", "relative_path": "data/objects/ab/data.nc"},
+  "state": "available",
+  "relationship": {},
+  "claims": [],
+  "facets": []
+}
+```
+
+Current standard roles are ``data_artifact``, ``auxiliary_artifact``,
+``view_link``, ``manifest``, ``preview``, ``log``, and ``derived_artifact``.
+Claims and facets are placeholders for future typed reader, writer, and
+converter work; they are not dispatch keys in this slice.
+
 ## Searching across namespaces
 
 When you search with an unqualified field name such as ``species``, ogcat
@@ -102,4 +134,5 @@ print(record.id)
 print(record.record_type)          # "managed_file"
 print(record.user_metadata)        # {"species": "CO2", ...}
 print(record.path())               # stored Path
+print(record.artifacts[0].role)    # "data_artifact"
 ```
