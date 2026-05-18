@@ -666,9 +666,9 @@ This pattern records an external URI first, then creates a managed local copy
 with a custom writer. It is useful when downloads are performed by ``requests``,
 ``curl``, an authenticated client, or a project-specific API.
 
-The catalog can use its default UUID primary placement so the downloaded source
-filename does not need to be meaningful. The schema template remains
-human-readable:
+The catalog can plan a template-primary target so the downloaded source
+filename does not need to be meaningful, while the managed output still lands
+at a human-readable path:
 
 ```python
 from pathlib import Path
@@ -757,6 +757,7 @@ download_plan = catalog.plan_artifact_storage(
     Path("example.nc"),
     write_mode="write",
     metadata=download_metadata,
+    primary_location="template",
 )
 
 download_record = catalog.add_artifact(

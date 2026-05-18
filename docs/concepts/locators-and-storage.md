@@ -72,8 +72,8 @@ filename:  {title_slug|original_stem}{original_suffix}
 ### Naming template fields
 
 Storage and template-link naming templates are intended to produce
-human-readable paths. They may use user metadata fields plus these generated
-fields:
+human-readable paths. They may use user metadata fields that do not collide
+with reserved generated names, plus these generated fields:
 
 - ``date_added``: date used for the add operation, in ``YYYY-MM-DD`` form.
 - ``year_added``: year from ``date_added``.
@@ -85,6 +85,11 @@ fields:
   supplied.
 - ``year_month_or_original_stem``: ``YYYYMM`` from integer-like ``year`` and
   ``month`` metadata, ``YYYY`` from ``year`` alone, or ``original_stem``.
+
+The generated field names above are reserved metadata keys. For example,
+metadata cannot define ``date_added``, ``year_added``, ``original_stem``,
+``original_suffix``, or ``title_slug`` because ogcat owns those names when it
+builds the template context.
 
 Internal identifiers are deliberately not part of human-readable storage
 template policy. ``id``, ``uuid``, ``operation_id``, and ``artifact_uuid`` are

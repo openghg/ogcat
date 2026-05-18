@@ -124,12 +124,14 @@ The context includes:
 - `year_added`
 - `year_month_or_original_stem`
 - `title_slug` when `title` metadata is present
-- all user metadata fields
+- user metadata fields that do not collide with generated field names
 
-Internal identifiers such as `id`, `uuid`, `operation_id`, and `artifact_uuid`
-are reserved for record identity, audit, and storage planning. They are not
-public storage-template inputs. Use explicit metadata names such as
-`dataset_id` when a domain identifier should appear in a human-readable path.
+Generated context names such as `date_added`, `year_added`, `original_stem`,
+and `title_slug` are reserved metadata keys. Internal identifiers such as
+`id`, `uuid`, `operation_id`, and `artifact_uuid` are also reserved for record
+identity, audit, and storage planning. They are not public storage-template
+inputs. Use explicit metadata names such as `dataset_id` when a domain
+identifier should appear in a human-readable path.
 
 ### Collision handling
 

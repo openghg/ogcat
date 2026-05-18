@@ -583,8 +583,8 @@ def test_add_file_rejects_internal_identifiers_in_template_replicas(
         catalog.add_file(source)
 
     assert catalog.repository.all() == []
-    assert list((root / "data" / "files").rglob("reserved.nc")) == []
-    assert list((root / "data" / "objects").rglob("reserved.nc")) == []
+    assert list((root / "data" / "files").rglob("*")) == []
+    assert list((root / "data" / "objects").rglob("*")) == []
 
 
 def test_add_file_allows_domain_identifier_metadata_in_template_replicas(
