@@ -485,6 +485,97 @@ not silently escape a closed operation scope. The ADR should decide whether a
 pipeline can return a user-owned context-managed handle, whether operations must
 materialize outputs before closing, or whether both modes are allowed.
 
+## Permissions And Access Control
+
+Permissions fit naturally into the filesystem analogy, but ogcat should treat
+them as virtual catalog policy rather than a promise that the backing filesystem
+or object store enforces the same rules. POSIX mode bits and ACLs are useful
+references, not a complete model.
+
+Permission checks may need several scopes:
+
+- Catalog-level permissions: who can open, search, administer, or mount a
+  catalog.
+- Record-level permissions: who can read metadata, edit metadata, delete a
+  record, or create linked/derived records.
+- Artifact-level permissions: who can read bytes, open structured interfaces,
+  materialize new copies, replace leader content, create view links, or restore
+  deep-storage copies.
+- Resource-level permissions: who can write to a storage resource, stage from
+  deep storage, create an HPC cache copy, or use a credential profile.
+- Operation-level permissions: who can run a reader/writer/converter and with
+  which plugin options.
+
+The core vocabulary can start with capability-style permissions such as
+`read_metadata`, `read_artifact`, `write_metadata`, `write_artifact`,
+`create_artifact`, `replicate_artifact`, `restore_artifact`, `delete_artifact`,
+`admin_record`, and `admin_catalog`. POSIX-like owner/group/world fields may be
+a convenient local backend, but named principals and groups are more flexible
+for future server-backed catalogs.
+
+Important limitation: if users can bypass ogcat and read the underlying path
+directly, catalog permissions are advisory for that access path. That is still
+useful for personal/local use, provenance, UI/API behavior, and server-backed
+deployments, but it is not filesystem-level enforcement unless ogcat or the
+storage backend controls the access path.
+
+For simple personal use, default permissions should stay permissive and
+low-ceremony. Permission machinery should not make TinyDB plus local files feel
+heavier than normal filesystem use.
+
+## Locks, Isolation, And Handle Analogy
+
+Locks also fit the filesystem analogy, especially if runtime `Handle` objects
+are treated like file-descriptor analogues. The design should plan for locks
+even if early backends can only provide coarse or advisory locking.
+
+Useful lock scopes:
+
+- Catalog lock: protects catalog-wide migrations or administrative changes.
+- Record lock: protects metadata updates, artifact membership changes, and
+  leader selection for a `CatalogRecord`.
+- Artifact lock: protects writes, replacement, cache refresh, replica state
+  transitions, and destructive artifact operations.
+- Locator/resource lock: protects a physical target path, directory, cache
+  location, or deep-storage staging area.
+- Handle lock or lease: ties a read or write claim to an opened runtime handle
+  or operation context.
+
+Useful lock modes:
+
+- Shared/read lock: many readers can inspect or open stable content.
+- Exclusive/write lock: one writer can update record state or materialize a
+  target.
+- Intent lock: an operation declares it plans to write a record, artifact, or
+  resource before it opens handles or performs side effects.
+- Lease with expiry/heartbeat: a lock token can be reclaimed after a crashed
+  process or worker.
+
+Basic isolation target: read-committed catalog state. Readers should not observe
+uncommitted metadata or partially registered artifacts. Writers should not
+overwrite another committed update without detecting a version conflict or
+holding the appropriate lock. Artifact bytes may still require staging and
+commit/finalize semantics because physical writes are not necessarily atomic.
+
+Backend caveats:
+
+- TinyDB cannot provide true per-record isolation by itself. A local TinyDB
+  backend may only support a global catalog file lock, optimistic version
+  checks, or a sidecar lock registry.
+- File locks are not a portable answer on HPC/NFS environments. They may be
+  unavailable, advisory, or unreliable across machines.
+- True multi-user concurrency likely needs a server application or backend that
+  can coordinate lock tokens, transactions, leases, and conflict detection.
+- Locks only protect writes that go through ogcat. External mutation of a path
+  remains outside the catalog's control unless the storage resource enforces it.
+
+The handle analogy suggests an API shape: opening an artifact for read can
+acquire a shared lease; opening for write or replacement can acquire an
+exclusive lease; the operation or user-owned context releases the lease when the
+handle closes. For materializing writers, a safer pattern is write-to-staging,
+validate, then commit catalog state and promote the locator. That keeps
+partially written artifacts out of the committed catalog view.
+
 ## Domain Model Layers
 
 Possible layer boundaries:
@@ -499,11 +590,15 @@ Possible layer boundaries:
    manifests, stale evidence, and validation results.
 5. Capability layer: reader, writer, converter, locator driver, and storage
    adapter registries.
-6. Runtime handle layer: opened datasets, streams, fsspec files, service
+6. Access policy layer: permissions, principals, groups, resource credentials,
+   and operation authorization.
+7. Concurrency layer: lock tokens, leases, version checks, isolation policy,
+   and conflict detection.
+8. Runtime handle layer: opened datasets, streams, fsspec files, service
    sessions, temporary caches, and cleanup scopes.
-7. Operation layer: typed pipelines, rollback, provenance, materialization,
+9. Operation layer: typed pipelines, rollback, provenance, materialization,
    validation, and reconciliation.
-8. Presentation layer: `Catalog`, CLI, documentation examples, query views, and
+10. Presentation layer: `Catalog`, CLI, documentation examples, query views, and
    optional Intake adapters.
 
 The layer split should keep core dependency-light. Core can know that an
@@ -522,10 +617,12 @@ xarray unless a plugin provides the reader.
 | `Representation` | Storage/encoding shape of an artifact. | Connects locators to readers and writers. |
 | `InterfaceClaim` | Capability contract an artifact can expose. | Dispatch key for reader/converter selection. |
 | `Facet` | Namespaced fact with evidence and confidence. | Produced by inspectors, readers, writers, validators, and plugins. |
+| `PermissionPolicy` | Decides whether a principal can perform a catalog, record, artifact, resource, or operation action. | Uses principals, groups, record/artifact state, resource profiles, and plugin capability metadata. |
+| `LockManager` | Coordinates shared/exclusive locks, leases, and version checks. | Used by operations, handles, storage resources, and catalog backends. |
 | `Reader` | Opens an artifact through an interface and returns a runtime handle/object. | Uses locators, claims, facets, plugins, and operation context. |
 | `Writer` | Materializes runtime data or source handles into artifact storage. | Uses storage plans/resources and returns artifact result metadata. |
 | `Converter` | Transforms one runtime interface into another. | Composes readers and writers; may be lazy or materializing. |
-| `Handle` | Runtime opened object scoped to an operation or user context. | Owned by operation lifecycle; closed by user or operation stack. |
+| `Handle` | Runtime opened object scoped to an operation or user context. | Owned by operation lifecycle or user context; may hold read/write leases. |
 | `Operation` | Execution envelope for typed pipelines. | Coordinates readers, writers, converters, rollback, audit, and provenance. |
 
 UML-style structural sketch:
@@ -576,9 +673,18 @@ classDiagram
     outputs
     provenance
   }
+  class PermissionPolicy {
+    authorize()
+  }
+  class LockManager {
+    acquire()
+    release()
+    heartbeat()
+  }
   class Handle {
     interface_name
     reader_name
+    lock_token
     runtime_state
   }
 
@@ -588,7 +694,10 @@ classDiagram
   Artifact "1" o-- "*" Facet
   Locator --> StorageResource
   Operation --> "*" Artifact
+  Operation --> PermissionPolicy
+  Operation --> LockManager
   Handle --> Artifact
+  Handle --> LockManager
 ```
 
 Interface sketch for ADR discussion:
@@ -764,6 +873,8 @@ the ADR makes each slice concrete enough to open as a separate sub-issue.
 13. Operation-owned handle lifecycle and composed pipeline cleanup.
 14. Documentation simplification for `add_file`, `add_reference`,
     `add_collection`, and `add_artifact`.
+15. Permission and access-control vocabulary.
+16. Locking, leases, and basic isolation model.
 
 ## ADR Questions To Resolve
 
@@ -806,6 +917,16 @@ the ADR makes each slice concrete enough to open as a separate sub-issue.
   artifacts?
 - How should handle ownership transfer work when a pipeline returns a lazy
   user-owned handle?
+- Which permission scopes and actions are core: catalog, record, artifact,
+  resource, operation, reader, writer, converter?
+- Are POSIX-like owner/group/world fields enough for local use, or should the
+  core vocabulary start directly with principals, groups, and ACL-like grants?
+- What isolation level should ogcat promise for each backend: best-effort,
+  read-committed, optimistic conflict detection, or server-coordinated locks?
+- Should handles acquire shared/exclusive leases by default, or should locks be
+  explicit operation options?
+- How are stale lock tokens detected and recovered after crashed local
+  processes, failed jobs, or abandoned HPC workers?
 - What driver error taxonomy is needed for unsupported, missing, stale,
   permission-denied, transient, and partial-write failures?
 - How should operation provenance be represented before a full provenance graph
@@ -841,3 +962,9 @@ the ADR makes each slice concrete enough to open as a separate sub-issue.
 - Artifact-level collections and record-level catalog subsets are named
   distinctly enough that future mounted catalog views do not collide with
   directory/prefix/archive collection artifacts.
+- Catalog, record, artifact, resource, and operation permission checks can be
+  modeled even when a local backend treats them as advisory policy.
+- A writer cannot publish partially materialized artifact state as committed
+  catalog state.
+- Concurrent writers to the same record or artifact either serialize through a
+  lock/lease or detect a version conflict before commit.
