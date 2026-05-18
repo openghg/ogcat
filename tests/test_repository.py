@@ -403,6 +403,15 @@ def test_invalid_artifact_claim_shapes_raise_helpful_errors() -> None:
     with pytest.raises(ValueError, match="claims\\[0\\] is missing required key: name"):
         ArtifactDescriptor(id="data", role="data_artifact", claims=[{"kind": "representation"}])
 
+    with pytest.raises(ValueError, match="claims\\[0\\]\\.kind cannot be None"):
+        ArtifactDescriptor(id="data", role="data_artifact", claims=[{"kind": None, "name": "netcdf"}])
+
+    with pytest.raises(TypeError, match="claims\\[0\\]\\.name must be a string"):
+        ArtifactDescriptor(id="data", role="data_artifact", claims=[{"kind": "representation", "name": 123}])
+
+    with pytest.raises(TypeError, match="facets\\[0\\]\\.kind must be a string"):
+        ArtifactDescriptor(id="data", role="data_artifact", facets=[{"kind": 123, "name": "size"}])
+
     with pytest.raises(ValueError, match="evidence must be one of"):
         ArtifactDescriptor(
             id="data",

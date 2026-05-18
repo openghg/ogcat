@@ -969,7 +969,11 @@ def _schema_mapping_text_with_default(
 
 def _coerce_required_schema_text(value: object, *, field_name: str) -> str:
     """Coerce a required artifact schema identifier to non-empty text."""
-    text = str(value).strip()
+    if value is None:
+        raise ValueError(f"{field_name} cannot be None")
+    if not isinstance(value, str):
+        raise TypeError(f"{field_name} must be a string, got {type(value).__name__}")
+    text = value.strip()
     if not text:
         raise ValueError(f"{field_name} cannot be empty")
     return text

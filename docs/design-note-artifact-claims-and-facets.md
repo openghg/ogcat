@@ -72,9 +72,10 @@ normalized with defaults. Raw dict facets may also omit ``name``; in that case
 fields are folded into ``metadata`` during normalization.
 
 Claims still require both ``kind`` and ``name``. Facets still require ``kind``.
-Invalid evidence, confidence, metadata, list, or item shapes raise
-``ValueError`` or ``TypeError`` during ``ArtifactDescriptor`` and
-``CatalogRecord`` construction, including repository load.
+Required identifier fields must be strings; ``None``, non-string values, and
+empty strings are rejected. Invalid evidence, confidence, metadata, list, or
+item shapes raise ``ValueError`` or ``TypeError`` during ``ArtifactDescriptor``
+and ``CatalogRecord`` construction, including repository load.
 
 ## Evidence And Confidence
 
