@@ -136,11 +136,13 @@ def render_template(template: str, context: dict[str, Any]) -> str:
 
 
 def referenced_template_fields(template: str) -> frozenset[str]:
-    """Return named fields referenced directly by a template.
+    """Return possible context fields referenced by a template.
 
-    Literal fallback values are ignored, but fallback expressions that name
-    reserved generated fields are included so internal fields cannot be reached
-    through ``{field|uuid}`` style templates.
+    Fallback tokens are ambiguous because :func:`render_template` treats them
+    as context lookups when a matching context key exists, otherwise as literal
+    fallback text. This extractor reports non-empty fallback tokens as possible
+    field references so callers do not miss metadata dependencies such as
+    ``{title_slug|dataset_id}``.
     """
     fields: set[str] = set()
     for match in _TEMPLATE_PATTERN.finditer(template):
@@ -153,7 +155,7 @@ def referenced_template_fields(template: str) -> frozenset[str]:
         field = field.strip()
         if field:
             fields.add(field)
-        if fallback in _RESERVED_TEMPLATE_FIELDS:
+        if fallback:
             fields.add(fallback)
     return frozenset(fields)
 

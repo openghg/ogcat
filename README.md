@@ -198,10 +198,12 @@ path should be the primary storage location.
 
 Schema naming templates are intended for human-readable paths. They can use user metadata that
 does not collide with generated names, plus fields such as `date_added`, `year_added`,
-`original_stem`, `original_suffix`, and `title_slug`. Those generated names are reserved metadata
-keys. Internal identifiers such as `id`, `uuid`, `operation_id`, and `artifact_uuid` are also
-reserved for catalog bookkeeping and storage planning; use explicit metadata names such as
-`dataset_id` for domain identifiers that should appear in paths.
+`original_stem`, `original_suffix`, and `title_slug`. When ogcat builds a storage or
+template-link naming context, those generated names are reserved metadata keys. Internal
+identifiers such as `id`, `uuid`, `operation_id`, and `artifact_uuid` are also reserved in
+template contexts; explicit-locator records that do not render schema naming templates are not
+subject to this template-context restriction. Use explicit metadata names such as `dataset_id`
+for domain identifiers that should appear in paths.
 
 Use `catalog.plan_artifact_storage(...)` to dry-run a planned target before writing. The returned
 `StoragePlan` contains the locator, write intent, and resolved naming outputs; pass record metadata

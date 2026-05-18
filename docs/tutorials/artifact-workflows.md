@@ -7,8 +7,9 @@ network-specific work.
 ## CAMS zip to processed boundary conditions
 
 This workflow tracks a raw CAMS download, extracts its NetCDF members into a
-managed directory artifact, and writes a processed Zarr store with provenance
-linking the output back to the raw inputs.
+pipeline-controlled directory, records those members as one collection artifact,
+and writes a processed Zarr store with provenance linking the output back to
+the raw inputs.
 
 The example uses the CAMS global inversion-optimised greenhouse gas fluxes and
 concentrations dataset from the Copernicus Atmosphere Data Store:
@@ -31,6 +32,9 @@ cams73_latest_co2_conc_surface_inst_202002.nc
 cams73_latest_co2_conc_surface_inst_202212.nc
 ```
 
+The archive listing contains 36 monthly NetCDF files covering 2020-01 through
+2022-12, with a total uncompressed size of 184,833,238,572 bytes.
+
 In this naming convention, ``latest`` is the input version, ``co2`` is the
 species, ``conc`` means concentration, and ``surface_inst`` indicates surface in
 situ observations. The ``73`` in ``cams73`` is kept as part of the upstream input
@@ -38,10 +42,10 @@ version string because the workflow does not interpret it further.
 
 ### Catalog spec
 
-The raw data schemas use readable title slugs and year/month fields when those
-are present. Raw files and extracted raw collections live under ``files/raw``.
-The processed boundary-condition schema uses species, domain, and boundary
-condition input metadata.
+The raw download and extracted NetCDF collection are explicit references. They
+do not use schema templates because ogcat is not choosing their storage
+locations. The processed boundary-condition schema does use templates because
+ogcat owns the Zarr output target.
 
 ```python
 from pathlib import Path
@@ -49,48 +53,50 @@ from pathlib import Path
 from ogcat import Catalog, CatalogSpec, MetadataFieldDescription, RecordSchema
 
 
-def required_field(name: str, description: str) -> MetadataFieldDescription:
-    """Describe a required metadata field."""
-    return MetadataFieldDescription(name=name, description=description, required=True)
+species_field = MetadataFieldDescription(
+    name="species",
+    description="Species represented by the data.",
+    required=True,
+)
+product_field = MetadataFieldDescription(
+    name="product",
+    description="Upstream product or data family.",
+    required=True,
+)
+title_field = MetadataFieldDescription(
+    name="title",
+    description="Human-readable data title.",
+    required=True,
+)
+domain_field = MetadataFieldDescription(
+    name="domain",
+    description="Processing or model domain.",
+    required=True,
+)
+bc_input_field = MetadataFieldDescription(
+    name="bc_input",
+    description="Boundary-condition input product.",
+    required=True,
+)
 
 catalog = Catalog.create(
     Path("cams-bc-catalog"),
     CatalogSpec(
         catalog_name="cams_bc",
-        default_schema=RecordSchema(
-            directory_template="raw/{product}/{species}",
-            filename_template="{title_slug|original_stem}_{year_month_or_original_stem}{original_suffix}",
-        ),
         record_schemas={
             "raw_download": RecordSchema(
                 description="Raw downloaded files, including archives.",
-                directory_template="raw/{product}/{species}",
-                filename_template="{title_slug|original_stem}{original_suffix}",
-                metadata_fields=[
-                    required_field("species", "Species represented by the data."),
-                    required_field("product", "Upstream product or data family."),
-                    required_field("title", "Human-readable data title."),
-                ],
+                metadata_fields=[species_field, product_field, title_field],
             ),
             "raw_netcdf_collection": RecordSchema(
-                description="Raw NetCDF file collections extracted from archive artifacts.",
-                directory_template="raw/{product}/{species}",
-                filename_template="{title_slug|original_stem}",
-                metadata_fields=[
-                    required_field("species", "Species represented by the data."),
-                    required_field("product", "Upstream product or data family."),
-                    required_field("title", "Human-readable data title."),
-                ],
+                description="Raw NetCDF collections extracted from archive artifacts.",
+                metadata_fields=[species_field, product_field, title_field],
             ),
             "boundary_conditions": RecordSchema(
                 description="Processed boundary-condition stores.",
                 directory_template="boundary_conditions/{species}/{domain}",
                 filename_template="{bc_input}_{species}_{domain}.zarr",
-                metadata_fields=[
-                    required_field("species", "Species represented by the data."),
-                    required_field("domain", "Processing or model domain."),
-                    required_field("bc_input", "Boundary-condition input product."),
-                ],
+                metadata_fields=[species_field, domain_field, bc_input_field],
             ),
         },
     ),
@@ -112,6 +118,13 @@ locator and metadata but does not copy or inspect the archive.
 ```python
 from datetime import date
 from pathlib import Path
+
+CAMS_MEMBER_PATTERN = "cams73_latest_co2_conc_surface_inst_*.nc"
+CAMS_EXPECTED_MEMBERS = [
+    f"cams73_latest_co2_conc_surface_inst_{year}{month:02d}.nc"
+    for year in range(2020, 2023)
+    for month in range(1, 13)
+]
 
 downloaded_zip = Path("~/Downloads/bab75005df9571750d518b0aacdedb35.zip").expanduser()
 ads_dataset = (
@@ -135,22 +148,76 @@ raw_zip_record = catalog.add_reference(
             "contains global concentration fields for CO2."
         ),
         "archive_name": downloaded_zip.name,
-        "archive_member_glob": "*.nc",
-        "member_count": 36,
+        "archive_member_glob": CAMS_MEMBER_PATTERN,
+        "member_count": len(CAMS_EXPECTED_MEMBERS),
         "time_coverage": "2020-01/2022-12",
+        "uncompressed_bytes": 184_833_238_572,
         "bc_input": "cams",
         "bc_input_version": "cams73_latest",
     },
 )
 ```
 
-### 2. Extract the NetCDF collection into managed storage
+### 2. Extract and record the NetCDF collection
 
-The extracted collection is a directory artifact. ``UnzipArtifactWriter`` owns
-the write operation and rollback cleanup. ogcat owns the plan and record.
+The extraction location is chosen by the pipeline, not by a catalog naming
+template. This is useful for raw scientific inputs: the physical files stay in a
+domain-controlled workspace, while ogcat records the logical collection and the
+member pattern that downstream code should read.
 
 ```python
-from ogcat import UnzipArtifactWriter, path_source
+import fnmatch
+import shutil
+import zipfile
+
+
+def extract_cams_members(
+    zip_path: Path,
+    target_dir: Path,
+    *,
+    member_pattern: str,
+    expected_members: list[str],
+) -> list[Path]:
+    """Extract matching CAMS members into a pipeline-controlled directory."""
+    if target_dir.exists():
+        raise FileExistsError(target_dir)
+    target_dir.mkdir(parents=True)
+
+    try:
+        with zipfile.ZipFile(zip_path) as archive:
+            members = {
+                Path(member.filename).name: member
+                for member in archive.infolist()
+                if not member.is_dir() and fnmatch.fnmatch(Path(member.filename).name, member_pattern)
+            }
+            expected_names = sorted(expected_members)
+            matched_names = sorted(members)
+            if matched_names != expected_names:
+                missing = sorted(set(expected_names) - set(matched_names))
+                unexpected = sorted(set(matched_names) - set(expected_names))
+                raise ValueError(f"Unexpected CAMS members: missing={missing}, unexpected={unexpected}.")
+
+            extracted: list[Path] = []
+            for name in expected_names:
+                member = members[name]
+                destination = target_dir / Path(member.filename).name
+                with archive.open(member) as source_file, destination.open("wb") as target_file:
+                    shutil.copyfileobj(source_file, target_file)
+                extracted.append(destination)
+    except Exception:
+        shutil.rmtree(target_dir, ignore_errors=True)
+        raise
+
+    return sorted(extracted)
+
+
+extracted_dir = Path("raw-cams-work/cams73_latest_co2_conc_surface_inst_202001-202212")
+extract_cams_members(
+    downloaded_zip,
+    extracted_dir,
+    member_pattern=CAMS_MEMBER_PATTERN,
+    expected_members=CAMS_EXPECTED_MEMBERS,
+)
 
 collection_metadata = {
     "species": "co2",
@@ -160,35 +227,35 @@ collection_metadata = {
     "source_record_id": raw_zip_record.id,
     "source_url": ads_dataset,
     "archive_name": downloaded_zip.name,
-    "archive_member_glob": "*.nc",
-    "member_count": 36,
+    "archive_member_glob": CAMS_MEMBER_PATTERN,
+    "member_count": len(CAMS_EXPECTED_MEMBERS),
     "time_coverage": "2020-01/2022-12",
     "bc_input": "cams",
     "bc_input_version": "cams73_latest",
 }
 
-collection_plan = catalog.plan_artifact_storage(
-    downloaded_zip,
+collection_record = catalog.add_collection(
+    extracted_dir,
     record_type="raw_netcdf_collection",
-    target_kind="directory",
-    write_mode="write",
     metadata=collection_metadata,
-)
-
-collection_record = catalog.add_artifact(
-    record_type="raw_netcdf_collection",
-    storage_plan=collection_plan,
-    metadata=collection_metadata,
-    source=path_source(downloaded_zip, kind="zip_file"),
-    artifact_writer=UnzipArtifactWriter(),
+    collection_pattern=CAMS_MEMBER_PATTERN,
+    member_format="netcdf",
+    member_suffixes=[".nc"],
+    reader_hint="xarray.open_mfdataset",
 )
 ```
 
+``add_collection(...)`` records one logical dataset. It does not scan, copy,
+move, or open the NetCDF members. The explicit ``collection_pattern`` and
+``reader_hint`` document how the collection should be read.
+
 ### 3. Process the collection into a Zarr artifact
 
-The processing writer is domain code. It opens the extracted NetCDF files with
-``xarray.open_mfdataset()``, calls a project-specific ``create_cams_bc()``
-function, and writes the returned dataset to a single ``.zarr`` store.
+The processing writer is domain code. A small helper turns the collection record
+into an operation source by using the collection's reader and glob hints. The
+writer opens the matching NetCDF members with ``xarray.open_mfdataset()``, calls
+a project-specific ``create_cams_bc()`` function, and writes the returned
+dataset to a single ``.zarr`` store.
 
 ```python
 import shutil
@@ -197,12 +264,38 @@ from pathlib import Path
 
 import xarray as xr
 
-from ogcat import ArtifactLocator, OperationContext, OperationSource, memory_source
+from ogcat import ArtifactLocator, CatalogRecord, OperationContext, OperationSource, memory_source
 
 
 def create_cams_bc(ds: xr.Dataset, *, species: str, domain: str) -> xr.Dataset:
     """Create boundary-condition data from CAMS concentration fields."""
     ...
+
+
+def xarray_collection_source(record: CatalogRecord, **metadata: object) -> OperationSource:
+    """Build an operation source from a collection record's xarray hints."""
+    collection_root = record.path()
+    if collection_root is None:
+        raise ValueError("Expected collection record to have a local path.")
+
+    classification = record.derived_metadata.get("classification", {})
+    if classification.get("reader_hint") != "xarray.open_mfdataset":
+        raise ValueError("Collection is not marked for xarray.open_mfdataset.")
+
+    collection_pattern = str(classification["collection_pattern"])
+    input_paths = sorted(collection_root.glob(collection_pattern))
+    expected_count = record.user_metadata.get("member_count")
+    if expected_count is not None and len(input_paths) != int(expected_count):
+        raise ValueError(f"Expected {expected_count} members, found {len(input_paths)}.")
+
+    source_metadata = {
+        "collection_record_id": record.id,
+        "collection_pattern": collection_pattern,
+        "input_paths": [str(path) for path in input_paths],
+        "reader_hint": classification["reader_hint"],
+    }
+    source_metadata.update(metadata)
+    return memory_source(None, kind="xarray_netcdf_collection", metadata=source_metadata)
 
 
 @dataclass(frozen=True)
@@ -221,8 +314,7 @@ class CamsBoundaryConditionWriter:
         if target_path.exists():
             raise FileExistsError(target_path)
 
-        collection_path = Path(source.metadata["collection_path"])
-        input_paths = sorted(collection_path.glob("cams73_latest_co2_conc_surface_inst_*.nc"))
+        input_paths = [Path(path) for path in source.metadata["input_paths"]]
         species = str(source.metadata.get("species", "co2"))
         processing_domain = str(source.metadata["processing_domain"])
 
@@ -241,7 +333,8 @@ class CamsBoundaryConditionWriter:
                 "input_record_id": source.metadata["collection_record_id"],
                 "raw_zip_record_id": source.metadata["raw_zip_record_id"],
                 "input_file_count": len(input_paths),
-                "input_files": [path.name for path in input_paths],
+                "input_collection_pattern": source.metadata["collection_pattern"],
+                "input_reader": source.metadata["reader_hint"],
                 "species": species,
                 "bc_input": "cams",
                 "bc_input_version": "cams73_latest",
@@ -254,10 +347,6 @@ class CamsBoundaryConditionWriter:
 Plan and write the processed artifact:
 
 ```python
-collection_path = collection_record.path()
-if collection_path is None:
-    raise RuntimeError("Expected extracted collection to have a local path.")
-
 processed_metadata = {
     "species": "co2",
     "domain": "europe",
@@ -268,12 +357,8 @@ processed_metadata = {
     "raw_zip_record_id": raw_zip_record.id,
     "source_url": ads_dataset,
     "processing_domain": "EUROPE",
-    "provenance": {
-        "raw_zip_record_id": raw_zip_record.id,
-        "netcdf_collection_record_id": collection_record.id,
-        "operation": "create_cams_bc",
-        "opened_with": "xarray.open_mfdataset",
-    },
+    "operation": "create_cams_bc",
+    "opened_with": "xarray.open_mfdataset",
 }
 
 processed_plan = catalog.plan_artifact_storage(
@@ -287,16 +372,11 @@ processed_record = catalog.add_artifact(
     record_type="boundary_conditions",
     storage_plan=processed_plan,
     metadata=processed_metadata,
-    source=memory_source(
-        None,
-        kind="cams_netcdf_collection",
-        metadata={
-            "collection_path": str(collection_path),
-            "collection_record_id": collection_record.id,
-            "raw_zip_record_id": raw_zip_record.id,
-            "species": "co2",
-            "processing_domain": "EUROPE",
-        },
+    source=xarray_collection_source(
+        collection_record,
+        raw_zip_record_id=raw_zip_record.id,
+        species="co2",
+        processing_domain="EUROPE",
     ),
     artifact_writer=CamsBoundaryConditionWriter(),
 )
@@ -307,209 +387,19 @@ The resulting record is a generic directory artifact whose locator points to the
 needed to rebuild it, are ordinary metadata rather than special ogcat core
 concepts.
 
-## Local CAMS zip to processed Zarr with temporary extraction
+### Variant: build the fsspec input at processing time
 
-The same operation can avoid a persistent extracted collection when the raw zip
-already lives on a filesystem visible to the processing job. fsspec can still be
-useful here: the writer can wrap the already-recorded local path as a ``file://``
-URL-path, open it through ``fsspec.open_local()``, and then treat it as a zip
-filesystem. The writer extracts the NetCDF members into a temporary directory
-only long enough for ``xarray.open_mfdataset()`` and writes a single managed
-Zarr artifact.
-
-This pattern is useful when the intermediate NetCDF collection is an
-implementation detail of the processing step rather than an artifact you want to
-keep in the catalog.
-
-The raw zip can be the same path-backed reference recorded earlier. Its metadata
-does not need to choose this later processing strategy. A compact archive
-summary, such as ``archive_member_glob="*.nc"`` and ``member_count=36``, is
-usually enough for downstream processing decisions. A full ``ncdump -h`` for
-every member would probably be better as a separate sidecar artifact than as
-inline catalog metadata.
-
-```python
-zip_path = raw_zip_record.path()
-if zip_path is None:
-    raise RuntimeError("Expected the raw CAMS zip record to have a local path.")
-```
-
-Then use a writer that opens the zip through fsspec, extracts the NetCDF members
-into a temporary directory, opens them with ``xarray.open_mfdataset()``, and
-removes the temporary files when the operation finishes. The target Zarr store is
-the only managed artifact created by this operation.
-
-```python
-import shutil
-import tempfile
-from dataclasses import dataclass
-from pathlib import Path
-
-import fsspec
-import xarray as xr
-
-from ogcat import ArtifactLocator, OperationContext, OperationSource, memory_source
-
-
-@dataclass(frozen=True)
-class LocalCamsZipToZarrWriter:
-    """Create a Zarr store directly from a local CAMS zip path."""
-
-    def write(
-        self,
-        context: OperationContext,
-        source: OperationSource,
-        target: ArtifactLocator,
-    ) -> None:
-        target_path = target.as_path()
-        if target_path is None:
-            raise ValueError("CAMS writer requires a local Zarr target.")
-        if target_path.exists():
-            raise FileExistsError(target_path)
-
-        zip_path = Path(str(source.metadata["zip_path"]))
-        zip_urlpath = zip_path.as_uri()
-        species = str(source.metadata.get("species", "co2"))
-        processing_domain = str(source.metadata["processing_domain"])
-        member_glob = str(source.metadata.get("archive_member_glob", "*.nc"))
-
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        context.rollback(
-            lambda path=target_path: shutil.rmtree(path, ignore_errors=True),
-            description=f"remove processed Zarr store {target_path}",
-        )
-
-        with tempfile.TemporaryDirectory(prefix="ogcat-cams-") as work_dir:
-            work_path = Path(work_dir)
-            extracted_dir = work_path / "netcdf"
-            extracted_dir.mkdir()
-
-            local_zip = fsspec.open_local(zip_urlpath, mode="rb")
-            zip_fs = fsspec.filesystem("zip", fo=local_zip)
-            try:
-                input_paths: list[Path] = []
-                for member in sorted(zip_fs.glob(member_glob)):
-                    local_member = extracted_dir / Path(member).name
-                    with zip_fs.open(member, "rb") as src, local_member.open("wb") as dst:
-                        shutil.copyfileobj(src, dst)
-                    input_paths.append(local_member)
-
-                with xr.open_mfdataset(input_paths) as ds:
-                    processed = create_cams_bc(ds, species=species, domain=processing_domain)
-                    processed.to_zarr(target_path, mode="w")
-            finally:
-                zip_fs.close()
-
-        context.derived_metadata.update(
-            {
-                "raw_zip_record_id": source.metadata["raw_zip_record_id"],
-                "zip_urlpath": zip_urlpath,
-                "archive_member_glob": member_glob,
-                "input_file_count": len(input_paths),
-                "input_files": [path.name for path in input_paths],
-                "temporary_extract": "NetCDF members extracted inside a TemporaryDirectory",
-                "species": species,
-                "bc_input": "cams",
-                "bc_input_version": "cams73_latest",
-                "domain": processing_domain.lower(),
-                "reader_hint": "xarray.open_zarr",
-            }
-        )
-```
-
-Plan and run the processing step:
-
-```python
-local_processed_metadata = {
-    "species": "co2",
-    "domain": "europe",
-    "bc_input": "cams",
-    "bc_input_version": "cams73_latest",
-    "title": "CAMS CO2 boundary conditions for EUROPE",
-    "source_record_id": raw_zip_record.id,
-    "source_url": ads_dataset,
-    "processing_domain": "EUROPE",
-    "provenance": {
-        "raw_zip_record_id": raw_zip_record.id,
-        "operation": "create_cams_bc",
-        "opened_with": "xarray.open_mfdataset",
-        "zip_access": "fsspec zip filesystem over local file URL",
-    },
-}
-
-local_processed_plan = catalog.plan_artifact_storage(
-    record_type="boundary_conditions",
-    target_kind="directory",
-    write_mode="write",
-    metadata=local_processed_metadata,
-)
-
-local_processed_record = catalog.add_artifact(
-    record_type="boundary_conditions",
-    storage_plan=local_processed_plan,
-    metadata=local_processed_metadata,
-    source=memory_source(
-        None,
-        kind="local_cams_zip_urlpath",
-        metadata={
-            "zip_path": str(zip_path),
-            "raw_zip_record_id": raw_zip_record.id,
-            "species": "co2",
-            "processing_domain": "EUROPE",
-            "archive_member_glob": raw_zip_record.user_metadata.get("archive_member_glob", "*.nc"),
-        },
-    ),
-    artifact_writer=LocalCamsZipToZarrWriter(),
-)
-```
-
-This example still keeps fsspec and xarray out of ogcat core. ogcat records the
-local zip path and the processed Zarr locator; the writer owns the temporary
-extracted NetCDF files, processing call, and cleanup. If the zip later moves to a
-remote filesystem, the same writer shape can be adapted to use fsspec URL
-chaining and a temporary ``simplecache`` directory before opening the zip
-filesystem.
-
-### Variant: build the fsspec chain at processing time
-
-The raw zip record does not need to know how it will be processed later. Keep the
-raw record as a plain path or URL-path reference, then decide during the
-processing operation whether to unzip permanently, read through fsspec, cache
-members temporarily, or use some other domain-specific strategy.
-
-In this variant, a hook builds the fsspec URL pattern only during the processing
-operation, immediately before the custom writer runs:
+The persistent collection is useful when the extracted NetCDF files are shared
+inputs. If the extraction is only an implementation detail, run this variant
+instead of the collection-backed processing step above. Keep the raw zip record
+as the source of truth and build the fsspec URL path during the processing
+operation. The hook below prepares a ``simplecache`` plus ``zip`` URL path only
+for this operation; the writer then receives local cached member files from
+fsspec and writes the same managed Zarr output.
 
 ```text
-simplecache::zip://*.nc::file:///.../bab75005df9571750d518b0aacdedb35.zip
+simplecache::zip://cams73_latest_co2_conc_surface_inst_*.nc::file:///.../bab75005df9571750d518b0aacdedb35.zip
 ```
-
-The existing ``resolve_artifact_locator`` hook is best kept for the artifact
-being written, which in this operation is the output Zarr store. The input
-interpretation belongs with this processing operation, so the example uses
-``before_validate_metadata`` to enrich the operation source instead of rewriting
-the raw data record.
-
-The chain uses fsspec's zip filesystem and ``simplecache``. fsspec's chaining
-syntax with ``::`` passes the nested path through each filesystem layer. With
-``simplecache`` as the outer layer, the selected zip members can be cached as
-local files in a directory chosen by the writer.
-
-The zip record stays faithful to the source file. In this example, reuse the
-``raw_zip_record`` created earlier from ``~/Downloads`` rather than creating a
-second record just to support the fsspec processing path:
-
-```python
-assert raw_zip_record.locator.kind == "path"
-assert raw_zip_record.user_metadata["archive_member_glob"] == "*.nc"
-```
-
-The processing operation receives the raw record's locator as source metadata. A
-hook converts that locator and archive member glob to a fsspec URL path and stores it on
-``context.source.metadata``. The writer then gives ``simplecache`` a temporary
-directory, receives local cached member files from ``fsspec.open_local()``, opens
-them with xarray, and lets the temporary directory clean up the cache when it
-exits.
 
 ```python
 import shutil
@@ -536,7 +426,7 @@ def cams_zip_member_urlpath(locator: ArtifactLocator, *, member_glob: str) -> st
 
 @dataclass(frozen=True)
 class CamsZipMemberUrlpathHook:
-    """Prepare a chained fsspec URL path for a CAMS processing operation."""
+    """Prepare a fsspec zip-member URL path for CAMS processing."""
 
     def before_validate_metadata(self, context: OperationContext) -> None:
         if context.record_type != "boundary_conditions":
@@ -545,7 +435,7 @@ class CamsZipMemberUrlpathHook:
             return
 
         raw_locator = ArtifactLocator.from_dict(context.source.metadata["raw_locator"])
-        member_glob = str(context.source.metadata.get("archive_member_glob", "*.nc"))
+        member_glob = str(context.source.metadata["archive_member_glob"])
         context.source.metadata["input_urlpath"] = cams_zip_member_urlpath(
             raw_locator,
             member_glob=member_glob,
@@ -585,6 +475,9 @@ class CamsZipChainToZarrWriter:
                 simplecache={"cache_storage": cache_dir},
             )
             input_paths = [Path(path) for path in local_members]
+            expected_count = int(source.metadata["member_count"])
+            if len(input_paths) != expected_count:
+                raise ValueError(f"Expected {expected_count} members, found {len(input_paths)}.")
 
             with xr.open_mfdataset(input_paths) as ds:
                 processed = create_cams_bc(ds, species=species, domain=processing_domain)
@@ -594,9 +487,8 @@ class CamsZipChainToZarrWriter:
             {
                 "raw_zip_record_id": source.metadata["raw_zip_record_id"],
                 "input_urlpath": input_urlpath,
-                "archive_member_glob": source.metadata.get("archive_member_glob", "*.nc"),
+                "archive_member_glob": source.metadata["archive_member_glob"],
                 "input_file_count": len(input_paths),
-                "input_files": [path.name for path in input_paths],
                 "temporary_cache": "fsspec simplecache inside a TemporaryDirectory",
                 "species": species,
                 "bc_input": "cams",
@@ -607,12 +499,13 @@ class CamsZipChainToZarrWriter:
         )
 ```
 
-Then plan and write the final Zarr artifact:
+Then plan the same kind of boundary-condition artifact, but pass the raw zip
+record's locator and archive hints as operation-source metadata:
 
 ```python
 catalog.hook_manager.register(CamsZipMemberUrlpathHook())
 
-zip_chain_processed_metadata = {
+fsspec_processed_metadata = {
     "species": "co2",
     "domain": "europe",
     "bc_input": "cams",
@@ -621,25 +514,22 @@ zip_chain_processed_metadata = {
     "source_record_id": raw_zip_record.id,
     "source_url": ads_dataset,
     "processing_domain": "EUROPE",
-    "provenance": {
-        "raw_zip_record_id": raw_zip_record.id,
-        "operation": "create_cams_bc",
-        "opened_with": "xarray.open_mfdataset",
-        "zip_access": "writer built fsspec chain from raw locator",
-    },
+    "operation": "create_cams_bc",
+    "opened_with": "xarray.open_mfdataset",
+    "zip_access": "fsspec simplecache over zip filesystem",
 }
 
-zip_chain_processed_plan = catalog.plan_artifact_storage(
+fsspec_processed_plan = catalog.plan_artifact_storage(
     record_type="boundary_conditions",
     target_kind="directory",
     write_mode="write",
-    metadata=zip_chain_processed_metadata,
+    metadata=fsspec_processed_metadata,
 )
 
-zip_chain_processed_record = catalog.add_artifact(
+fsspec_processed_record = catalog.add_artifact(
     record_type="boundary_conditions",
-    storage_plan=zip_chain_processed_plan,
-    metadata=zip_chain_processed_metadata,
+    storage_plan=fsspec_processed_plan,
+    metadata=fsspec_processed_metadata,
     source=memory_source(
         None,
         kind="cams_zip_member_urlpath",
@@ -648,17 +538,17 @@ zip_chain_processed_record = catalog.add_artifact(
             "raw_zip_record_id": raw_zip_record.id,
             "species": "co2",
             "processing_domain": "EUROPE",
-            "archive_member_glob": raw_zip_record.user_metadata.get("archive_member_glob", "*.nc"),
+            "archive_member_glob": raw_zip_record.user_metadata["archive_member_glob"],
+            "member_count": raw_zip_record.user_metadata["member_count"],
         },
     ),
     artifact_writer=CamsZipChainToZarrWriter(),
 )
 ```
 
-This version leaves the raw record independent of the later processing strategy.
-The processing operation chooses the fsspec interpretation when the writer runs,
-so future workflows can use the same raw zip record with different extraction or
-transformation approaches.
+This variant demonstrates fsspec without making the raw zip record depend on a
+specific processing strategy. The tradeoff is that the NetCDF member collection
+is not independently searchable in the catalog.
 
 ## URI reference followed by a download writer
 

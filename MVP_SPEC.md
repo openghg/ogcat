@@ -126,12 +126,14 @@ The context includes:
 - `title_slug` when `title` metadata is present
 - user metadata fields that do not collide with generated field names
 
-Generated context names such as `date_added`, `year_added`, `original_stem`,
-and `title_slug` are reserved metadata keys. Internal identifiers such as
-`id`, `uuid`, `operation_id`, and `artifact_uuid` are also reserved for record
-identity, audit, and storage planning. They are not public storage-template
-inputs. Use explicit metadata names such as `dataset_id` when a domain
-identifier should appear in a human-readable path.
+When ogcat builds a storage naming context, generated context names such as
+`date_added`, `year_added`, `original_stem`, and `title_slug` are reserved
+metadata keys. Internal identifiers such as `id`, `uuid`, `operation_id`, and
+`artifact_uuid` are also reserved in template contexts for record identity,
+audit, and storage planning. They are not public storage-template inputs.
+Explicit-locator records that do not render schema naming templates are not
+subject to this template-context restriction. Use explicit metadata names such
+as `dataset_id` when a domain identifier should appear in a human-readable path.
 
 ### Collision handling
 

@@ -13,7 +13,14 @@ from ogcat.naming import (
 )
 
 
-def test_referenced_template_fields_includes_reserved_fallback_fields() -> None:
+def test_referenced_template_fields_includes_fallback_context_fields() -> None:
+    """Template field extraction includes possible fallback context lookups."""
+    assert referenced_template_fields("{title_slug|dataset_id}_{species}") == frozenset(
+        {"title_slug", "dataset_id", "species"}
+    )
+
+
+def test_referenced_template_fields_includes_internal_fallback_fields() -> None:
     """Template field extraction sees internal fields used as fallbacks."""
     assert referenced_template_fields("{title_slug|uuid}_{species}") == frozenset(
         {"title_slug", "uuid", "species"}

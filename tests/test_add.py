@@ -614,6 +614,24 @@ def test_add_file_allows_domain_identifier_metadata_in_template_replicas(
     assert expected_replica.is_symlink()
 
 
+def test_add_reference_allows_identifier_metadata_without_template_context(tmp_path: Path) -> None:
+    """Explicit-locator records can persist identifier-like user metadata."""
+    source = tmp_path / "external.nc"
+    source.write_text("dummy", encoding="utf-8")
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+
+    record = catalog.add_reference(
+        source,
+        metadata={
+            "id": "domain-id",
+            "uuid": "domain-uuid",
+        },
+    )
+
+    assert record.user_metadata["id"] == "domain-id"
+    assert record.user_metadata["uuid"] == "domain-uuid"
+
+
 def test_add_file_preserves_dotted_stems_and_simple_suffixes(tmp_path: Path) -> None:
     source_dir = tmp_path / "source"
     source_dir.mkdir()

@@ -86,16 +86,19 @@ with reserved generated names, plus these generated fields:
 - ``year_month_or_original_stem``: ``YYYYMM`` from integer-like ``year`` and
   ``month`` metadata, ``YYYY`` from ``year`` alone, or ``original_stem``.
 
-The generated field names above are reserved metadata keys. For example,
+When ogcat builds a storage or template-link naming context, metadata for that
+naming operation cannot define the generated field names above. For example,
 metadata cannot define ``date_added``, ``year_added``, ``original_stem``,
-``original_suffix``, or ``title_slug`` because ogcat owns those names when it
-builds the template context.
+``original_suffix``, or ``title_slug`` because ogcat owns those names while
+rendering the template.
 
 Internal identifiers are deliberately not part of human-readable storage
 template policy. ``id``, ``uuid``, ``operation_id``, and ``artifact_uuid`` are
 reserved for catalog bookkeeping, storage planning, audit, and operation
-correlation. Metadata cannot use those names, and schema naming templates cannot
-reference them. If you need a user-visible identifier in a path, provide it as
+correlation. Schema naming templates cannot reference them, and metadata used
+to render those templates cannot define them. Explicit-locator records that do
+not render schema naming templates are not subject to this template-context
+restriction. If you need a user-visible identifier in a path, provide it as
 ordinary metadata with an explicit domain name such as ``dataset_id``.
 
 Generated replica views are different: they are built from existing
