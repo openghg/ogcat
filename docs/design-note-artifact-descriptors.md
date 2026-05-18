@@ -5,9 +5,9 @@ artifact filesystem model.
 
 ## Chosen Shape
 
-`CatalogRecord` remains the logical catalog entry. It now owns an inline
+`CatalogRecord` remains the logical catalog entry. It now has an inline
 `artifacts` list whose items describe concrete or virtual artifacts associated
-with the record.
+with the record. Records without a meaningful locator may have an empty list.
 
 The first descriptor shape is intentionally small and JSON-compatible:
 
@@ -27,8 +27,11 @@ The first descriptor shape is intentionally small and JSON-compatible:
 }
 ```
 
-The current standard roles are `data_artifact`, `auxiliary_artifact`,
-`view_link`, `manifest`, `preview`, `log`, and `derived_artifact`.
+The current first-slice roles are `data_artifact`, `auxiliary_artifact`,
+`view_link`, `manifest`, `preview`, `log`, and `derived_artifact`. Roles are
+stored as strings, not enforced as a closed enum, so future ADR roles such as
+`replica`, `cache_copy`, and `archive_copy` can be persisted before their
+behavior is implemented.
 
 ## Compatibility Locator
 
@@ -56,6 +59,10 @@ experiment.
 ## Current Limits
 
 `record_type` remains schema and search metadata. It is not an I/O dispatch key.
+
+Only one current `data_artifact` descriptor is accepted in this slice. Replica
+leadership remains deferred to later `leader` or `write_leader` fields instead
+of overloading `primary`.
 
 `claims` and `facets` are placeholders for later typed reader, writer, and
 converter work. This change does not implement replicas, cache/archive policy,

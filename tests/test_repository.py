@@ -6,6 +6,8 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from ogcat.models import ArtifactDescriptor, ArtifactLocator, CatalogRecord
 from ogcat.tinydb_repository import TinyDbCatalogRepository
 
@@ -214,6 +216,69 @@ def test_record_round_trips_with_data_and_preview_artifacts() -> None:
     assert isinstance(artifacts_payload[1], dict)
     assert artifacts_payload[1]["role"] == "preview"
     assert reloaded == record
+
+
+def test_data_artifact_locator_refreshes_compatibility_path_fields() -> None:
+    """Inline data artifacts keep the legacy locator and path fields aligned."""
+    data_locator = ArtifactLocator.path(
+        "/tmp/catalog/files/current.nc",
+        relative_path="files/current.nc",
+    )
+    record = CatalogRecord(
+        id="rec_000005",
+        catalog="fluxes",
+        time_added="2026-04-23T12:00:00Z",
+        locator=ArtifactLocator.path(
+            "/tmp/catalog/files/stale.nc",
+            relative_path="files/stale.nc",
+        ),
+        stored_abspath="/tmp/catalog/files/stale.nc",
+        stored_relpath="files/stale.nc",
+        artifacts=[
+            ArtifactDescriptor(
+                id="data",
+                role="data_artifact",
+                locator=data_locator,
+            )
+        ],
+    )
+
+    assert record.locator == data_locator
+    assert record.stored_abspath == "/tmp/catalog/files/current.nc"
+    assert record.stored_relpath == "files/current.nc"
+    assert record.path() == Path("/tmp/catalog/files/current.nc")
+
+
+def test_record_rejects_multiple_data_artifacts() -> None:
+    """Only one current data artifact is allowed before replica leadership exists."""
+    with pytest.raises(ValueError, match="multiple data_artifact"):
+        CatalogRecord(
+            catalog="fluxes",
+            time_added="2026-04-23T12:00:00Z",
+            artifacts=[
+                ArtifactDescriptor(
+                    id="data",
+                    role="data_artifact",
+                    locator=ArtifactLocator.path("/tmp/catalog/files/current.nc"),
+                ),
+                ArtifactDescriptor(
+                    id="data-copy",
+                    role="data_artifact",
+                    locator=ArtifactLocator.path("/tmp/catalog/files/copy.nc"),
+                ),
+            ],
+        )
+
+
+def test_artifact_descriptor_allows_extension_roles_without_dispatch_semantics() -> None:
+    """Extension roles can persist before ogcat assigns them dispatch behavior."""
+    descriptor = ArtifactDescriptor(
+        id="plugin-report",
+        role="plugin_defined_artifact",
+        relationship={"target_artifact_id": "data"},
+    )
+
+    assert descriptor.to_dict()["role"] == "plugin_defined_artifact"
 
 
 def test_repository_insert_many(tmp_path: Path) -> None:

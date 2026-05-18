@@ -14,6 +14,7 @@ JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 MetadataDict: TypeAlias = dict[str, JsonValue]
 
 DATA_ARTIFACT_ID = "data"
+# Descriptive vocabulary from ADR 0002; descriptor roles remain open strings.
 STANDARD_ARTIFACT_ROLES = frozenset(
     {
         "data_artifact",
@@ -23,6 +24,9 @@ STANDARD_ARTIFACT_ROLES = frozenset(
         "preview",
         "log",
         "derived_artifact",
+        "replica",
+        "cache_copy",
+        "archive_copy",
     }
 )
 
@@ -283,9 +287,8 @@ class ArtifactDescriptor:
         self.state = str(self.state)
         if not self.id:
             raise ValueError("artifact descriptor id cannot be empty")
-        if self.role not in STANDARD_ARTIFACT_ROLES:
-            supported = ", ".join(sorted(STANDARD_ARTIFACT_ROLES))
-            raise ValueError(f"Unsupported artifact role {self.role!r}; expected one of: {supported}")
+        if not self.role.strip():
+            raise ValueError("artifact descriptor role cannot be empty")
         if self.locator is not None and not isinstance(self.locator, ArtifactLocator):
             raise TypeError(
                 "artifact descriptor locator must be an ArtifactLocator or None, "
@@ -335,9 +338,11 @@ class ArtifactDescriptor:
             raise ValueError("artifact descriptor dictionary is missing required key: id")
         if "role" not in data:
             raise ValueError("artifact descriptor dictionary is missing required key: role")
+        raw_id = data["id"]
+        raw_role = data["role"]
         return cls(
-            id=str(data["id"]),
-            role=str(data["role"]),
+            id="" if raw_id is None else str(raw_id),
+            role="" if raw_role is None else str(raw_role),
             locator=_coerce_optional_locator(data.get("locator")),
             state="available" if data.get("state") is None else str(data["state"]),
             relationship=_coerce_required_metadata_dict(
@@ -414,17 +419,12 @@ class CatalogRecord:
         data_locator = _first_data_artifact_locator(self.artifacts)
         if data_locator is not None:
             self.locator = data_locator
+            _sync_path_fields_from_locator(self)
         elif not self.artifacts and _locator_has_value(self.locator):
             self.artifacts = [_data_artifact_descriptor(self.locator)]
-        locator_path = self.locator.as_path()
-        if locator_path is not None and self.stored_abspath is None:
-            self.stored_abspath = str(locator_path)
-        if (
-            self.locator.kind == "path"
-            and self.locator.relative_path is not None
-            and self.stored_relpath is None
-        ):
-            self.stored_relpath = self.locator.relative_path
+            _fill_missing_path_fields_from_locator(self)
+        else:
+            _fill_missing_path_fields_from_locator(self)
 
     def path(self) -> Path | None:
         """Return a local path for path-backed records."""
@@ -527,6 +527,7 @@ def _coerce_artifact_descriptors(value: object) -> list[ArtifactDescriptor]:
 
     descriptors: list[ArtifactDescriptor] = []
     seen_ids: set[str] = set()
+    data_artifact_seen = False
     for index, item in enumerate(value):
         if isinstance(item, ArtifactDescriptor):
             descriptor = item
@@ -538,6 +539,10 @@ def _coerce_artifact_descriptors(value: object) -> list[ArtifactDescriptor]:
             )
         if descriptor.id in seen_ids:
             raise ValueError(f"artifacts contains duplicate artifact id: {descriptor.id!r}")
+        if descriptor.role == "data_artifact":
+            if data_artifact_seen:
+                raise ValueError("artifacts contains multiple data_artifact descriptors")
+            data_artifact_seen = True
         seen_ids.add(descriptor.id)
         descriptors.append(descriptor)
     return descriptors
@@ -571,11 +576,35 @@ def _coerce_metadata_mapping_list(value: object, *, field_name: str) -> list[Met
 
 
 def _first_data_artifact_locator(artifacts: list[ArtifactDescriptor]) -> ArtifactLocator | None:
-    """Return the first data-artifact locator in a descriptor list."""
+    """Return the data-artifact locator in a descriptor list."""
     for artifact in artifacts:
         if artifact.role == "data_artifact" and artifact.locator is not None:
             return artifact.locator
     return None
+
+
+def _sync_path_fields_from_locator(record: CatalogRecord) -> None:
+    """Replace legacy path fields from the current compatibility locator."""
+    locator_path = record.locator.as_path()
+    if locator_path is None:
+        record.stored_abspath = None
+        record.stored_relpath = None
+        return
+    record.stored_abspath = str(locator_path)
+    record.stored_relpath = record.locator.relative_path
+
+
+def _fill_missing_path_fields_from_locator(record: CatalogRecord) -> None:
+    """Populate missing legacy path fields from the current compatibility locator."""
+    locator_path = record.locator.as_path()
+    if locator_path is not None and record.stored_abspath is None:
+        record.stored_abspath = str(locator_path)
+    if (
+        record.locator.kind == "path"
+        and record.locator.relative_path is not None
+        and record.stored_relpath is None
+    ):
+        record.stored_relpath = record.locator.relative_path
 
 
 def _locator_has_value(locator: ArtifactLocator) -> bool:

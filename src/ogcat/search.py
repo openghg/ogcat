@@ -17,6 +17,7 @@ _RESERVED_FIELDS = {
     "catalog",
     "record_type",
     "locator",
+    "artifacts",
     "stored_abspath",
     "stored_relpath",
     "storage_mode",

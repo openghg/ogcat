@@ -2,7 +2,9 @@
 
 A catalog record is the logical catalog entry used for search, schema
 validation, and user metadata. Every record contains a fixed set of reserved
-fields, one or more artifact descriptors, and three metadata namespaces.
+fields, zero or more artifact descriptors, and three metadata namespaces.
+Ordinary records with a physical or referenced data artifact have a
+``data_artifact`` descriptor.
 
 For compatibility, the top-level ``locator`` remains the shortcut to the
 record's data artifact. Code that calls ``record.locator`` or ``record.path()``
@@ -78,7 +80,7 @@ suffix list.
 
 ## Artifact descriptors
 
-``artifacts`` is a JSON-compatible list owned by the record. The first
+``artifacts`` is a JSON-compatible list owned by the record. The
 ``data_artifact`` descriptor is the source for the top-level ``record.locator``
 compatibility value. Existing locator-only records are upgraded on read by
 synthesizing a ``data_artifact`` descriptor from the stored locator.
@@ -97,10 +99,12 @@ The first descriptor shape is deliberately small:
 }
 ```
 
-Current standard roles are ``data_artifact``, ``auxiliary_artifact``,
+Current first-slice roles are ``data_artifact``, ``auxiliary_artifact``,
 ``view_link``, ``manifest``, ``preview``, ``log``, and ``derived_artifact``.
-Claims and facets are placeholders for future typed reader, writer, and
-converter work; they are not dispatch keys in this slice.
+Descriptor roles are stored as strings so future ADR or plugin-owned roles can
+be persisted before their lifecycle behavior exists. Claims and facets are
+placeholders for future typed reader, writer, and converter work; they are not
+dispatch keys in this slice.
 
 ## Searching across namespaces
 
