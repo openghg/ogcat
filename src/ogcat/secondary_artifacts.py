@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Literal, Protocol
 
 from ogcat.hooks import OperationContext
-from ogcat.models import CatalogRecord, MetadataDict
+from ogcat.models import DATA_ARTIFACT_ID, ArtifactDescriptor, ArtifactLocator, CatalogRecord, MetadataDict
 from ogcat.naming import validate_human_readable_template_fields
 from ogcat.replica_types import ReplicaMode
 from ogcat.template_replicas import materialize_template_link_replica
@@ -28,6 +28,7 @@ class SecondaryArtifactResult:
         event_type: Audit event type to emit after successful materialization.
         naming_metadata_updates: Metadata fields to merge onto the staged
             catalog record.
+        artifacts: Artifact descriptors to append to the staged record.
         audit_details: Structured audit details for the operation.
     """
 
@@ -36,6 +37,7 @@ class SecondaryArtifactResult:
     message: str
     event_type: str = "secondary_artifact"
     naming_metadata_updates: MetadataDict = field(default_factory=dict)
+    artifacts: tuple[ArtifactDescriptor, ...] = ()
     audit_details: Mapping[str, object] = field(default_factory=dict)
 
 
@@ -95,6 +97,30 @@ class TemplateLinkSecondaryArtifact:
             message="Template symlink replica created.",
             event_type="replica",
             naming_metadata_updates=materialized.naming_metadata,
+            artifacts=(
+                ArtifactDescriptor(
+                    id="template_link",
+                    role="view_link",
+                    locator=ArtifactLocator.path(
+                        materialized.target_path,
+                        relative_path=materialized.catalog_relative_path,
+                    ),
+                    relationship={
+                        "kind": "view_of",
+                        "target_artifact_id": DATA_ARTIFACT_ID,
+                        "view_role": self.role,
+                    },
+                    facets=[
+                        {
+                            "kind": "local_symlink",
+                            "mode": self.mode,
+                            "storage_relative_path": materialized.storage_relative_path,
+                            "resolved_directory": materialized.resolved_directory,
+                            "resolved_filename": materialized.resolved_filename,
+                        }
+                    ],
+                ),
+            ),
             audit_details={
                 "replica_role": self.role,
                 "replica_mode": self.mode,

@@ -72,6 +72,17 @@ def test_template_link_secondary_artifact_materializes_metadata_and_rollback(
         assert link_path == expected_link_path
         assert result.role == "template_link"
         assert result.mode == "symlink"
+        assert len(result.artifacts) == 1
+        assert result.artifacts[0].role == "view_link"
+        assert result.artifacts[0].locator == ArtifactLocator.path(
+            expected_link_path,
+            relative_path="data/files/2026/alpha/alpha.nc",
+        )
+        assert result.artifacts[0].relationship == {
+            "kind": "view_of",
+            "target_artifact_id": "data",
+            "view_role": "template_link",
+        }
         assert link_path.is_symlink()
         assert not Path(os.readlink(link_path)).is_absolute()
         assert link_path.resolve() == primary_path

@@ -486,12 +486,18 @@ class AddOperationRunner(OperationRunner):
     ) -> CatalogRecord:
         """Persist secondary artifact metadata and emit its audit event."""
         persisted = record
+        updated_record = record
         if result.naming_metadata_updates:
             naming_metadata = dict(record.naming_metadata)
             naming_metadata.update(result.naming_metadata_updates)
-            persisted = self.request.transaction.update_staged_record(
-                replace(record, naming_metadata=naming_metadata)
+            updated_record = replace(updated_record, naming_metadata=naming_metadata)
+        if result.artifacts:
+            updated_record = replace(
+                updated_record,
+                artifacts=[*updated_record.artifacts, *result.artifacts],
             )
+        if updated_record != record:
+            persisted = self.request.transaction.update_staged_record(updated_record)
         self.dependencies.emit_operation_audit(
             add_plan.context,
             event_type=result.event_type,
