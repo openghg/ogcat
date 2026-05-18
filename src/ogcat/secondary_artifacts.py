@@ -9,6 +9,7 @@ from typing import Literal, Protocol
 
 from ogcat.hooks import OperationContext
 from ogcat.models import CatalogRecord, MetadataDict
+from ogcat.naming import validate_human_readable_template_fields
 from ogcat.replica_types import ReplicaMode
 from ogcat.template_replicas import materialize_template_link_replica
 from ogcat.transactions import UnitOfWork
@@ -66,6 +67,10 @@ class TemplateLinkSecondaryArtifact:
     filename_template: str
     role: SecondaryArtifactRole = "template_link"
     mode: ReplicaMode = "symlink"
+
+    def __post_init__(self) -> None:
+        """Validate template-link fields before operation execution starts."""
+        validate_human_readable_template_fields(self.directory_template, self.filename_template)
 
     def run(
         self,

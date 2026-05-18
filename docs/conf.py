@@ -23,7 +23,14 @@ extensions = [
 ]
 
 templates_path = ["_templates"]
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+exclude_patterns = [
+    "_build",
+    "Thumbs.db",
+    ".DS_Store",
+    # GitHub renders this snapshot's Mermaid fences. Exclude it from Sphinx
+    # until the generated docs site has Mermaid rendering configured.
+    "current-architecture-report.md",
+]
 
 html_theme = "furo"
 

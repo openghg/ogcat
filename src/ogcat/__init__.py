@@ -2,7 +2,7 @@
 
 from ogcat.audit import AuditEvent, AuditSink, JsonlAuditSink, read_audit_events
 from ogcat.catalog import Catalog
-from ogcat.classification import classify_artifact
+from ogcat.classification import classify_artifact, collection_classification_metadata
 from ogcat.hooks import ArtifactWriter, HookManager, HookWarning, OperationContext, OperationSource
 from ogcat.models import ArtifactLocator, CatalogRecord, MetadataFieldDescription
 from ogcat.plugins import PluginRegistry
@@ -62,6 +62,7 @@ __all__ = [
     "CatalogRecordSet",
     "CatalogSpec",
     "classify_artifact",
+    "collection_classification_metadata",
     "CopyArtifactWriter",
     "FsspecStorageAdapter",
     "FunctionArtifactWriter",

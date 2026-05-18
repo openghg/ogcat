@@ -69,6 +69,42 @@ directory: {year_added}/{original_stem}
 filename:  {title_slug|original_stem}{original_suffix}
 ```
 
+### Naming template fields
+
+Storage and template-link naming templates are intended to produce
+human-readable paths. They may use user metadata fields that do not collide
+with reserved generated names, plus these generated fields:
+
+- ``date_added``: date used for the add operation, in ``YYYY-MM-DD`` form.
+- ``year_added``: year from ``date_added``.
+- ``original_filename``: source filename used for naming.
+- ``original_stem``: normalized source filename without the preserved suffix.
+- ``original_suffix``: preserved source suffix such as ``.nc`` or
+  ``.tar.gz``.
+- ``title_slug``: slugified ``title`` metadata when a non-empty title is
+  supplied.
+- ``year_month_or_original_stem``: ``YYYYMM`` from integer-like ``year`` and
+  ``month`` metadata, ``YYYY`` from ``year`` alone, or ``original_stem``.
+
+When ogcat builds a storage or template-link naming context, metadata for that
+naming operation cannot define the generated field names above. For example,
+metadata cannot define ``date_added``, ``year_added``, ``original_stem``,
+``original_suffix``, or ``title_slug`` because ogcat owns those names while
+rendering the template.
+
+Internal identifiers are deliberately not part of human-readable storage
+template policy. ``id``, ``uuid``, ``operation_id``, and ``artifact_uuid`` are
+reserved for catalog bookkeeping, storage planning, audit, and operation
+correlation. Schema naming templates cannot reference them, and metadata used
+to render those templates cannot define them. Explicit-locator records that do
+not render schema naming templates are not subject to this template-context
+restriction. If you need a user-visible identifier in a path, provide it as
+ordinary metadata with an explicit domain name such as ``dataset_id``.
+
+Generated replica views are different: they are built from existing
+``CatalogRecord`` objects and may use record fields such as ``id`` when that is
+useful for disambiguating a view.
+
 Pass ``primary_location="template"`` to keep the older template-primary
 behavior:
 

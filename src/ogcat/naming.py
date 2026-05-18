@@ -10,23 +10,30 @@ from typing import Any
 _TEMPLATE_PATTERN = re.compile(r"\{([^{}]+)\}")
 _SLUG_SEPARATOR_PATTERN = re.compile(r"[\s_]+")
 _COMPRESSED_SUFFIXES = {".gz", ".bz2", ".xz", ".zip", ".zst"}
-_RESERVED_TEMPLATE_FIELDS = frozenset(
+_PUBLIC_NAMING_TEMPLATE_FIELDS = frozenset(
     {
         "date_added",
-        "artifact_uuid",
-        "id",
-        "operation_id",
         "original_filename",
         "original_stem",
         "original_suffix",
         "title_slug",
-        "uuid",
         "year_added",
         "year_month_or_original_stem",
     }
 )
+_INTERNAL_NAMING_TEMPLATE_FIELDS = frozenset(
+    {
+        "artifact_uuid",
+        "id",
+        "operation_id",
+        "uuid",
+    }
+)
+_RESERVED_TEMPLATE_FIELDS = _PUBLIC_NAMING_TEMPLATE_FIELDS | _INTERNAL_NAMING_TEMPLATE_FIELDS
 
 
+PUBLIC_NAMING_TEMPLATE_FIELDS = _PUBLIC_NAMING_TEMPLATE_FIELDS
+INTERNAL_NAMING_TEMPLATE_FIELDS = _INTERNAL_NAMING_TEMPLATE_FIELDS
 RESERVED_TEMPLATE_FIELDS = _RESERVED_TEMPLATE_FIELDS
 
 
@@ -128,6 +135,52 @@ def render_template(template: str, context: dict[str, Any]) -> str:
     return _TEMPLATE_PATTERN.sub(replace, template)
 
 
+def referenced_template_fields(template: str) -> frozenset[str]:
+    """Return possible context fields referenced by a template.
+
+    Fallback tokens are ambiguous because :func:`render_template` treats them
+    as context lookups when a matching context key exists, otherwise as literal
+    fallback text. This extractor reports non-empty fallback tokens as possible
+    field references so callers do not miss metadata dependencies such as
+    ``{title_slug|dataset_id}``.
+    """
+    fields: set[str] = set()
+    for match in _TEMPLATE_PATTERN.finditer(template):
+        expr = match.group(1)
+        if "|" in expr:
+            field, fallback = expr.split("|", 1)
+            fallback = fallback.strip()
+        else:
+            field, fallback = expr, ""
+        field = field.strip()
+        if field:
+            fields.add(field)
+        if fallback:
+            fields.add(fallback)
+    return frozenset(fields)
+
+
+def validate_human_readable_template_fields(*templates: str) -> None:
+    """Reject internal storage identifiers in human-readable naming templates.
+
+    Schema storage templates are intended to be stable, readable paths based on
+    user metadata and cheap derived naming context. Internal identifiers remain
+    available to storage planning, audit, and operation internals, but should
+    not become user-facing naming policy.
+
+    Args:
+        *templates: Directory or filename templates to validate.
+
+    Raises:
+        ValueError: If any template references an internal naming field.
+    """
+    referenced = set().union(*(referenced_template_fields(template) for template in templates))
+    internal_fields = sorted(referenced & _INTERNAL_NAMING_TEMPLATE_FIELDS)
+    if internal_fields:
+        joined = ", ".join(internal_fields)
+        raise ValueError(f"Naming templates cannot use internal template field(s): {joined}")
+
+
 def ensure_unique_path(path: Path, *, exists: Callable[[Path], bool] | None = None) -> Path:
     """Return a unique path by appending numeric suffixes if needed."""
     path_exists = Path.exists if exists is None else exists
@@ -225,6 +278,7 @@ def render_storage_location(
     exists: Callable[[Path], bool] | None = None,
 ) -> tuple[Path, str, str]:
     """Render directory and filename templates into a final storage path."""
+    validate_human_readable_template_fields(directory_template, filename_template)
     rel_dir = render_template(directory_template, context)
     rel_dir = "/".join(_normalise_segment(part) for part in rel_dir.split("/") if part)
 
