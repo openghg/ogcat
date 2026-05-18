@@ -15,6 +15,7 @@ actual architecture decision after these concepts have been reviewed.
   - `/Users/bm13805/Desktop/temp/chatgpt_unix_filesystem_review.md`
   - `/Users/bm13805/Desktop/temp/chatgpt_file_system_ideas_5_may_2026.md`
   - `/Users/bm13805/Downloads/ChatGPT-Intake_package_architecture.md`
+  - `/Users/bm13805/Downloads/ChatGPT-Irods_Architecture_Overview.md`
 - Local Intake source checkout at `/Users/bm13805/Documents/intake`.
 - Unix filesystem concepts from the supplied TLPI copy, used only as an analogy:
   descriptors, open file descriptions, inodes, `stat`, directories, links,
@@ -44,9 +45,11 @@ metadata layered over directory-like locators. This is a useful direction to
 preserve: collection-ness should not become `target_kind="collection"`.
 
 Replicas and secondary artifacts currently exist as local symlink-oriented views
-or add-operation side effects. They point toward a future model where records can
-own multiple artifact descriptors: primary data, view links, previews, logs,
-manifests, and derived outputs.
+or add-operation side effects. In iRODS terminology these are not replicas:
+they are view links or secondary artifacts that point at the primary path. They
+point toward a future model where records can own multiple artifact descriptors:
+primary data, view links, previews, logs, manifests, exact copies, caches, and
+derived outputs.
 
 ## Unix Filesystem Analogy
 
@@ -82,6 +85,158 @@ Cautions:
   through common capabilities". It is not a claim that every resource supports
   every operation.
 - ogcat should support structured data interfaces, not only byte streams.
+
+Extended mapping:
+
+| Unix/Linux idea | ogcat analogue | Design pressure |
+| --- | --- | --- |
+| VFS | virtual artifact layer | Dispatch by locator kind, representation, interface claim, and plugin capability. |
+| inode | future `Artifact` descriptor | Current `CatalogRecord` is doing both logical-record and artifact-object work. |
+| dentry/pathname | record lookup, search row, generated view entry, future `ogcat://` path | Names are views over identities, not identities themselves. |
+| open file description | runtime `Handle` | Holds reader/session/cache/options; never persisted. |
+| file descriptor | operation-local handle token | Useful for future APIs; Python can return objects directly. |
+| `stat`/`lstat`/`statx` | cheap artifact facts and facets | Existence, size, mtime, checksums, suffixes, capabilities, stale state. |
+| mount table | storage profiles and namespace mounts | `relative_path` should mean "under this mounted storage profile". |
+| `ioctl` | namespaced plugin options | Escape hatch only for typed, versioned plugin-specific controls. |
+
+File-type analogy:
+
+| Unix file type | ogcat analogue | Where the analogy fails |
+| --- | --- | --- |
+| Regular file | byte artifact, NetCDF file, CSV, archive file | Remote stores may lack atomic rename, stable mtimes, or local path semantics. |
+| Directory | directory artifact, collection root, namespace view | Object-store prefixes are not true directories; listing may be partial or expensive. |
+| Symbolic link | locator alias, template link, generated view link | Can dangle, loop, escape roots, or break when mounts move. |
+| Hard link | multiple names for one artifact identity | Cross-device and remote semantics fail; prefer artifact identity or aliases. |
+| Device file | service/store endpoint behind a driver | Reads can have side effects; auth, rate limits, and driver versions matter. |
+| FIFO/pipe | operation-scoped stream between stages | Blocking, cancellation, partial consumption, and cleanup are runtime concerns. |
+| Socket | remote API/session endpoint | Store endpoint description, not live connection state. |
+
+The analogy is most useful when it reveals a missing layer. For example, if a
+future artifact acts like a symlink, ogcat needs link resolution and dangling
+target behavior. If it acts like a replica, ogcat needs copy state, checksums,
+freshness, and reconciliation. If it acts like a mount, ogcat needs a resolver
+context rather than a baked absolute path.
+
+## iRODS And Replica Research Summary
+
+iRODS separates logical namespace objects from physical storage resources.
+Users operate on collections and data objects; the catalog tracks physical
+replicas of data objects on resources. A replica is an independently
+materialized physical instance of the same logical data object, normally with
+state, resource, path, checksum, size, and freshness information.
+
+Important iRODS ideas for ogcat:
+
+- Logical identity and physical location are separate.
+- A data object can have multiple physical replicas.
+- Storage resources can be real storage backends or coordinating resources.
+- Compound cache/archive resources model fast cache plus deep storage.
+- Replication resources coordinate copies across children.
+- Replica status matters. The supplied notes mention states such as good,
+  intermediate, write-locked, and stale.
+- Finalization is catalog-atomic, but physical writes across resources are not a
+  global distributed transaction. Replication and tiering behave more like
+  state machines with retry and reconciliation.
+
+ogcat equivalents and gaps:
+
+| iRODS concept | Current ogcat analogue | Gap |
+| --- | --- | --- |
+| Data object | `CatalogRecord` plus primary `ArtifactLocator` | No first-class artifact descriptor or multi-copy state. |
+| Collection | `add_collection()` record with directory/prefix locator | No logical member catalog or collection namespace. |
+| Replica | None yet for exact copies; symlink views are only links | Need checksum/freshness/resource/copy state. |
+| Resource | Storage root plus adapter hint | No resource hierarchy, health, policy, or cache/archive coordinator. |
+| Vault | `data/objects/` primary storage tree | Not necessarily archive storage and not a storage resource model. |
+| Rule engine | hooks, writers, secondary artifacts | Python-local, synchronous, and not a policy engine. |
+| Federation | explicit remote locators only | No zones, trust, ACL sync, or remote catalog protocol. |
+
+The ADR should avoid using "replica" for current symlink-based behavior without
+qualification. Today these are better described as `template_link`,
+`view_link`, or symlink view artifacts. Future true replicas should be exact
+copies or exact logical manifests with durability and freshness semantics.
+
+## Links, Replicas, Caches, And Deep Storage
+
+Links and replicas solve different problems and should not share one model.
+
+`view_link`
+: A namespace convenience entry resolving to another locator or artifact. A
+  symlink-style view link is cheap, can dangle, and is host/mount dependent. It
+  does not prove that another physical copy exists.
+
+`alias`
+: A second logical name for the same artifact identity. This is closer to a
+  hard-link analogy, but should be modeled by shared artifact identity rather
+  than local filesystem hard links.
+
+`replica`
+: An independently materialized exact copy of artifact content, usually on a
+  different resource. It needs a source artifact, target resource, checksum or
+  manifest, copy state, freshness state, and reconciliation history.
+
+`cache_copy`
+: A replica-like copy managed for access speed rather than authority. It needs
+  cache policy, eviction/refresh behavior, and a way to distinguish stale but
+  usable copies from invalid copies.
+
+`archive_copy`
+: A durable copy in deep storage. It needs retention, restore, staging, and
+  asynchronous transfer state. It may not be immediately openable as a normal
+  artifact handle.
+
+`derived_artifact`
+: A transformed output. It may be reproducible from another artifact, but it is
+  not a replica unless the invariant says it is byte-for-byte or
+  manifest-for-manifest identical.
+
+Possible copy states for future discussion:
+
+- `available`: copy is present and believed current.
+- `stale`: copy exists but no longer matches the current leader/primary.
+- `building`: copy is being created.
+- `restoring`: deep-storage copy is being staged for local use.
+- `missing`: catalog says a copy should exist, but it cannot be found.
+- `unverified`: copy exists, but exactness has not been proven.
+- `failed`: creation, verification, or refresh failed.
+
+The "primary vs. secondary artifact" distinction looks like leader-based
+replication only if primary means "write leader for canonical content". The ADR
+must decide whether primary means canonical content, preferred read location,
+write leader, first materialized locator, or simply backward-compatible
+`record.locator`.
+
+## Mounts And Relative Locator Resolution
+
+Mounts are central to carrying the filesystem analogy beyond local paths.
+Current `ArtifactLocator.relative_path` should be preserved as a useful seed for
+a higher-level resolver model.
+
+The future model could store a locator as:
+
+```text
+Locator(
+    kind="path" | "urlpath" | "uri" | "opaque" | "ogcat" | "query" | "service",
+    value=<root-relative value or external endpoint>,
+    mount_id=<optional storage/mount profile>,
+    relative_path=<path under the mounted root>,
+)
+```
+
+Under this model, the same artifact can resolve differently depending on where
+the catalog is opened:
+
+- On the original HPC server, `mount_id="hpc-a-objects"` plus
+  `relative_path="objects/ab/cd/file.nc"` can resolve to a local POSIX path.
+- On a laptop, the same mount can resolve to an `ssh://...` fsspec urlpath.
+- In a workflow runner, it can resolve to an object-store urlpath or staged
+  scratch directory.
+
+This is not federation by itself. It is mount-relative locator resolution:
+artifact identity remains catalog-local, while storage access is interpreted
+through the current resolver context.
+
+The ADR should decide whether `relative_path` remains an optional convenience
+field or becomes part of a formal `(mount_ref, relative_path)` locator model.
 
 ## Intake Take2 Research Summary
 
@@ -222,6 +377,304 @@ A plain directory reference should remain a directory unless explicitly claimed
 as a collection. A managed collection output should be a directory or prefix
 artifact with collection claims and facets.
 
+## Pipes, Filters, And Handle Lifetimes
+
+The target architecture can make a pipes-and-filters model explicit without
+reducing every operation to bytes. The pipe is a typed runtime interface; the
+filter is a reader, converter, writer, or domain operation.
+
+Example typed pipeline:
+
+```text
+zip artifact
+  -> Reader[archive-members]
+  -> Writer[managed directory + collection facets]
+  -> Reader[xarray.Dataset]
+  -> Converter[domain boundary-condition dataset]
+  -> Writer[Zarr store artifact]
+```
+
+Important lifecycle rule: handles are runtime objects, not metadata. If a
+reader opens files, remote sessions, xarray datasets, fsspec filesystems,
+temporary caches, or streams, the operation envelope should own their cleanup.
+An `ExitStack`-like scope lets users write a simple context manager for a
+single operation while composed operations close resources automatically.
+
+Recommended operation lifecycle:
+
+1. Resolve input artifact descriptors and locator context.
+2. Validate declared claims, options, and plugin availability.
+3. Plan output artifact targets and rollback actions.
+4. Open reader handles inside an operation-owned context stack.
+5. Run converters/writers while handles are still open.
+6. Persist artifact descriptors, facets, and provenance.
+7. Close handles in reverse order.
+8. Run rollback actions if any stage fails.
+
+Lazy handles can be useful, especially for xarray and fsspec, but they should
+not silently escape a closed operation scope. The ADR should decide whether a
+pipeline can return a user-owned context-managed handle, whether operations must
+materialize outputs before closing, or whether both modes are allowed.
+
+## Domain Model Layers
+
+Possible layer boundaries:
+
+1. Catalog persistence: records, artifact descriptors, metadata namespaces,
+   operation journal, and audit log.
+2. Namespace and mount resolution: record lookup, generated views, `ogcat://`
+   paths, mount table, and storage-profile resolution.
+3. Locator/resource layer: path/urlpath/uri/opaque/query/service locators,
+   resource health, credentials profile names, and storage capabilities.
+4. Artifact facts layer: claims, facets, cheap inspection, checksums,
+   manifests, stale evidence, and validation results.
+5. Capability layer: reader, writer, converter, locator driver, and storage
+   adapter registries.
+6. Runtime handle layer: opened datasets, streams, fsspec files, service
+   sessions, temporary caches, and cleanup scopes.
+7. Operation layer: typed pipelines, rollback, provenance, materialization,
+   validation, and reconciliation.
+8. Presentation layer: `Catalog`, CLI, documentation examples, query views, and
+   optional Intake adapters.
+
+The layer split should keep core dependency-light. Core can know that an
+artifact claims `xarray.Dataset` as an interface, but it should not import
+xarray unless a plugin provides the reader.
+
+## Class, Role, Collaborator Sketch
+
+| Class/concept | Role | Main collaborators |
+| --- | --- | --- |
+| `CatalogRecord` | Logical catalog entry for search, schema, lifecycle, and provenance. | Owns `Artifact` descriptors; linked to operations and metadata schemas. |
+| `Artifact` | Persistent descriptor for one concrete or virtual object owned by a record. | Has locators, roles, copy/link relationships, claims, facets, and state. |
+| `Locator` | Serializable description of where an artifact is or can be resolved. | Resolved by mount/resource context and locator drivers. |
+| `StorageResource` | Named storage profile, root, adapter, and capabilities. | Used by locators, storage plans, replicas, caches, and mount resolver. |
+| `DataTypeClaim` | Intake-aligned source/external type assertion. | Informs readers, converters, validators, and documentation. |
+| `Representation` | Storage/encoding shape of an artifact. | Connects locators to readers and writers. |
+| `InterfaceClaim` | Capability contract an artifact can expose. | Dispatch key for reader/converter selection. |
+| `Facet` | Namespaced fact with evidence and confidence. | Produced by inspectors, readers, writers, validators, and plugins. |
+| `Reader` | Opens an artifact through an interface and returns a runtime handle/object. | Uses locators, claims, facets, plugins, and operation context. |
+| `Writer` | Materializes runtime data or source handles into artifact storage. | Uses storage plans/resources and returns artifact result metadata. |
+| `Converter` | Transforms one runtime interface into another. | Composes readers and writers; may be lazy or materializing. |
+| `Handle` | Runtime opened object scoped to an operation or user context. | Owned by operation lifecycle; closed by user or operation stack. |
+| `Operation` | Execution envelope for typed pipelines. | Coordinates readers, writers, converters, rollback, audit, and provenance. |
+
+UML-style structural sketch:
+
+```mermaid
+classDiagram
+  class CatalogRecord {
+    record_id
+    record_type
+    user_metadata
+    derived_metadata
+    lifecycle_state
+  }
+  class Artifact {
+    artifact_id
+    role
+    relation
+    state
+    primary_compatibility
+  }
+  class Locator {
+    kind
+    value
+    mount_id
+    relative_path
+  }
+  class Claim {
+    kind
+    name
+    evidence
+    confidence
+  }
+  class Facet {
+    namespace
+    data
+    evidence
+    confidence
+  }
+  class StorageResource {
+    resource_id
+    adapter
+    root
+    capabilities
+  }
+  class Operation {
+    operation_id
+    inputs
+    outputs
+    provenance
+  }
+  class Handle {
+    interface_name
+    reader_name
+    runtime_state
+  }
+
+  CatalogRecord "1" o-- "*" Artifact
+  Artifact "1" o-- "*" Locator
+  Artifact "1" o-- "*" Claim
+  Artifact "1" o-- "*" Facet
+  Locator --> StorageResource
+  Operation --> "*" Artifact
+  Handle --> Artifact
+```
+
+Interface sketch for ADR discussion:
+
+```python
+class LocatorDriver(Protocol):
+    def stat(self, locator: Locator, *, follow: bool = True) -> ArtifactStat: ...
+    def list(self, locator: Locator) -> Iterable[DirectoryEntry]: ...
+    def open_bytes(self, locator: Locator) -> ContextManager[BinaryIO]: ...
+
+
+class Reader(Protocol):
+    name: str
+    input_interfaces: Sequence[str]
+    output_interface: str
+
+    def open(
+        self,
+        artifact: Artifact,
+        *,
+        context: OperationContext,
+        options: Mapping[str, object],
+    ) -> ContextManager[object]: ...
+
+
+class Writer(Protocol):
+    name: str
+    input_interfaces: Sequence[str]
+    output_representation: str
+
+    def write(
+        self,
+        source: object,
+        target: ArtifactTarget,
+        *,
+        context: OperationContext,
+    ) -> ArtifactWriteResult: ...
+
+
+class Converter(Protocol):
+    name: str
+    input_interface: str
+    output_interface: str
+
+    def convert(
+        self,
+        source: object,
+        *,
+        context: OperationContext,
+        options: Mapping[str, object],
+    ) -> ContextManager[object] | object: ...
+```
+
+## Data Flow Sketches
+
+Single-file ingest as the future model:
+
+```mermaid
+flowchart LR
+  A["Local source path"] --> B["copy/move writer"]
+  B --> C["Primary artifact descriptor"]
+  C --> D["record.locator compatibility field"]
+  B --> E["facts: size, suffix, checksum, inferred claims"]
+  E --> F["CatalogRecord"]
+```
+
+Managed zip-to-collection flow:
+
+```mermaid
+flowchart LR
+  A["Zip artifact"] --> B["archive reader"]
+  B --> C["collection writer"]
+  C --> D["Managed directory or prefix artifact"]
+  D --> E["collection interface claim"]
+  D --> F["manifest/pattern facets"]
+  E --> G["xarray reader plugin"]
+```
+
+Remote/deep-storage cache flow:
+
+```mermaid
+flowchart LR
+  A["Archive/deep storage locator"] --> B["restore or cache operation"]
+  B --> C["Local cache_copy artifact"]
+  C --> D["available or stale state"]
+  C --> E["reader dispatch"]
+  A --> F["archive_copy state and checksum"]
+```
+
+Mount-relative resolution:
+
+```mermaid
+flowchart LR
+  A["Artifact locator: mount_id + relative_path"] --> B["Resolver context"]
+  B --> C["local POSIX path on HPC"]
+  B --> D["ssh:// urlpath on laptop"]
+  B --> E["object-store urlpath in workflow runner"]
+```
+
+## Core Versus Extras
+
+Likely core responsibilities:
+
+- Catalog records, artifact descriptors, locator schema, and compatibility
+  `record.locator`.
+- Claim/facet metadata structures, evidence/confidence vocabulary, and cheap
+  inspection hooks.
+- Storage plans, resources or mount profiles, and path/urlpath/uri/opaque
+  locator basics.
+- Operation lifecycle, rollback, audit, provenance stubs, and handle cleanup.
+- Minimal bytes, text, directory listing, archive-member, and manifest
+  interfaces when dependency-light implementations exist.
+
+Likely plugin or optional-extra responsibilities:
+
+- NetCDF, HDF5, Zarr, xarray, pandas, SQL, Intake, and OpenGHG-specific readers.
+- CAMS archive extraction and boundary-condition transforms.
+- fsspec caching policies beyond simple urlpath support.
+- HPC staging, deep-storage restore, async replication, and reconciliation
+  policies.
+- iRODS/DataLad/S3/GCS/Azure adapters and any federation protocol.
+- Domain validators that require scientific dependencies or domain credentials.
+
+The core should be able to list, search, inspect, and preserve metadata for an
+artifact whose reader plugin is absent. Opening through that missing interface
+should fail clearly with a plugin/capability error, not corrupt the catalog.
+
+## API Simplification Pressure Points
+
+The current CAMS artifact workflow is useful because it exposes the missing
+abstractions:
+
+- The user manually plans directory storage for a managed collection.
+- The archive extraction writer manually returns collection classification
+  metadata.
+- The xarray step manually opens the collection with a context manager.
+- The processed output manually carries source locator and reader-hint metadata.
+
+In the target model, `add_file()` can be understood as a convenience operation:
+"create a primary artifact by copying/moving a local source through a default
+writer, infer cheap claims/facets, and maintain `record.locator`
+compatibility." It should not be a separate conceptual pathway.
+
+`add_reference()` can be understood as: "create an artifact descriptor with an
+external locator and declared or inferred claims; do not take storage ownership."
+
+`add_collection()` can be understood as: "create a directory/prefix/archive
+artifact with explicit collection/interface claims." It should support both
+reference collections and managed collection writes, but collection-ness should
+remain a claim/facet, not a storage target kind.
+
+`add_artifact()` can remain the low-level escape hatch, while higher-level APIs
+route through the same operation model. Documentation can then teach one mental
+model instead of separate locator-management recipes.
+
 ## Likely Issue Sequence
 
 These are planned issue slices. They should remain checklist items on #108 until
@@ -237,13 +690,40 @@ the ADR makes each slice concrete enough to open as a separate sub-issue.
 8. Intake plugin design spike.
 9. Migration and compatibility plan for existing single-locator catalogs.
 10. Virtual namespace and `ogcat://` resolver exploration.
+11. Replica, link, cache, and archive-copy vocabulary.
+12. Mount-relative locator and storage-resource model.
+13. Operation-owned handle lifecycle and composed pipeline cleanup.
+14. Documentation simplification for `add_file`, `add_reference`,
+    `add_collection`, and `add_artifact`.
 
 ## ADR Questions To Resolve
 
 - Should the first persistent step be inline `CatalogRecord.artifacts`, a
   separate artifact registry, or prototype metadata under `derived_metadata`?
+- What is canonical for an artifact: record ID, artifact ID, locator, checksum,
+  virtual path, or a combination?
+- What does `primary` mean: canonical logical content, preferred read location,
+  write leader, first materialized copy, or backward-compatible
+  `record.locator`?
+- Should current symlink "replica" terminology be renamed before adding true
+  replicas?
+- What invariant defines an exact replica: byte checksum, directory manifest,
+  member checksums, size, metadata, or a type-specific validator?
+- Are caches, deep-storage copies, and HPC copies modeled as artifact roles,
+  storage-resource policies, operation outputs, or separate records linked by
+  provenance?
+- Should replica/cache/deep-storage work be synchronous in the add operation,
+  asynchronous through a durable journal, or user-triggered reconciliation?
+- Should `relative_path` become mount-relative with explicit `mount_id` or
+  storage profile?
+- What is the minimum storage resource model: named root, adapter, vault path
+  template, credentials profile, health, and capabilities?
+- Is federation in scope, or should ogcat only interoperate with iRODS, DataLad,
+  S3, and similar systems through explicit locators and plugins?
 - Should `DataTypeClaim` and `InterfaceClaim` be separate persisted structures,
   or should one claim type carry both source form and access capability?
+- Which core storage shapes are required: `file`, `directory`, `prefix`,
+  `archive`, `stream`, `service`, `inline`, or another set?
 - How much reader/writer/converter recipe information is safe to persist in core
   metadata?
 - Which confidence values are required: declared, inferred, probed, validated,
@@ -251,6 +731,14 @@ the ADR makes each slice concrete enough to open as a separate sub-issue.
 - How should plugin capability names be versioned and namespaced?
 - What belongs in core versus optional plugins for bytes/text/directory/archive,
   NetCDF, Zarr, xarray, pandas, Intake, and OpenGHG-specific data?
+- Should collection descriptions require member manifests, pattern facets, or
+  both?
+- When should pipelines stream through handles versus materialize intermediate
+  artifacts?
+- Can a pipeline return a lazy user-owned handle, or must all operation-owned
+  handles close before the operation returns?
+- What driver error taxonomy is needed for unsupported, missing, stale,
+  permission-denied, transient, and partial-write failures?
 - How should operation provenance be represented before a full provenance graph
   exists?
 - Which migration path is acceptable for existing catalogs with one primary
@@ -268,3 +756,12 @@ the ADR makes each slice concrete enough to open as a separate sub-issue.
 - Suffix-only detection is represented as inferred evidence, not validated truth.
 - Optional Intake, xarray, and pandas integrations can be absent without breaking
   core catalog use.
+- A symlink/template view is modeled as a link artifact, not an exact replica.
+- A cache copy on another HPC machine can be tracked separately from the
+  primary artifact and marked stale or unavailable.
+- A deep-storage archive copy can require restore before normal readers can open
+  it.
+- A mount-relative locator can resolve to a local POSIX path on one machine and
+  an fsspec/SSH urlpath on another without rewriting catalog identity.
+- A composed xarray workflow closes datasets/files automatically after the
+  materializing writer finishes.
