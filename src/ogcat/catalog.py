@@ -189,6 +189,7 @@ class Catalog:
         operation: str | None = None,
         record_type: str | None = None,
         primary_location: PrimaryLocation = "uuid",
+        create_template_replica: bool = True,
     ) -> CatalogRecord:
         """Add a local file using managed copy or move.
 
@@ -198,8 +199,11 @@ class Catalog:
             operation: ``"copy"`` or ``"move"``. Defaults to the catalog spec.
             record_type: Optional named schema to validate against.
             primary_location: ``"uuid"`` stores the primary artifact under a
-                UUID path and creates a template symlink replica. ``"template"``
-                stores the primary artifact at the rendered template path.
+                UUID path. ``"template"`` stores the primary artifact at the
+                rendered template path.
+            create_template_replica: Whether UUID-primary file adds create a
+                human-readable template symlink replica. Ignored for
+                template-primary adds.
 
         Returns:
             Persisted catalog record.
@@ -233,6 +237,7 @@ class Catalog:
             filename_template=filename_template,
             operation=chosen_operation,
             primary_location=resolved_primary_location,
+            create_template_replica=create_template_replica,
             time_added=timestamp,
         )
 

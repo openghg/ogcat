@@ -69,6 +69,30 @@ def test_add_file_template_replica_uses_relative_symlink_target(tmp_path: Path) 
     assert replica_path.resolve() == _stored_path(record)
 
 
+def test_add_file_uuid_primary_can_skip_template_replica(tmp_path: Path) -> None:
+    """UUID-primary managed ingest can omit the human-readable template replica."""
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = source_dir / "example.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="files"))
+
+    record = catalog.add_file(source, create_template_replica=False)
+
+    artifact_uuid = str(record.naming_metadata["artifact_uuid"])
+    expected_primary = root / "data" / "objects" / artifact_uuid[:2] / f"{artifact_uuid}.nc"
+    expected_replica = root / "data" / "files" / record.time_added[:4] / "example" / "example.nc"
+    assert _stored_path(record) == expected_primary
+    assert expected_primary.exists()
+    assert not expected_replica.exists()
+    assert not expected_replica.is_symlink()
+    assert "template_replica_path" not in record.naming_metadata
+    assert "template_replica_storage_relative_path" not in record.naming_metadata
+    assert record.naming_metadata["primary_location"] == "uuid"
+
+
 def test_add_file_can_store_primary_at_template_path(tmp_path: Path) -> None:
     """Callers can request the template path as the primary artifact location."""
     source_dir = tmp_path / "source"

@@ -61,6 +61,17 @@ record = catalog.add_file(
 print(record.path())      # primary UUID path inside data/objects/
 ```
 
+Pass ``create_template_replica=False`` to keep only the UUID primary copy and
+skip the human-readable template symlink:
+
+```python
+record = catalog.add_file(
+    Path("data.nc"),
+    metadata={"species": "CO2"},
+    create_template_replica=False,
+)
+```
+
 The human-readable replica location is derived from directory and filename
 templates stored in ``catalog.json``. The defaults are:
 

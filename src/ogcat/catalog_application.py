@@ -57,6 +57,7 @@ class CatalogApplication:
         filename_template: str,
         operation: str,
         primary_location: PrimaryLocation,
+        create_template_replica: bool,
         time_added: str,
     ) -> CatalogRecord:
         """Run the managed local-file add operation."""
@@ -126,6 +127,7 @@ class CatalogApplication:
         materialization_intent = writer_intent(artifact_writer)
         secondary_artifact_operations = self._template_link_secondary_artifacts(
             primary_location=primary_location,
+            create_template_replica=create_template_replica,
             directory_template=directory_template,
             filename_template=filename_template,
         )
@@ -267,11 +269,12 @@ class CatalogApplication:
         self,
         *,
         primary_location: PrimaryLocation,
+        create_template_replica: bool,
         directory_template: str,
         filename_template: str,
     ) -> tuple[SecondaryArtifactOperation, ...]:
         """Return default secondary artifacts for UUID primary file adds."""
-        if primary_location != "uuid":
+        if primary_location != "uuid" or not create_template_replica:
             return ()
         return (
             TemplateLinkSecondaryArtifact(

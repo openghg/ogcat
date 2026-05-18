@@ -59,7 +59,7 @@ class SecondaryArtifactOperation(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class TemplateLinkSecondaryArtifact:
-    """Required template-link symlink secondary for UUID primary artifacts."""
+    """Template-link symlink secondary for UUID primary artifacts."""
 
     catalog_root: Path
     files_root: Path
