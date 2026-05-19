@@ -889,7 +889,10 @@ def _coerce_artifact_claims(value: object, *, field_name: str) -> list[ArtifactC
     if value is None:
         return []
     if not isinstance(value, list | tuple):
-        raise TypeError(f"{field_name} must be a list of claim dictionaries, got {type(value).__name__}")
+        raise TypeError(
+            f"{field_name} must be a list of ArtifactClaim objects or dictionaries, "
+            f"got {type(value).__name__}"
+        )
 
     claims = [
         _coerce_artifact_claim(item, field_name=f"{field_name}[{index}]") for index, item in enumerate(value)
@@ -911,7 +914,10 @@ def _coerce_artifact_facets(value: object, *, field_name: str) -> list[ArtifactF
     if value is None:
         return []
     if not isinstance(value, list | tuple):
-        raise TypeError(f"{field_name} must be a list of facet dictionaries, got {type(value).__name__}")
+        raise TypeError(
+            f"{field_name} must be a list of ArtifactFacet objects or dictionaries, "
+            f"got {type(value).__name__}"
+        )
 
     facets = [
         _coerce_artifact_facet(item, field_name=f"{field_name}[{index}]") for index, item in enumerate(value)
