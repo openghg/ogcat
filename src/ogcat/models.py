@@ -63,8 +63,6 @@ STANDARD_ARTIFACT_ROLES = frozenset(
         "archive_copy",
     }
 )
-ArtifactClaimInput: TypeAlias = "ArtifactClaim | Mapping[str, object]"
-ArtifactFacetInput: TypeAlias = "ArtifactFacet | Mapping[str, object]"
 
 
 def normalize_metadata(
@@ -577,6 +575,8 @@ class ArtifactFacet:
 
 Representation = RepresentationClaim
 Facet = ArtifactFacet
+ArtifactClaimInput: TypeAlias = ArtifactClaim | Mapping[str, object]
+ArtifactFacetInput: TypeAlias = ArtifactFacet | Mapping[str, object]
 
 
 @dataclass(slots=True)

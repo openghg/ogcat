@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from pathlib import Path
+from typing import get_args, get_type_hints
 
 import pytest
 
 from ogcat.models import (
+    ArtifactClaim,
     ArtifactDescriptor,
     ArtifactFacet,
     ArtifactLocator,
@@ -335,6 +337,16 @@ def test_raw_claim_and_facet_dicts_are_normalized_for_compatibility() -> None:
             "metadata": {"format": "png"},
         }
     ]
+
+
+def test_artifact_descriptor_claim_facet_type_hints_resolve_runtime_aliases() -> None:
+    """Runtime type-hint consumers should see concrete claim and facet input aliases."""
+    hints = get_type_hints(ArtifactDescriptor)
+    claim_input = get_args(hints["claims"])[0]
+    facet_input = get_args(hints["facets"])[0]
+
+    assert ArtifactClaim in get_args(claim_input)
+    assert ArtifactFacet in get_args(facet_input)
 
 
 def test_suffix_only_detection_can_be_represented_as_inferred_evidence() -> None:
