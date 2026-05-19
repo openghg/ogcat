@@ -50,13 +50,15 @@ Plugin
   usually through `PluginRegistry`.
 
 Operation context
-: The mutable `OperationContext` object passed to hooks and artifact writers.
-  It carries source information, planned locators, metadata, warnings, and the
-  rollback registrar for the active operation.
+: The mutable `OperationContext` object passed to hooks and embedded in
+  `ArtifactWriteRequest` for writers. It carries source information, planned
+  locators, metadata, warnings, and the rollback registrar for the active
+  operation.
 
 Artifact writer
 : Any object satisfying the `ArtifactWriter` protocol. Writers materialise
-  artifact data from an `OperationSource` into a target `ArtifactLocator`.
+  artifact data from an `ArtifactWriteRequest` and return an
+  `ArtifactWriteResult` describing produced descriptor facts.
 
 Operation source
 : The `OperationSource` description passed to artifact writers. It can carry a

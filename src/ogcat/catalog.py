@@ -29,7 +29,14 @@ from ogcat.hooks import (
     coerce_hook_iterable,
     validate_hook_objects,
 )
-from ogcat.models import ArtifactLocator, CatalogRecord, JsonValue, MetadataDict, normalize_metadata
+from ogcat.models import (
+    ArtifactDescriptor,
+    ArtifactLocator,
+    CatalogRecord,
+    JsonValue,
+    MetadataDict,
+    normalize_metadata,
+)
 from ogcat.operation_helpers import (
     artifact_locator_from_context,
     naming_metadata_from_storage_plan,
@@ -1168,6 +1175,7 @@ class Catalog:
         original_path: str | Path | None = None,
         original_filename: str | None = None,
         suffixes: list[str] | None = None,
+        artifacts: list[ArtifactDescriptor] | None = None,
         derived_metadata: Mapping[Any, Any] | None = None,
         naming_metadata: Mapping[Any, Any] | None = None,
         time_added: str | None = None,
@@ -1199,6 +1207,7 @@ class Catalog:
             time_added=resolved_time_added,
             record_type=record_type,
             locator=locator,
+            artifacts=[] if artifacts is None else list(artifacts),
             stored_abspath=str(locator_path) if locator_path is not None else None,
             stored_relpath=locator.relative_path if locator.kind == "path" else None,
             storage_mode=storage_mode,

@@ -8,8 +8,16 @@ import pytest
 
 import ogcat.catalog_application as catalog_application_module
 import ogcat.storage_planning as storage_planning
-from ogcat import ArtifactLocator, Catalog, CatalogSpec, PluginRegistry, RecordSchema
-from ogcat.hooks import OperationContext, OperationSource
+from ogcat import (
+    ArtifactLocator,
+    ArtifactWriteRequest,
+    ArtifactWriteResult,
+    Catalog,
+    CatalogSpec,
+    PluginRegistry,
+    RecordSchema,
+)
+from ogcat.hooks import OperationContext
 from ogcat.materialization import (
     MaterializationIntent,
     MaterializationPlan,
@@ -780,10 +788,11 @@ def test_add_file_hook_urlpath_redirect_updates_plan_and_skips_path_extractor(
             assert context.storage_plan.locator.kind == "urlpath"
             assert context.storage_plan.adapter == "fsspec"
 
-    def fake_write(self, context: OperationContext, source: OperationSource, target: ArtifactLocator) -> None:
-        assert source.path == source_file
-        assert target.kind == "urlpath"
-        context.derived_metadata["writer"] = "redirected"
+    def fake_write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
+        assert request.source.path == source_file
+        assert request.locator.kind == "urlpath"
+        request.context.derived_metadata["writer"] = "redirected"
+        return ArtifactWriteResult.from_artifact(request.target)
 
     def fail_extract(path: Path) -> dict[str, object]:
         raise AssertionError(f"path extractor should not run for redirected target {path}")

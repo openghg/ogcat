@@ -8,6 +8,8 @@ import pytest
 
 from ogcat import (
     ArtifactLocator,
+    ArtifactWriteRequest,
+    ArtifactWriteResult,
     Catalog,
     CatalogSpec,
     HookManager,
@@ -702,20 +704,19 @@ def test_add_artifact_is_record_only_without_writer(tmp_path: Path) -> None:
 
 def test_plugin_writer_receives_source_and_target_and_persists_metadata(tmp_path: Path) -> None:
     class TextWriter:
-        def write(
-            self,
-            context: OperationContext,
-            source: OperationSource,
-            target: ArtifactLocator,
-        ) -> None:
-            target_path = target.as_path()
+        def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
+            target_path = request.locator.as_path()
             assert target_path is not None
-            assert source.kind == "text"
+            assert request.source.kind == "text"
             target_path.parent.mkdir(parents=True, exist_ok=True)
-            target_path.write_text(str(source.metadata["text"]), encoding="utf-8")
-            context.rollback(lambda path=target_path: path.unlink(missing_ok=True), description="remove text")
-            context.derived_metadata["writer_source_kind"] = source.kind
-            context.derived_metadata["writer_target_name"] = target_path.name
+            target_path.write_text(str(request.source.metadata["text"]), encoding="utf-8")
+            request.context.rollback(
+                lambda path=target_path: path.unlink(missing_ok=True),
+                description="remove text",
+            )
+            request.context.derived_metadata["writer_source_kind"] = request.source.kind
+            request.context.derived_metadata["writer_target_name"] = target_path.name
+            return ArtifactWriteResult.from_artifact(request.target)
 
     target = tmp_path / "out" / "artifact.txt"
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
@@ -734,17 +735,16 @@ def test_plugin_writer_receives_source_and_target_and_persists_metadata(tmp_path
 
 def test_plugin_writer_rollback_removes_created_artifact_after_hook_failure(tmp_path: Path) -> None:
     class TextWriter:
-        def write(
-            self,
-            context: OperationContext,
-            source: OperationSource,
-            target: ArtifactLocator,
-        ) -> None:
-            target_path = target.as_path()
+        def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
+            target_path = request.locator.as_path()
             assert target_path is not None
             target_path.parent.mkdir(parents=True, exist_ok=True)
             target_path.write_text("created", encoding="utf-8")
-            context.rollback(lambda path=target_path: path.unlink(missing_ok=True), description="remove text")
+            request.context.rollback(
+                lambda path=target_path: path.unlink(missing_ok=True),
+                description="remove text",
+            )
+            return ArtifactWriteResult.from_artifact(request.target)
 
     class FailingHook:
         def before_record_write(self, context: OperationContext) -> None:
@@ -773,15 +773,11 @@ def test_unzip_style_writer_persists_directory_metadata_and_rolls_back(tmp_path:
                 raise RuntimeError("fail after unzip")
 
     class UnzipWriter:
-        def write(
-            self,
-            context: OperationContext,
-            source: OperationSource,
-            target: ArtifactLocator,
-        ) -> None:
+        def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
+            source = request.source
             if source.path is None:
                 raise ValueError("zip source path is required")
-            target_path = target.as_path()
+            target_path = request.locator.as_path()
             if target_path is None:
                 raise ValueError("zip target path is required")
 
@@ -790,13 +786,14 @@ def test_unzip_style_writer_persists_directory_metadata_and_rolls_back(tmp_path:
                 archive.extractall(target_path)
                 names = sorted(archive.namelist())
 
-            context.rollback(
+            request.context.rollback(
                 lambda path=target_path: shutil.rmtree(path, ignore_errors=True),
                 description=f"remove extracted directory {target_path}",
             )
-            context.derived_metadata["file_count"] = len(names)
+            request.context.derived_metadata["file_count"] = len(names)
             extracted_names: list[JsonValue] = list(names)
-            context.derived_metadata["extracted_names"] = extracted_names
+            request.context.derived_metadata["extracted_names"] = extracted_names
+            return ArtifactWriteResult.from_artifact(request.target)
 
     archive_path = tmp_path / "source.zip"
     with zipfile.ZipFile(archive_path, "w") as archive:

@@ -109,10 +109,17 @@ database transactions.
 ## Writing Artifacts From Plugins
 
 Artifact writers materialise data before the catalog record is written. They receive the active
-`OperationContext`, an `OperationSource`, and the resolved target `ArtifactLocator`. Writers should
-create the artifact, register rollback for anything they created, and add writer-derived metadata to
-`context.derived_metadata`. `ogcat.writers` includes small helper writers for examples and lightweight
-workflows; they are intentionally minimal wrappers, not a full pipeline system.
+`ArtifactWriteRequest`, which contains the `OperationContext`, `OperationSource`, planned target
+`ArtifactDescriptor`, and storage plan. Writers should create the artifact, register rollback for
+anything they created, and return an `ArtifactWriteResult` with descriptor facts to merge into the
+catalog record. Diagnostics and provenance on the result are audit-only; persisted artifact facts
+belong in descriptor claims, facets, relationship metadata, locator, or state.
+
+The convenience wrappers in `ogcat.writers` keep one-off functions small. Wrapped functions can still
+return `None` or a metadata dictionary, and the adapter converts that return value into an
+`ArtifactWriteResult`. A descriptor-first writer class should implement `write(request)` directly.
+`ogcat.writers` remains intentionally minimal: it is not a read-handle API, managed collection API,
+or runtime pipeline system.
 
 `add_artifact()` remains record-only unless a writer is explicitly supplied:
 
@@ -149,7 +156,10 @@ remain committed.
 Internally, `Catalog` prepares an `AddOperationRequest` and delegates the ordered lifecycle to an
 `AddOperationRunner`. The runner is not public API, but the boundary matters for plugin behavior:
 hooks and artifact writers see the same `OperationContext`, hook ordering, rollback behavior, and
-audit events whether the operation started from `add_file()` or `add_artifact()`. The generic
+audit events whether the operation started from `add_file()` or `add_artifact()`. The runner also
+owns the single result merge path: it builds a planned `data` descriptor, passes it to the writer,
+merges returned data facts deterministically, appends auxiliary descriptors, and stages the merged
+artifact list with the record. The generic
 `OperationRunner` interface is intentionally broader than add operations so future operation
 families can use the same command boundary without changing the public hook API.
 

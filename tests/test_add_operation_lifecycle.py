@@ -6,6 +6,8 @@ import pytest
 
 from ogcat import (
     ArtifactLocator,
+    ArtifactWriteRequest,
+    ArtifactWriteResult,
     Catalog,
     CatalogRecord,
     CatalogSpec,
@@ -236,12 +238,7 @@ def test_add_artifact_application_request_uses_writer_materialization(
         target_kind = "directory"
         write_mode = "write"
 
-        def write(
-            self,
-            context: OperationContext,
-            source: OperationSource,
-            target: ArtifactLocator,
-        ) -> None:
+        def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
             raise AssertionError("fake runner should not invoke writer")
 
     class FakeRunner(OperationRunner):
@@ -456,12 +453,7 @@ def test_explicit_reference_storage_plan_skips_artifact_writer(tmp_path: Path) -
         target_kind = "file"
         write_mode = "write"
 
-        def write(
-            self,
-            context: OperationContext,
-            source: OperationSource,
-            target: ArtifactLocator,
-        ) -> None:
+        def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
             raise AssertionError("reference storage plan should skip the writer")
 
     target = tmp_path / "planned.txt"
@@ -485,12 +477,7 @@ def test_explicit_storage_plan_rejects_writer_write_mode_mismatch(tmp_path: Path
         target_kind = "file"
         write_mode = "copy"
 
-        def write(
-            self,
-            context: OperationContext,
-            source: OperationSource,
-            target: ArtifactLocator,
-        ) -> None:
+        def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
             raise AssertionError("mismatched writer should fail before writing")
 
     target = tmp_path / "planned.txt"
@@ -518,17 +505,13 @@ def test_writer_backed_add_artifact_writes_and_persists_metadata(tmp_path: Path)
     """Writer-backed add_artifact writes the target and persists writer metadata."""
 
     class TextWriter:
-        def write(
-            self,
-            context: OperationContext,
-            source: OperationSource,
-            target: ArtifactLocator,
-        ) -> None:
-            target_path = target.as_path()
+        def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
+            target_path = request.locator.as_path()
             assert target_path is not None
             target_path.parent.mkdir(parents=True, exist_ok=True)
-            target_path.write_text(str(source.metadata["text"]), encoding="utf-8")
-            context.derived_metadata["writer_text_length"] = len(str(source.metadata["text"]))
+            target_path.write_text(str(request.source.metadata["text"]), encoding="utf-8")
+            request.context.derived_metadata["writer_text_length"] = len(str(request.source.metadata["text"]))
+            return ArtifactWriteResult.from_artifact(request.target)
 
     target = tmp_path / "outputs" / "generated.txt"
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
@@ -549,13 +532,8 @@ def test_hook_failure_after_writer_rolls_back_artifact_and_record(tmp_path: Path
     rollback_calls: list[str] = []
 
     class TextWriter:
-        def write(
-            self,
-            context: OperationContext,
-            source: OperationSource,
-            target: ArtifactLocator,
-        ) -> None:
-            target_path = target.as_path()
+        def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
+            target_path = request.locator.as_path()
             assert target_path is not None
             target_path.parent.mkdir(parents=True, exist_ok=True)
             target_path.write_text("created", encoding="utf-8")
@@ -564,7 +542,8 @@ def test_hook_failure_after_writer_rolls_back_artifact_and_record(tmp_path: Path
                 rollback_calls.append("writer")
                 target_path.unlink(missing_ok=True)
 
-            context.rollback(rollback, description="remove generated text")
+            request.context.rollback(rollback, description="remove generated text")
+            return ArtifactWriteResult.from_artifact(request.target)
 
     class FailingHook:
         def before_record_write(self, context: OperationContext) -> None:
@@ -689,16 +668,12 @@ def test_validation_failure_runs_after_validate_and_stops_before_write(tmp_path:
             calls.append("resolve_artifact_locator")
 
     class TextWriter:
-        def write(
-            self,
-            context: OperationContext,
-            source: OperationSource,
-            target: ArtifactLocator,
-        ) -> None:
+        def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
             calls.append("writer")
-            target_path = target.as_path()
+            target_path = request.locator.as_path()
             assert target_path is not None
             target_path.write_text("should not happen", encoding="utf-8")
+            return ArtifactWriteResult.from_artifact(request.target)
 
     target = tmp_path / "outputs" / "generated.txt"
     catalog = Catalog.create(
@@ -743,17 +718,13 @@ def test_derived_metadata_from_writer_extract_hook_and_record_hook_persists(tmp_
             context.derived_metadata["record_hook"] = context.record_type
 
     class TextWriter:
-        def write(
-            self,
-            context: OperationContext,
-            source: OperationSource,
-            target: ArtifactLocator,
-        ) -> None:
-            target_path = target.as_path()
+        def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
+            target_path = request.locator.as_path()
             assert target_path is not None
             target_path.parent.mkdir(parents=True, exist_ok=True)
             target_path.write_text("payload", encoding="utf-8")
-            context.derived_metadata["writer"] = source.kind
+            request.context.derived_metadata["writer"] = request.source.kind
+            return ArtifactWriteResult.from_artifact(request.target)
 
     target = tmp_path / "outputs" / "metadata.txt"
     catalog = Catalog.create(
@@ -779,13 +750,8 @@ def test_writer_failure_runs_registered_rollback_and_leaves_no_record(tmp_path: 
     rollback_calls: list[str] = []
 
     class FailingWriter:
-        def write(
-            self,
-            context: OperationContext,
-            source: OperationSource,
-            target: ArtifactLocator,
-        ) -> None:
-            target_path = target.as_path()
+        def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
+            target_path = request.locator.as_path()
             assert target_path is not None
             target_path.parent.mkdir(parents=True, exist_ok=True)
             target_path.write_text("partial", encoding="utf-8")
@@ -794,7 +760,7 @@ def test_writer_failure_runs_registered_rollback_and_leaves_no_record(tmp_path: 
                 rollback_calls.append("writer")
                 target_path.unlink(missing_ok=True)
 
-            context.rollback(rollback, description="remove partial writer output")
+            request.context.rollback(rollback, description="remove partial writer output")
             raise OSError("writer failed")
 
     target = tmp_path / "outputs" / "partial.txt"

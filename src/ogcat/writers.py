@@ -2,9 +2,9 @@
 
 Writers bridge ``Catalog.add_artifact`` and concrete storage code. A writer is
 any object that satisfies :class:`ogcat.hooks.ArtifactWriter`: it exposes a
-``write(context, source, target)`` method, receives an
-:class:`ogcat.hooks.OperationContext`, and materialises an
-:class:`ogcat.models.ArtifactLocator` from an :class:`ogcat.hooks.OperationSource`.
+``write(request)`` method, receives an :class:`ogcat.hooks.ArtifactWriteRequest`,
+and returns :class:`ogcat.models.ArtifactWriteResult` metadata for the produced
+artifact descriptors.
 
 This module provides small adapters for common examples. ``source_writer`` wraps
 a function that accepts an ``OperationSource`` and target ``Path``.
@@ -20,13 +20,20 @@ from __future__ import annotations
 
 import shutil
 import zipfile
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar, TypeAlias
 
-from ogcat.hooks import OperationContext, OperationSource
-from ogcat.models import ArtifactLocator, JsonValue, MetadataDict
+from ogcat.hooks import ArtifactWriteRequest, OperationSource
+from ogcat.models import (
+    ArtifactDescriptor,
+    ArtifactLocator,
+    ArtifactWriteResult,
+    JsonValue,
+    MetadataDict,
+    normalize_metadata,
+)
 from ogcat.storage import (
     TargetKind,
     WriteMode,
@@ -37,9 +44,10 @@ from ogcat.storage import (
     require_local_path,
 )
 
-SourceWriteFunction: TypeAlias = Callable[[OperationSource, Path], MetadataDict | None]
-MemoryWriteFunction: TypeAlias = Callable[[object, Path], MetadataDict | None]
-PathWriteFunction: TypeAlias = Callable[[Path, Path], MetadataDict | None]
+FunctionWriteResult: TypeAlias = ArtifactWriteResult | ArtifactDescriptor | Mapping[str, object] | None
+SourceWriteFunction: TypeAlias = Callable[[OperationSource, Path], FunctionWriteResult]
+MemoryWriteFunction: TypeAlias = Callable[[object, Path], FunctionWriteResult]
+PathWriteFunction: TypeAlias = Callable[[Path, Path], FunctionWriteResult]
 
 
 def memory_source(
@@ -103,7 +111,9 @@ class FunctionArtifactWriter:
     The wrapped function receives an ``OperationSource`` and a local target
     path. It should write either a single file or a directory, matching
     ``target_kind``. If it returns metadata, the metadata is merged into
-    ``context.derived_metadata``.
+    ``request.context.derived_metadata``. If it returns an
+    ``ArtifactDescriptor`` or ``ArtifactWriteResult``, that structured result is
+    returned to the operation runner.
 
     Args:
         write_function: Function that writes artifact data.
@@ -117,25 +127,20 @@ class FunctionArtifactWriter:
     source_kind: str | None = None
     write_mode: WriteMode = "write"
 
-    def write(
-        self,
-        context: OperationContext,
-        source: OperationSource,
-        target: ArtifactLocator,
-    ) -> None:
+    def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
         """Write artifact data and register rollback for the created target."""
+        source = request.source
         if self.source_kind is not None and source.kind != self.source_kind:
             raise ValueError(f"writer requires source kind {self.source_kind!r}, got {source.kind!r}")
 
-        target_path = _target_path(target)
+        target_path = _target_path(request.locator)
         _prepare_empty_target(target_path, self.target_kind)
-        context.rollback(
+        request.context.rollback(
             lambda path=target_path, target_kind=self.target_kind: _remove_target(path, target_kind),
             description=f"remove written {self.target_kind} artifact {target_path}",
         )
-        metadata = self.write_function(source, target_path)
-        if metadata is not None:
-            context.derived_metadata.update(metadata)
+        result = self.write_function(source, target_path)
+        return _adapt_function_write_result(result, request=request)
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,21 +151,18 @@ class CopyArtifactWriter:
     target_kind: ClassVar[TargetKind] = "file"
     write_mode: ClassVar[WriteMode] = "copy"
 
-    def write(
-        self,
-        context: OperationContext,
-        source: OperationSource,
-        target: ArtifactLocator,
-    ) -> None:
+    def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
         """Copy a local source path to the target and register rollback."""
+        source = request.source
         if source.kind != self.source_kind or source.path is None:
             raise ValueError(f"copy writer requires OperationSource(kind={self.source_kind!r}, path=...)")
         if self.target_kind != "file":
             raise ValueError("copy writer currently supports file targets only")
+        target = request.locator
         adapter = adapter_for_locator(target)
         ensure_target_absent(target, adapter=adapter)
         ensure_parent_directory(target, adapter=adapter)
-        context.rollback(
+        request.context.rollback(
             lambda locator=target, target_kind=self.target_kind, storage=adapter: remove_target(
                 locator,
                 target_kind=target_kind,
@@ -169,6 +171,7 @@ class CopyArtifactWriter:
             description=f"remove copied {self.target_kind} artifact {target.value}",
         )
         adapter.copy_from_path(source.path, target)
+        return ArtifactWriteResult.from_artifact(request.target)
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,26 +182,23 @@ class CopyDirectoryArtifactWriter:
     target_kind: ClassVar[TargetKind] = "directory"
     write_mode: ClassVar[WriteMode] = "copy"
 
-    def write(
-        self,
-        context: OperationContext,
-        source: OperationSource,
-        target: ArtifactLocator,
-    ) -> None:
+    def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
         """Copy a local source directory to the target and register rollback."""
+        source = request.source
         if source.kind != self.source_kind or source.path is None:
             raise ValueError(
                 f"copy directory writer requires OperationSource(kind={self.source_kind!r}, path=...)"
             )
         if not source.path.is_dir():
             raise ValueError(f"copy directory writer requires an existing directory: {source.path}")
+        target = request.locator
         if target.kind != "path":
             raise ValueError("copy directory writer currently requires a path-backed target")
         adapter = adapter_for_locator(target)
         ensure_target_absent(target, adapter=adapter)
         target_path = require_local_path(target)
         ensure_parent_directory(target, adapter=adapter)
-        context.rollback(
+        request.context.rollback(
             lambda locator=target, storage=adapter: remove_target(
                 locator,
                 target_kind=self.target_kind,
@@ -207,6 +207,7 @@ class CopyDirectoryArtifactWriter:
             description=f"remove copied {self.target_kind} artifact {target.value}",
         )
         shutil.copytree(source.path, target_path)
+        return ArtifactWriteResult.from_artifact(request.target)
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,15 +218,12 @@ class MoveArtifactWriter:
     target_kind: ClassVar[TargetKind] = "file"
     write_mode: ClassVar[WriteMode] = "move"
 
-    def write(
-        self,
-        context: OperationContext,
-        source: OperationSource,
-        target: ArtifactLocator,
-    ) -> None:
+    def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
         """Move a local source path to the target and register rollback."""
+        source = request.source
         if source.kind != self.source_kind or source.path is None:
             raise ValueError(f"move writer requires OperationSource(kind={self.source_kind!r}, path=...)")
+        target = request.locator
         if target.kind != "path":
             raise ValueError("move writer currently requires a path-backed target for rollback-safe moves")
         if self.target_kind != "file":
@@ -234,7 +232,7 @@ class MoveArtifactWriter:
         ensure_target_absent(target, adapter=adapter)
         target_path = require_local_path(target)
         ensure_parent_directory(target, adapter=adapter)
-        context.rollback(
+        request.context.rollback(
             lambda source_path=source.path, stored_path=target_path: _rollback_moved_file(
                 source_path=source_path,
                 target_path=stored_path,
@@ -242,6 +240,7 @@ class MoveArtifactWriter:
             description=f"restore moved file from {target_path} to {source.path}",
         )
         adapter.move_from_path(source.path, target)
+        return ArtifactWriteResult.from_artifact(request.target)
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,26 +251,23 @@ class MoveDirectoryArtifactWriter:
     target_kind: ClassVar[TargetKind] = "directory"
     write_mode: ClassVar[WriteMode] = "move"
 
-    def write(
-        self,
-        context: OperationContext,
-        source: OperationSource,
-        target: ArtifactLocator,
-    ) -> None:
+    def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
         """Move a local source directory to the target and register rollback."""
+        source = request.source
         if source.kind != self.source_kind or source.path is None:
             raise ValueError(
                 f"move directory writer requires OperationSource(kind={self.source_kind!r}, path=...)"
             )
         if not source.path.is_dir():
             raise ValueError(f"move directory writer requires an existing directory: {source.path}")
+        target = request.locator
         if target.kind != "path":
             raise ValueError("move directory writer currently requires a path-backed target")
         adapter = adapter_for_locator(target)
         ensure_target_absent(target, adapter=adapter)
         target_path = require_local_path(target)
         ensure_parent_directory(target, adapter=adapter)
-        context.rollback(
+        request.context.rollback(
             lambda source_path=source.path, stored_path=target_path: _rollback_moved_target(
                 source_path=source_path,
                 target_path=stored_path,
@@ -280,6 +276,7 @@ class MoveDirectoryArtifactWriter:
             description=f"restore moved {self.target_kind} from {target_path} to {source.path}",
         )
         shutil.move(str(source.path), str(target_path))
+        return ArtifactWriteResult.from_artifact(request.target)
 
 
 def source_writer(
@@ -304,7 +301,7 @@ def memory_writer(
 ) -> FunctionArtifactWriter:
     """Wrap a function that writes an in-memory payload to a target path."""
 
-    def write_from_memory(source: OperationSource, target: Path) -> MetadataDict | None:
+    def write_from_memory(source: OperationSource, target: Path) -> FunctionWriteResult:
         """Write the source payload to the target path."""
         return write_function(source.payload, target)
 
@@ -319,13 +316,36 @@ def path_writer(
 ) -> FunctionArtifactWriter:
     """Wrap a function that writes from a source path to a target path."""
 
-    def write_from_path(source: OperationSource, target: Path) -> MetadataDict | None:
+    def write_from_path(source: OperationSource, target: Path) -> FunctionWriteResult:
         """Write the source path to the target path."""
         if source.path is None:
             raise ValueError("path writer requires source.path")
         return write_function(source.path, target)
 
     return source_writer(write_from_path, target_kind=target_kind, source_kind=source_kind)
+
+
+def _adapt_function_write_result(
+    result: FunctionWriteResult,
+    *,
+    request: ArtifactWriteRequest,
+) -> ArtifactWriteResult:
+    """Adapt a convenience function return value to a structured writer result."""
+    if isinstance(result, ArtifactWriteResult):
+        return result
+    if isinstance(result, ArtifactDescriptor):
+        return ArtifactWriteResult.from_artifact(result)
+    if result is None:
+        return ArtifactWriteResult.from_artifact(request.target)
+    if isinstance(result, Mapping):
+        request.context.derived_metadata.update(
+            normalize_metadata(result, field_name="writer_metadata"),
+        )
+        return ArtifactWriteResult.from_artifact(request.target)
+    raise TypeError(
+        "writer function must return None, metadata, an ArtifactDescriptor, "
+        f"or an ArtifactWriteResult; got {type(result).__name__}"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -336,19 +356,15 @@ class UnzipArtifactWriter:
     target_kind: ClassVar[TargetKind] = "directory"
     write_mode: ClassVar[WriteMode] = "write"
 
-    def write(
-        self,
-        context: OperationContext,
-        source: OperationSource,
-        target: ArtifactLocator,
-    ) -> None:
+    def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
         """Extract a zip source into the target directory."""
+        source = request.source
         if source.kind != self.source_kind or source.path is None:
             raise ValueError(f"unzip writer requires OperationSource(kind={self.source_kind!r}, path=...)")
 
-        target_dir = _target_path(target)
+        target_dir = _target_path(request.locator)
         _prepare_empty_target(target_dir, "directory")
-        context.rollback(
+        request.context.rollback(
             lambda path=target_dir: shutil.rmtree(path, ignore_errors=True),
             description=f"remove extracted directory {target_dir}",
         )
@@ -368,8 +384,15 @@ class UnzipArtifactWriter:
                     shutil.copyfileobj(source_file, target_file)
 
         extracted_names: list[JsonValue] = list(names)
-        context.derived_metadata["extracted_file_count"] = len(names)
-        context.derived_metadata["extracted_names"] = extracted_names
+        request.context.derived_metadata["extracted_file_count"] = len(names)
+        request.context.derived_metadata["extracted_names"] = extracted_names
+        return ArtifactWriteResult.from_artifact(
+            request.target,
+            diagnostics={
+                "extracted_file_count": len(names),
+                "extracted_names": extracted_names,
+            },
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -387,21 +410,17 @@ class UnzipSingleFileArtifactWriter:
     target_kind: ClassVar[TargetKind] = "file"
     write_mode: ClassVar[WriteMode] = "write"
 
-    def write(
-        self,
-        context: OperationContext,
-        source: OperationSource,
-        target: ArtifactLocator,
-    ) -> None:
+    def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
         """Extract one zip source member to the target file."""
+        source = request.source
         if source.kind != self.source_kind or source.path is None:
             raise ValueError(
                 f"single-file unzip writer requires OperationSource(kind={self.source_kind!r}, path=...)"
             )
 
-        target_path = _target_path(target)
+        target_path = _target_path(request.locator)
         _prepare_empty_target(target_path, "file")
-        context.rollback(
+        request.context.rollback(
             lambda path=target_path: path.unlink(missing_ok=True),
             description=f"remove extracted file {target_path}",
         )
@@ -410,9 +429,17 @@ class UnzipSingleFileArtifactWriter:
             with archive.open(member) as source_file, target_path.open("wb") as target_file:
                 shutil.copyfileobj(source_file, target_file)
 
-        context.derived_metadata["extracted_file_count"] = 1
-        context.derived_metadata["extracted_name"] = member.filename
-        context.derived_metadata["extracted_size"] = member.file_size
+        request.context.derived_metadata["extracted_file_count"] = 1
+        request.context.derived_metadata["extracted_name"] = member.filename
+        request.context.derived_metadata["extracted_size"] = member.file_size
+        return ArtifactWriteResult.from_artifact(
+            request.target,
+            diagnostics={
+                "extracted_file_count": 1,
+                "extracted_name": member.filename,
+                "extracted_size": member.file_size,
+            },
+        )
 
 
 def _select_zip_member(archive: zipfile.ZipFile, *, member_name: str | None) -> zipfile.ZipInfo:
@@ -485,6 +512,7 @@ __all__ = [
     "CopyArtifactWriter",
     "CopyDirectoryArtifactWriter",
     "FunctionArtifactWriter",
+    "FunctionWriteResult",
     "MemoryWriteFunction",
     "MoveArtifactWriter",
     "MoveDirectoryArtifactWriter",

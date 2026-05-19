@@ -246,7 +246,10 @@ against `ArtifactDescriptor` claims and facets. It must not dispatch from
 `record_type`. If one artifact advertises several interfaces, such as bytes,
 text, table, and JSON, selection should report ambiguity until the caller asks
 for a specific enough interface. Public read-handle lifecycle APIs remain #118,
-and catalog merge of writer-produced artifact claims/facets remains #117.
+and catalog merge of writer-produced artifact claims/facets is the #117
+writer-result boundary. That boundary is descriptor merge only: it does not
+define read handles, managed collection ergonomics, runtime pipe/value types, or
+durable provenance storage.
 Bundled examples such as bytes, text-with-encoding, CSV/table, JSON, and an
 emoticon-to-emoji converter should register through the same plugin-style route
 as external capabilities. Because the bundled implementations are local-path

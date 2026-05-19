@@ -2,20 +2,27 @@ from __future__ import annotations
 
 import shutil
 import zipfile
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
 
 import ogcat.writers as writers_module
 from ogcat import (
+    ArtifactDescriptor,
+    ArtifactFacet,
     ArtifactLocator,
+    ArtifactWriteRequest,
+    ArtifactWriteResult,
     Catalog,
     CatalogSpec,
     CopyArtifactWriter,
+    InterfaceClaim,
     MoveArtifactWriter,
     OperationSource,
     PluginRegistry,
     RecordSchema,
+    RepresentationClaim,
     UnzipArtifactWriter,
     UnzipSingleFileArtifactWriter,
     memory_source,
@@ -135,6 +142,300 @@ def test_source_writer_receives_full_operation_source(tmp_path: Path) -> None:
 
     assert target.read_text(encoding="utf-8") == "example"
     assert record.derived_metadata["source_kind"] == "structured"
+
+
+def test_memory_writer_adapts_none_return_to_base_result(tmp_path: Path) -> None:
+    """Convenience writers can wrap one-off functions that return None."""
+
+    def write_text(data: object, target: Path) -> None:
+        target.write_text(str(data), encoding="utf-8")
+
+    target = tmp_path / "none-result.txt"
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+
+    record = catalog.add_artifact(
+        record_type="generated_text",
+        locator=ArtifactLocator.path(target),
+        source=memory_source("hello"),
+        artifact_writer=memory_writer(write_text, target_kind="file"),
+    )
+
+    assert target.read_text(encoding="utf-8") == "hello"
+    assert [artifact.id for artifact in record.artifacts] == ["data"]
+    assert record.artifacts[0].locator == ArtifactLocator.path(target)
+
+
+def test_memory_writer_adapts_descriptor_return(tmp_path: Path) -> None:
+    """Convenience writers can wrap functions that return descriptor facts."""
+
+    def write_text(data: object, target: Path) -> ArtifactDescriptor:
+        target.write_text(str(data), encoding="utf-8")
+        return ArtifactDescriptor(
+            id="data",
+            role="data_artifact",
+            claims=[InterfaceClaim("text")],
+        )
+
+    target = tmp_path / "descriptor-result.txt"
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+
+    record = catalog.add_artifact(
+        record_type="generated_text",
+        locator=ArtifactLocator.path(target),
+        source=memory_source("hello"),
+        artifact_writer=memory_writer(write_text, target_kind="file"),
+    )
+
+    assert record.artifacts[0].claims == [
+        {
+            "kind": "interface",
+            "name": "text",
+            "namespace": "ogcat.core",
+            "version": "1",
+            "evidence": "declared",
+            "confidence": "declared",
+            "metadata": {},
+        }
+    ]
+
+
+def test_writer_result_merges_claims_facets_diagnostics_and_provenance(tmp_path: Path) -> None:
+    """Structured writer results enrich the data descriptor and audit event."""
+
+    class TextWriter:
+        def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
+            target_path = request.locator.as_path()
+            assert target_path is not None
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.write_text(str(request.source.payload), encoding="utf-8")
+            request.context.rollback(
+                lambda path=target_path: path.unlink(missing_ok=True),
+                description="remove text result",
+            )
+            return ArtifactWriteResult.for_data_artifact(
+                relationship={"kind": "generated_from", "source": request.source.kind},
+                claims=[
+                    InterfaceClaim("text", evidence="inferred", metadata={"encoding": "unknown"}),
+                    InterfaceClaim("text", evidence="validated", metadata={"encoding": "utf-8"}),
+                ],
+                facets=[
+                    ArtifactFacet(kind="encoding", name="charset", metadata={"encoding": "ascii"}),
+                    ArtifactFacet(kind="encoding", name="charset", metadata={"encoding": "utf-8"}),
+                ],
+                diagnostics={"target_path": target_path, "checks": {"written", "encoded"}},
+                provenance={"source_descriptor": request.source.descriptor},
+            )
+
+    target = tmp_path / "structured.txt"
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+
+    record = catalog.add_artifact(
+        record_type="generated_text",
+        locator=ArtifactLocator.path(target),
+        source=memory_source("hello", kind="memory_text", descriptor="inline text"),
+        artifact_writer=TextWriter(),
+    )
+
+    data = record.artifacts[0]
+    assert data.relationship == {"kind": "generated_from", "source": "memory_text"}
+    assert data.claims == [
+        {
+            "kind": "interface",
+            "name": "text",
+            "namespace": "ogcat.core",
+            "version": "1",
+            "evidence": "validated",
+            "confidence": "validated",
+            "metadata": {"encoding": "utf-8"},
+        }
+    ]
+    assert data.facets == [
+        {
+            "kind": "encoding",
+            "name": "charset",
+            "namespace": "ogcat.core",
+            "version": "1",
+            "evidence": "declared",
+            "confidence": "declared",
+            "metadata": {"encoding": "utf-8"},
+        }
+    ]
+    write_event = [
+        event
+        for event in catalog.audit_events(event_type="write")
+        if event.details.get("write_phase") == "artifact-write"
+    ][0]
+    assert write_event.details["writer_diagnostics"] == {
+        "target_path": str(target),
+        "checks": ["encoded", "written"],
+    }
+    assert write_event.details["writer_provenance"] == {"source_descriptor": "inline text"}
+
+
+def test_writer_result_with_only_auxiliary_artifact_preserves_data_descriptor(tmp_path: Path) -> None:
+    """Auxiliary-only results keep the planned base data descriptor."""
+
+    class PreviewWriter:
+        def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
+            target_path = request.locator.as_path()
+            assert target_path is not None
+            target_path.write_text("data", encoding="utf-8")
+            preview = target_path.with_suffix(".preview.txt")
+            preview.write_text("preview", encoding="utf-8")
+
+            def remove_outputs() -> None:
+                target_path.unlink(missing_ok=True)
+                preview.unlink(missing_ok=True)
+
+            request.context.rollback(
+                remove_outputs,
+                description="remove data and preview",
+            )
+            return ArtifactWriteResult.from_artifact(
+                ArtifactDescriptor(
+                    id="preview",
+                    role="preview",
+                    locator=ArtifactLocator.path(preview),
+                    relationship={"kind": "preview_of", "target_artifact_id": "data"},
+                    claims=[InterfaceClaim("text")],
+                )
+            )
+
+    target = tmp_path / "data.txt"
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+
+    record = catalog.add_artifact(
+        record_type="generated_text",
+        locator=ArtifactLocator.path(target),
+        source=memory_source("payload"),
+        artifact_writer=PreviewWriter(),
+    )
+
+    assert [artifact.id for artifact in record.artifacts] == ["data", "preview"]
+    assert record.artifacts[0].locator == ArtifactLocator.path(target)
+    assert record.artifacts[1].relationship["target_artifact_id"] == "data"
+
+
+def test_writer_result_locator_conflict_rolls_back_written_artifact(tmp_path: Path) -> None:
+    """A conflicting data locator is rejected after writer cleanup is registered."""
+
+    class ConflictingLocatorWriter:
+        def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
+            target_path = request.locator.as_path()
+            assert target_path is not None
+            target_path.write_text("data", encoding="utf-8")
+            request.context.rollback(
+                lambda path=target_path: path.unlink(missing_ok=True),
+                description="remove conflicting data",
+            )
+            return ArtifactWriteResult.for_data_artifact(
+                locator=ArtifactLocator.path(target_path.with_name("other.txt")),
+            )
+
+    target = tmp_path / "data.txt"
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+
+    with pytest.raises(ValueError, match="locator must match the planned locator"):
+        catalog.add_artifact(
+            record_type="generated_text",
+            locator=ArtifactLocator.path(target),
+            source=memory_source("payload"),
+            artifact_writer=ConflictingLocatorWriter(),
+        )
+
+    assert not target.exists()
+    assert catalog.repository.all() == []
+
+
+def test_writer_result_duplicate_auxiliary_id_rolls_back_written_artifact(tmp_path: Path) -> None:
+    """Duplicate returned artifact ids fail before commit and trigger rollback."""
+
+    class DuplicateAuxiliaryWriter:
+        def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
+            target_path = request.locator.as_path()
+            assert target_path is not None
+            target_path.write_text("data", encoding="utf-8")
+            request.context.rollback(
+                lambda path=target_path: path.unlink(missing_ok=True),
+                description="remove duplicate auxiliary data",
+            )
+            return ArtifactWriteResult(
+                artifacts=(
+                    ArtifactDescriptor(id="preview", role="preview"),
+                    ArtifactDescriptor(id="preview", role="preview"),
+                )
+            )
+
+    target = tmp_path / "data.txt"
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+
+    with pytest.raises(ValueError, match="duplicate artifact id"):
+        catalog.add_artifact(
+            record_type="generated_text",
+            locator=ArtifactLocator.path(target),
+            source=memory_source("payload"),
+            artifact_writer=DuplicateAuxiliaryWriter(),
+        )
+
+    assert not target.exists()
+    assert catalog.repository.all() == []
+
+
+def test_writer_result_can_describe_directory_collection_shape(tmp_path: Path) -> None:
+    """Writers can attach collection claims/facets without a collection API."""
+
+    class CollectionDirectoryWriter:
+        target_kind = "directory"
+
+        def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
+            target_path = request.locator.as_path()
+            assert target_path is not None
+            target_path.mkdir(parents=True, exist_ok=False)
+            (target_path / "co2_202401.nc").write_text("not netcdf", encoding="utf-8")
+            request.context.rollback(
+                lambda path=target_path: shutil.rmtree(path, ignore_errors=True),
+                description="remove collection directory",
+            )
+            return ArtifactWriteResult.for_data_artifact(
+                claims=[
+                    RepresentationClaim("directory"),
+                    InterfaceClaim("collection"),
+                ],
+                facets=[
+                    ArtifactFacet(
+                        kind="collection",
+                        name="members",
+                        metadata={
+                            "pattern": "*.nc",
+                            "member_format": "netcdf",
+                            "member_suffixes": [".nc"],
+                            "reader_hint": "xarray.open_mfdataset",
+                        },
+                    )
+                ],
+            )
+
+    target = tmp_path / "collection"
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+
+    record = catalog.add_artifact(
+        record_type="netcdf_collection",
+        locator=ArtifactLocator.path(target),
+        source=memory_source("payload"),
+        artifact_writer=CollectionDirectoryWriter(),
+    )
+
+    first_claim = record.artifacts[0].claims[0]
+    second_claim = record.artifacts[0].claims[1]
+    collection_facet = record.artifacts[0].facets[0]
+    assert isinstance(first_claim, Mapping)
+    assert isinstance(second_claim, Mapping)
+    assert isinstance(collection_facet, Mapping)
+    facet_metadata = collection_facet["metadata"]
+    assert isinstance(facet_metadata, Mapping)
+    assert first_claim["name"] == "directory"
+    assert second_claim["name"] == "collection"
+    assert facet_metadata["pattern"] == "*.nc"
 
 
 def test_unzip_artifact_writer_extracts_metadata(tmp_path: Path) -> None:
@@ -370,23 +671,19 @@ def test_writer_receives_storage_plan_and_rolls_back_directory_target(tmp_path: 
             raise RuntimeError("stop after planned write")
 
     class PlanAwareDirectoryWriter:
-        def write(
-            self,
-            context: OperationContext,
-            source: OperationSource,
-            target: ArtifactLocator,
-        ) -> None:
-            assert context.storage_plan is not None
-            assert context.storage_plan.target_kind == "directory"
-            assert context.storage_plan.locator == target
-            target_path = target.as_path()
+        def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
+            assert request.context.storage_plan is not None
+            assert request.context.storage_plan.target_kind == "directory"
+            assert request.context.storage_plan.locator == request.locator
+            target_path = request.locator.as_path()
             assert target_path is not None
             target_path.mkdir(parents=True, exist_ok=False)
-            (target_path / "payload.txt").write_text(str(source.payload), encoding="utf-8")
-            context.rollback(
+            (target_path / "payload.txt").write_text(str(request.source.payload), encoding="utf-8")
+            request.context.rollback(
                 lambda path=target_path: shutil.rmtree(path, ignore_errors=True),
                 description="remove planned directory",
             )
+            return ArtifactWriteResult.from_artifact(request.target)
 
     target = tmp_path / "catalog" / "files" / "stores" / "example.zarr"
     plan = plan_storage(

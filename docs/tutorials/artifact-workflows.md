@@ -421,7 +421,7 @@ from pathlib import Path
 import fsspec
 import xarray as xr
 
-from ogcat import ArtifactLocator, OperationContext, OperationSource, memory_source
+from ogcat import ArtifactLocator, ArtifactWriteRequest, ArtifactWriteResult, OperationContext, memory_source
 
 
 def cams_zip_member_urlpath(locator: ArtifactLocator, *, member_glob: str) -> str:
@@ -457,13 +457,10 @@ class CamsZipMemberUrlpathHook:
 class CamsZipChainToZarrWriter:
     """Create a Zarr store from a prepared fsspec zip-member URL path."""
 
-    def write(
-        self,
-        context: OperationContext,
-        source: OperationSource,
-        target: ArtifactLocator,
-    ) -> None:
-        target_path = target.as_path()
+    def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
+        context = request.context
+        source = request.source
+        target_path = request.locator.as_path()
         if target_path is None:
             raise ValueError("CAMS writer requires a local Zarr target.")
         if target_path.exists():
@@ -506,6 +503,12 @@ class CamsZipChainToZarrWriter:
                 "bc_input_version": "cams73_latest",
                 "domain": processing_domain.lower(),
                 "reader_hint": "xarray.open_zarr",
+            }
+        )
+        return ArtifactWriteResult.for_data_artifact(
+            relationship={
+                "kind": "processed_from",
+                "source_record_id": source.metadata["raw_zip_record_id"],
             }
         )
 ```
@@ -614,14 +617,16 @@ Write a managed copy with a small requests-based writer:
 ```python
 import requests
 
-from ogcat import ArtifactLocator, OperationContext, OperationSource, memory_source
+from ogcat import ArtifactLocator, ArtifactWriteRequest, ArtifactWriteResult, memory_source
 
 
 class RequestsDownloadWriter:
     """Download a URI to the planned local target."""
 
-    def write(self, context: OperationContext, source: OperationSource, target: ArtifactLocator) -> None:
-        target_path = target.as_path()
+    def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
+        context = request.context
+        source = request.source
+        target_path = request.locator.as_path()
         if target_path is None:
             raise ValueError("Download writer requires a local path target.")
         if target_path.exists():
@@ -645,6 +650,10 @@ class RequestsDownloadWriter:
                 "downloaded_on": source.metadata["downloaded_on"],
                 "byte_count": target_path.stat().st_size,
             }
+        )
+        return ArtifactWriteResult.for_data_artifact(
+            relationship={"kind": "downloaded_from", "url": url},
+            diagnostics={"byte_count": target_path.stat().st_size},
         )
 
 

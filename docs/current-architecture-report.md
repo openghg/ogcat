@@ -103,7 +103,7 @@ sequenceDiagram
 | Storage planning | Primary locator policy for UUID, template, and user-provided targets. | naming, locators, storage roots, `StoragePlan`. |
 | Materialization module | Internal representation of how planned targets become write targets. | operation runner, storage plans, writers. |
 | Storage adapters | Local and fsspec-like target operations. | writers, storage planning, artifact locators. |
-| Writers | Copy, move, unzip, function, and memory/path writer helpers. | `OperationContext`, `OperationSource`, `ArtifactLocator`, storage helpers. |
+| Writers | Copy, move, unzip, function, and memory/path writer helpers. | `ArtifactWriteRequest`, `ArtifactWriteResult`, descriptor models, storage helpers. |
 | Classification | Cheap artifact and collection classification metadata. | `Catalog.add_collection`, record metadata, docs/examples. |
 | `SecondaryArtifactOperation` | Ordered post-record operations inside the add rollback boundary. | runner, `UnitOfWork`, `CatalogRecord`. |
 | `TemplateLinkSecondaryArtifact` / `template_replicas` | Required human-readable symlink for UUID primary managed files. | naming, transactions, replica link helpers, runner. |
@@ -176,10 +176,10 @@ methods. A smaller services protocol would better satisfy dependency inversion.
 
 ### `OperationContext`
 
-`OperationContext` is intentionally broad because hooks and writers need a
-shared mutable object. That makes it flexible, but phase-specific access is not
-expressed in the type system. Hook authors can see fields that may be invalid
-or not meaningful in the current phase.
+`OperationContext` is intentionally broad because hooks and writer requests need
+a shared mutable object. That makes it flexible, but phase-specific access is
+not expressed in the type system. Hook authors can see fields that may be
+invalid or not meaningful in the current phase.
 
 ### Storage Planning
 

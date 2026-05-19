@@ -35,7 +35,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Literal, Protocol, cast, runtime_checkable
 
-from ogcat.models import ArtifactLocator, MetadataDict
+from ogcat.models import ArtifactDescriptor, ArtifactLocator, ArtifactWriteResult, MetadataDict
 from ogcat.storage import StoragePlan
 from ogcat.transactions import RollbackAction
 from ogcat.validation import ValidationReport
@@ -218,13 +218,8 @@ class OperationSource:
 class ArtifactWriter(Protocol):
     """Plugin-facing writer that materialises artifact data before record write."""
 
-    def write(
-        self,
-        context: OperationContext,
-        source: OperationSource,
-        target: ArtifactLocator,
-    ) -> None:
-        """Write artifact data from source to target."""
+    def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
+        """Write artifact data from the request and return produced artifact facts."""
         ...
 
 
@@ -311,6 +306,31 @@ class OperationContext:
         if self.register_rollback is None:
             raise RuntimeError("No active rollback registration is available.")
         return self.register_rollback(action, description=description)
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactWriteRequest:
+    """Operation input passed to an artifact writer.
+
+    Args:
+        context: Mutable operation context shared with hooks.
+        source: Source description supplied for this operation.
+        target: Planned data artifact descriptor for the writer to materialise
+            or enrich.
+        storage_plan: Planned storage decision for the target.
+    """
+
+    context: OperationContext
+    source: OperationSource
+    target: ArtifactDescriptor
+    storage_plan: StoragePlan
+
+    @property
+    def locator(self) -> ArtifactLocator:
+        """Return the planned target locator for path-oriented writers."""
+        if self.target.locator is None:
+            raise ValueError(f"artifact write target {self.target.id!r} has no locator")
+        return self.target.locator
 
 
 @runtime_checkable
@@ -643,6 +663,7 @@ __all__ = [
     "AfterValidateMetadataHook",
     "AfterRecordWriteHook",
     "ArtifactWriter",
+    "ArtifactWriteRequest",
     "BeforeCommitHook",
     "BeforeValidateMetadataHook",
     "BeforeRecordWriteHook",

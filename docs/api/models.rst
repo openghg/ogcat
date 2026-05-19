@@ -19,6 +19,11 @@ Models and specifications
    :exclude-members: id, role, locator, state, relationship, claims, facets
    :member-order: bysource
 
+.. autoclass:: ogcat.ArtifactWriteResult
+   :members:
+   :exclude-members: artifacts, diagnostics, provenance
+   :member-order: bysource
+
 .. autoclass:: ogcat.ArtifactClaim
    :members:
    :exclude-members: kind, name, namespace, version, evidence, confidence, metadata

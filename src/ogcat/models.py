@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path, PurePath
@@ -687,6 +687,9 @@ class ArtifactDescriptor:
         )
 
 
+ArtifactDescriptorInput: TypeAlias = ArtifactDescriptor | Mapping[str, object]
+
+
 @dataclass(slots=True)
 class CatalogRecord:
     """A single catalogued artifact record.
@@ -813,6 +816,121 @@ class CatalogRecord:
             derived_metadata=_coerce_metadata_dict(data.get("derived_metadata", {})),
             naming_metadata=_coerce_metadata_dict(data.get("naming_metadata", {})),
         )
+
+
+@dataclass(slots=True, init=False)
+class ArtifactWriteResult:
+    """Transient writer output describing artifacts produced by an operation.
+
+    ``ArtifactWriteResult`` is not stored directly. Operation runners merge its
+    artifact descriptors into the catalog record and copy diagnostics and
+    provenance into operation audit details. Writers should use artifact claims
+    and facets for persisted descriptor facts, and use diagnostics/provenance
+    only for JSON-compatible operation audit context.
+
+    Args:
+        artifacts: Artifact descriptors produced or enriched by the writer.
+        diagnostics: JSON-compatible diagnostic details for operation audit.
+        provenance: JSON-compatible provenance details for operation audit.
+    """
+
+    artifacts: tuple[ArtifactDescriptor, ...]
+    diagnostics: MetadataDict
+    provenance: MetadataDict
+
+    def __init__(
+        self,
+        artifacts: Iterable[ArtifactDescriptorInput] = (),
+        *,
+        diagnostics: Mapping[str, object] | None = None,
+        provenance: Mapping[str, object] | None = None,
+    ) -> None:
+        """Create a normalized artifact write result."""
+        self.artifacts = tuple(_coerce_artifact_descriptors(list(artifacts)))
+        self.diagnostics = normalize_metadata(
+            {} if diagnostics is None else diagnostics,
+            field_name="artifact_write_result.diagnostics",
+        )
+        self.provenance = normalize_metadata(
+            {} if provenance is None else provenance,
+            field_name="artifact_write_result.provenance",
+        )
+
+    @classmethod
+    def for_data_artifact(
+        cls,
+        *,
+        locator: ArtifactLocator | None = None,
+        state: str = "available",
+        relationship: Mapping[str, object] | None = None,
+        claims: Iterable[ArtifactClaimInput] = (),
+        facets: Iterable[ArtifactFacetInput] = (),
+        diagnostics: Mapping[str, object] | None = None,
+        provenance: Mapping[str, object] | None = None,
+    ) -> ArtifactWriteResult:
+        """Build a result that updates the operation's primary data artifact.
+
+        Args:
+            locator: Optional locator. When omitted, the operation runner uses
+                the planned target locator.
+            state: Availability state to store on the data descriptor.
+            relationship: Relationship metadata to merge into the data
+                descriptor.
+            claims: Claims produced by the writer.
+            facets: Facets produced by the writer.
+            diagnostics: Audit-only writer diagnostics.
+            provenance: Audit-only writer provenance.
+
+        Returns:
+            Result containing one ``data`` artifact descriptor.
+        """
+        return cls(
+            artifacts=(
+                ArtifactDescriptor(
+                    id=DATA_ARTIFACT_ID,
+                    role="data_artifact",
+                    locator=locator,
+                    state=state,
+                    relationship=normalize_metadata(
+                        {} if relationship is None else relationship,
+                        field_name="artifact_write_result.artifacts[data].relationship",
+                    ),
+                    claims=list(claims),
+                    facets=list(facets),
+                ),
+            ),
+            diagnostics=diagnostics,
+            provenance=provenance,
+        )
+
+    @classmethod
+    def from_artifact(
+        cls,
+        artifact: ArtifactDescriptorInput,
+        *,
+        diagnostics: Mapping[str, object] | None = None,
+        provenance: Mapping[str, object] | None = None,
+    ) -> ArtifactWriteResult:
+        """Build a result from one artifact descriptor."""
+        return cls(
+            artifacts=(artifact,),
+            diagnostics=diagnostics,
+            provenance=provenance,
+        )
+
+    def to_dict(self) -> dict[str, JsonValue]:
+        """Convert the result to a JSON-compatible dictionary."""
+        return {
+            "artifacts": [artifact.to_dict() for artifact in self.artifacts],
+            "diagnostics": normalize_metadata(
+                self.diagnostics,
+                field_name="artifact_write_result.diagnostics",
+            ),
+            "provenance": normalize_metadata(
+                self.provenance,
+                field_name="artifact_write_result.provenance",
+            ),
+        }
 
 
 def _coerce_locator(

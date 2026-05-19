@@ -16,15 +16,17 @@ separately testable and replaceable by future sibling runners.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
 
+from ogcat.artifact_claims import claim_key, facet_key
 from ogcat.audit import add_operation_note
 from ogcat.classification import CLASSIFICATION_METADATA_KEY, classify_artifact
 from ogcat.hooks import (
     HOOK_PHASES,
+    ArtifactWriteRequest,
     HookDispatcher,
     HookLifecycleCallback,
     HookManager,
@@ -36,7 +38,18 @@ from ogcat.materialization import (
     materialization_plan_from_locator,
     validate_writer_matches_storage_plan,
 )
-from ogcat.models import ArtifactLocator, CatalogRecord, JsonValue, MetadataDict, normalize_metadata
+from ogcat.models import (
+    DATA_ARTIFACT_ID,
+    ArtifactClaimInput,
+    ArtifactDescriptor,
+    ArtifactFacetInput,
+    ArtifactLocator,
+    ArtifactWriteResult,
+    CatalogRecord,
+    JsonValue,
+    MetadataDict,
+    normalize_metadata,
+)
 from ogcat.operation_helpers import (
     artifact_locator_from_context,
     naming_metadata_from_storage_plan,
@@ -100,6 +113,7 @@ class ArtifactRecordBuilder(Protocol):
         original_path: str | Path | None = None,
         original_filename: str | None = None,
         suffixes: list[str] | None = None,
+        artifacts: list[ArtifactDescriptor] | None = None,
         derived_metadata: Mapping[Any, Any] | None = None,
         naming_metadata: Mapping[Any, Any] | None = None,
         time_added: str | None = None,
@@ -155,6 +169,7 @@ class _AddOperationPlan:
     locator: ArtifactLocator
     storage_plan: StoragePlan
     validation_report: ValidationReport
+    artifacts: tuple[ArtifactDescriptor, ...] = ()
 
 
 class OperationRunner(ABC):
@@ -348,7 +363,9 @@ class AddOperationRunner(OperationRunner):
     ) -> None:
         """Materialise or skip the artifact write for an add operation."""
         writer = self.request.materialization_intent.writer
+        base_artifact = _planned_data_artifact(add_plan.locator)
         if add_plan.storage_plan.write_mode == "reference":
+            add_plan.artifacts = (base_artifact,)
             self.dependencies.emit_operation_audit(
                 add_plan.context,
                 event_type="write",
@@ -368,16 +385,35 @@ class AddOperationRunner(OperationRunner):
         validate_writer_matches_storage_plan(writer, add_plan.storage_plan)
 
         set_phase("artifact-write")
-        writer.write(add_plan.context, add_plan.context.source, add_plan.locator)
+        write_result = writer.write(
+            ArtifactWriteRequest(
+                context=add_plan.context,
+                source=add_plan.context.source,
+                target=base_artifact,
+                storage_plan=add_plan.storage_plan,
+            )
+        )
+        if not isinstance(write_result, ArtifactWriteResult):
+            raise TypeError(
+                "ArtifactWriter.write() must return an ArtifactWriteResult. "
+                "Use source_writer(), memory_writer(), or path_writer() to adapt "
+                "one-off functions that return None, metadata, or descriptors."
+            )
+        add_plan.artifacts = _merge_writer_artifacts(base_artifact, write_result)
+        write_details: dict[str, object] = {
+            "write_phase": "artifact-write",
+            "writer_type": type(writer).__name__,
+            "write_mode": add_plan.storage_plan.write_mode,
+        }
+        if write_result.diagnostics:
+            write_details["writer_diagnostics"] = write_result.diagnostics
+        if write_result.provenance:
+            write_details["writer_provenance"] = write_result.provenance
         self.dependencies.emit_operation_audit(
             add_plan.context,
             event_type="write",
             message="Artifact write completed.",
-            details={
-                "write_phase": "artifact-write",
-                "writer_type": type(writer).__name__,
-                "write_mode": add_plan.storage_plan.write_mode,
-            },
+            details=write_details,
             locator=add_plan.locator,
         )
 
@@ -426,6 +462,7 @@ class AddOperationRunner(OperationRunner):
             original_path=self.request.original_path,
             original_filename=self.request.original_filename,
             suffixes=self.request.suffixes,
+            artifacts=list(add_plan.artifacts),
             derived_metadata=_metadata_with_hook_warnings(add_plan.context),
             naming_metadata=self.request.naming_metadata,
             time_added=self.request.time_added,
@@ -622,6 +659,100 @@ def _add_classification_metadata(context: OperationContext, locator: ArtifactLoc
         }
     elif existing is None:
         context.derived_metadata[CLASSIFICATION_METADATA_KEY] = classification
+
+
+def _planned_data_artifact(locator: ArtifactLocator) -> ArtifactDescriptor:
+    """Return the base descriptor for the operation's planned data artifact."""
+    return ArtifactDescriptor(id=DATA_ARTIFACT_ID, role="data_artifact", locator=locator)
+
+
+def _merge_writer_artifacts(
+    base_artifact: ArtifactDescriptor,
+    result: ArtifactWriteResult,
+) -> tuple[ArtifactDescriptor, ...]:
+    """Merge writer-produced descriptors over the planned data descriptor."""
+    data_result: ArtifactDescriptor | None = None
+    auxiliary: list[ArtifactDescriptor] = []
+    seen_auxiliary_ids: set[str] = set()
+
+    for artifact in result.artifacts:
+        if artifact.id == DATA_ARTIFACT_ID:
+            if artifact.role != "data_artifact":
+                raise ValueError(
+                    f"writer result artifact {DATA_ARTIFACT_ID!r} must use role 'data_artifact', "
+                    f"got {artifact.role!r}"
+                )
+            data_result = artifact
+            continue
+        if artifact.role == "data_artifact":
+            raise ValueError(
+                "writer result may only describe the operation data artifact with "
+                f"id {DATA_ARTIFACT_ID!r}; got id {artifact.id!r}"
+            )
+        if artifact.id in seen_auxiliary_ids:
+            raise ValueError(f"writer result contains duplicate artifact id: {artifact.id!r}")
+        seen_auxiliary_ids.add(artifact.id)
+        auxiliary.append(_normalize_descriptor_schema(artifact))
+
+    data_artifact = (
+        _normalize_descriptor_schema(base_artifact)
+        if data_result is None
+        else _merge_data_artifact(base_artifact, data_result)
+    )
+    return (data_artifact, *auxiliary)
+
+
+def _merge_data_artifact(
+    base_artifact: ArtifactDescriptor,
+    result_artifact: ArtifactDescriptor,
+) -> ArtifactDescriptor:
+    """Merge a writer-produced data descriptor over the planned base descriptor."""
+    if result_artifact.locator is not None and result_artifact.locator != base_artifact.locator:
+        raise ValueError("writer result data artifact locator must match the planned locator or be omitted")
+    return ArtifactDescriptor(
+        id=DATA_ARTIFACT_ID,
+        role="data_artifact",
+        locator=base_artifact.locator,
+        state=result_artifact.state,
+        relationship={**base_artifact.relationship, **result_artifact.relationship},
+        claims=_merge_claim_items(base_artifact.claims, result_artifact.claims),
+        facets=_merge_facet_items(base_artifact.facets, result_artifact.facets),
+    )
+
+
+def _normalize_descriptor_schema(artifact: ArtifactDescriptor) -> ArtifactDescriptor:
+    """Return a descriptor with deterministic claim and facet replacement."""
+    return ArtifactDescriptor(
+        id=artifact.id,
+        role=artifact.role,
+        locator=artifact.locator,
+        state=artifact.state,
+        relationship=artifact.relationship,
+        claims=_merge_claim_items((), artifact.claims),
+        facets=_merge_facet_items((), artifact.facets),
+    )
+
+
+def _merge_claim_items(
+    existing: Iterable[ArtifactClaimInput],
+    added: Iterable[ArtifactClaimInput],
+) -> list[ArtifactClaimInput]:
+    """Merge claim schema items by envelope, with later items replacing earlier ones."""
+    items_by_key: dict[tuple[str, str, str, str], ArtifactClaimInput] = {}
+    for item in [*existing, *added]:
+        items_by_key[claim_key(item)] = item
+    return list(items_by_key.values())
+
+
+def _merge_facet_items(
+    existing: Iterable[ArtifactFacetInput],
+    added: Iterable[ArtifactFacetInput],
+) -> list[ArtifactFacetInput]:
+    """Merge facet schema items by envelope, with later items replacing earlier ones."""
+    items_by_key: dict[tuple[str, str, str, str], ArtifactFacetInput] = {}
+    for item in [*existing, *added]:
+        items_by_key[facet_key(item)] = item
+    return list(items_by_key.values())
 
 
 def _validation_audit_level(report: ValidationReport) -> str:
