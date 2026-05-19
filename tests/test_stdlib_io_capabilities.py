@@ -10,6 +10,8 @@ import pytest
 from ogcat.artifact_claims import has_claim, has_facet
 from ogcat.bundled_plugins.stdlib_io import (
     delimited_table_artifact_descriptor,
+    delimiter_from_descriptor,
+    encoding_from_descriptor,
     json_artifact_descriptor,
     register_stdlib_capabilities,
     stdlib_capabilities,
@@ -45,15 +47,19 @@ def test_text_reader_and_writer_examples_use_encoding_facets(tmp_path: Path) -> 
     registry = _registry()
     ascii_descriptor = text_artifact_descriptor(tmp_path / "ascii.txt", encoding="ascii")
     utf8_descriptor = text_artifact_descriptor(tmp_path / "utf8.txt", encoding="utf-8")
+    override_descriptor = text_artifact_descriptor(tmp_path / "override.txt", encoding="ascii")
 
     writer = _implementation(_select(registry, ascii_descriptor, operation="write", interface="text"))
     ascii_result = writer.write(ascii_descriptor, "plain ascii")
     utf8_result = writer.write(utf8_descriptor, "hello 🙂")
+    override_result = writer.write(override_descriptor, "hello 🙂", encoding="utf-8")
     reader = _implementation(_select(registry, utf8_result, operation="read", interface="text"))
 
     assert (tmp_path / "ascii.txt").read_bytes() == b"plain ascii"
     assert reader.read(ascii_result) == "plain ascii"
     assert reader.read(utf8_result) == "hello 🙂"
+    assert reader.read(override_result) == "hello 🙂"
+    assert encoding_from_descriptor(override_result) == "utf-8"
     assert has_facet(ascii_result, kind="encoding", name="charset", namespace="ogcat.stdlib")
     assert has_facet(utf8_result, kind="encoding", name="charset", namespace="ogcat.stdlib")
 
@@ -65,17 +71,50 @@ def test_delimited_table_reader_and_writer_examples_support_csv_and_options(
     registry = _registry()
     csv_descriptor = delimited_table_artifact_descriptor(tmp_path / "table.csv")
     pipe_descriptor = delimited_table_artifact_descriptor(tmp_path / "table.psv", delimiter="|")
+    override_descriptor = delimited_table_artifact_descriptor(tmp_path / "override.psv")
     rows = [{"station": "mhd", "value": "410.2"}, {"station": "tac", "value": "419.5"}]
 
     writer = _implementation(_select(registry, csv_descriptor, operation="write", interface="table"))
     csv_result = writer.write(csv_descriptor, rows)
     pipe_result = writer.write(pipe_descriptor, rows, delimiter="|")
+    override_result = writer.write(override_descriptor, rows, delimiter="|")
     reader = _implementation(_select(registry, csv_result, operation="read", interface="table"))
     pipe_reader = _implementation(_select(registry, pipe_result, operation="read", interface="table"))
+    override_reader = _implementation(_select(registry, override_result, operation="read", interface="table"))
 
     assert reader.read(csv_result) == rows
     assert pipe_reader.read(pipe_result) == rows
+    assert override_reader.read(override_result) == rows
+    assert delimiter_from_descriptor(override_result) == "|"
     assert (tmp_path / "table.psv").read_text(encoding="utf-8").splitlines()[0] == "station|value"
+
+
+def test_delimited_table_reader_rejects_extra_columns_and_normalizes_missing_values(
+    tmp_path: Path,
+) -> None:
+    """Delimited table rows should keep the advertised dict[str, str] shape."""
+    registry = _registry()
+    reader = _implementation(
+        _select(
+            registry,
+            delimited_table_artifact_descriptor(tmp_path / "valid.csv"),
+            operation="read",
+            interface="table",
+        )
+    )
+    missing_descriptor = delimited_table_artifact_descriptor(tmp_path / "missing.csv")
+    missing_path = missing_descriptor.locator.as_path() if missing_descriptor.locator is not None else None
+    assert missing_path is not None
+    missing_path.write_text("name,value\nalpha\n", encoding="utf-8")
+
+    extra_descriptor = delimited_table_artifact_descriptor(tmp_path / "extra.csv")
+    extra_path = extra_descriptor.locator.as_path() if extra_descriptor.locator is not None else None
+    assert extra_path is not None
+    extra_path.write_text("name,value\nalpha,1,unexpected\n", encoding="utf-8")
+
+    assert reader.read(missing_descriptor) == [{"name": "alpha", "value": ""}]
+    with pytest.raises(ValueError, match="more columns"):
+        reader.read(extra_descriptor)
 
 
 def test_json_reader_and_writer_examples_round_trip_documents(tmp_path: Path) -> None:

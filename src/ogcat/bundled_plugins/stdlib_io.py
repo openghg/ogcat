@@ -28,6 +28,7 @@ from ogcat.models import (
 PLUGIN_NAMESPACE = "ogcat.stdlib"
 SCHEMA_VERSION = "1"
 DEFAULT_TEXT_ENCODING = "utf-8"
+_EXTRA_COLUMNS_KEY = "__ogcat_extra_columns__"
 
 JsonDocument: TypeAlias = JsonValue
 TableRows: TypeAlias = list[dict[str, str]]
@@ -100,7 +101,13 @@ class DelimitedTableReader:
             newline="",
             encoding=encoding_from_descriptor(descriptor),
         ) as stream:
-            return [dict(row) for row in csv.DictReader(stream, delimiter=resolved_delimiter)]
+            reader = csv.DictReader(
+                stream,
+                delimiter=resolved_delimiter,
+                restkey=_EXTRA_COLUMNS_KEY,
+                restval="",
+            )
+            return [_normalize_table_row(row, row_number=index) for index, row in enumerate(reader, start=2)]
 
 
 class DelimitedTableWriter:
@@ -574,6 +581,22 @@ def _fieldnames_from_rows(rows: Sequence[Mapping[str, object]]) -> list[str]:
     return fieldnames
 
 
+def _normalize_table_row(row: Mapping[Any, Any], *, row_number: int) -> dict[str, str]:
+    """Return a csv row normalized to string keys and values."""
+    extra_columns = row.get(_EXTRA_COLUMNS_KEY)
+    if isinstance(extra_columns, list):
+        raise ValueError(f"delimited table row {row_number} has more columns than the header")
+
+    normalized: dict[str, str] = {}
+    for key, value in row.items():
+        if key is None:
+            raise ValueError(f"delimited table row {row_number} contains a column without a header")
+        if isinstance(value, list):
+            raise ValueError(f"delimited table row {row_number} contains a non-scalar value")
+        normalized[str(key)] = "" if value is None else str(value)
+    return normalized
+
+
 def _pig_latin_text(text: str) -> str:
     """Return text with ASCII words converted to Pig Latin."""
     return _WORD_RE.sub(lambda match: _pig_latin_word(match.group(0)), text)
@@ -606,16 +629,11 @@ def _merge_facet_items(
 
 
 def _merge_schema_items(existing: Iterable[object], added: Iterable[object]) -> list[object]:
-    """Merge claim or facet-like schema items by namespace envelope."""
-    items: list[object] = []
-    keys: set[tuple[str, str, str, str]] = set()
+    """Merge claim or facet-like schema items, letting added items replace existing ones."""
+    items_by_key: dict[tuple[str, str, str, str], object] = {}
     for item in [*existing, *added]:
-        key = _schema_item_key(item)
-        if key in keys:
-            continue
-        keys.add(key)
-        items.append(item)
-    return items
+        items_by_key[_schema_item_key(item)] = item
+    return list(items_by_key.values())
 
 
 def _schema_item_key(item: object) -> tuple[str, str, str, str]:
