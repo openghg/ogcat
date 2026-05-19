@@ -22,6 +22,7 @@ Public API
    storage
    replicas
    hooks
+   capabilities
    validation
    writers-transactions
 

@@ -4,6 +4,12 @@
 `ogcat` core. A plugin is just a Python object with one or more hook methods registered on a
 `PluginRegistry` or `HookManager`.
 
+Capability registration is a separate extension point. Lifecycle hooks observe
+or mutate catalog operations; capability declarations describe typed readers,
+writers, and converters that can be selected from artifact claims and facets.
+A single plugin object may provide both, but the capability registry remains a
+registration and lookup layer rather than another hook lifecycle.
+
 Hooks are called in registration order. Most hook failures fail the catalog operation and use the
 normal transaction rollback path. `after_commit` is different: it runs after the catalog operation
 has already committed, so failures are reported as Python warnings rather than changing a successful
@@ -245,3 +251,27 @@ The context includes the catalog root, operation id, operation type, record type
 derived metadata, planned locators, source information, storage mode, and rollback registration.
 `context.source_path` and `context.source_descriptor` remain compatibility shims over
 `context.source.path` and `context.source.descriptor`.
+
+## Relationship To Capability Declarations
+
+The #119 capability registry builds on the plugin ergonomics described here
+without merging lifecycle hooks and typed artifact access. `PluginRegistry`
+continues to collect hook objects for operation lifecycle points. A
+`CapabilityRegistry` collects declarations for readers, writers, and
+converters: what input claims or interfaces they accept, what output claims or
+interfaces they produce, and any plugin-owned option metadata.
+
+Bundled capabilities and external capabilities should register the same way.
+For example, dependency-light bundled examples for bytes, text with encoding
+facets, CSV/table access, JSON access, and an emoticon-to-emoji converter can
+ship as plugin-style modules. A playful text-to-text converter such as Pig
+Latin can also exercise the boundary: a CSV-like artifact may be selected as
+text input, but that converter still cannot advertise CSV/table output.
+Scientific readers such as xarray, pandas, Zarr, NetCDF, HDF5, Intake, or
+OpenGHG-specific integrations stay optional and should not become core imports
+merely because the registry can describe them.
+
+Capability lookup dispatches by `ArtifactDescriptor` claims and facets, not by
+`record_type`. It also requires explicit selection: if an artifact can be read
+as bytes, text, and table, callers must ask for the desired interface before
+the registry returns one selected capability.

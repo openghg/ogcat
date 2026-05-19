@@ -138,6 +138,32 @@ slice without duplicating normalization logic: ``iter_claims()``,
 ``has_claim()``, ``claim_key()``, ``iter_facets()``, ``has_facet()``, and
 ``facet_key()``.
 
+## Relationship To Capability Selection
+
+The #119 capability registry uses these claims and facets as dispatch facts.
+It should inspect the ``ArtifactDescriptor`` attached to the artifact being
+read, written, or converted; it should not use ``CatalogRecord.record_type`` as
+an I/O dispatch key.
+
+Selection is explicit. A single artifact may legitimately advertise several
+interfaces at the same time, for example bytes, text, table, and JSON. A caller
+that asks only to "read" such an artifact has not supplied enough information.
+The registry should raise an ambiguity error until the caller requests a
+specific interface or output claim such as ``interface=text`` or
+``interface=table``.
+
+Facets make otherwise similar claims precise. Text readers can use encoding
+facets, delimited-table readers can use dialect facets, archive readers can use
+member facets, and collection readers can use member-pattern facets. These
+facts are plugin-readable metadata; they do not require core to import optional
+scientific libraries.
+
+Capability selection treats claim metadata as descriptive. Claims match by
+their namespace/kind/name/version envelope. Facets match by the same envelope
+plus required metadata as a subset, so dispatch-significant details such as
+encoding values, delimiters, archive members, or local path requirements should
+be modeled as facets.
+
 ## Worked Examples
 
 These examples are design targets for writers, inspectors, and future readers.
