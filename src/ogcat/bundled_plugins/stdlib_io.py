@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import csv
-import inspect
 import json
 import re
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeAlias, cast
 
-from ogcat.artifact_claims import has_claim, iter_facets
+from ogcat.artifact_claims import iter_facets
+from ogcat.capabilities import ArtifactCapability, CapabilityKind
 from ogcat.models import (
     ArtifactClaim,
     ArtifactClaimInput,
@@ -34,65 +33,6 @@ JsonDocument: TypeAlias = JsonValue
 TableRows: TypeAlias = list[dict[str, str]]
 _WORD_RE = re.compile(r"[A-Za-z]+")
 _VOWELS = frozenset("aeiouAEIOU")
-
-
-@dataclass(frozen=True, slots=True)
-class StdlibCapability:
-    """Small capability object used when the core class is unavailable.
-
-    The public attributes intentionally use plain names so the examples remain
-    easy for the core registry to inspect without special cases.
-    """
-
-    name: str
-    operation: str
-    implementation: object
-    required_claims: tuple[ArtifactClaim, ...] = ()
-    required_facets: tuple[ArtifactFacet, ...] = ()
-    namespace: str = PLUGIN_NAMESPACE
-    version: str = SCHEMA_VERSION
-    description: str = ""
-    priority: int = 0
-    metadata: MetadataDict = field(default_factory=dict)
-
-    @property
-    def kind(self) -> str:
-        """Return the operation name for registries that use ``kind``."""
-        return self.operation
-
-    @property
-    def capability_type(self) -> str:
-        """Return the operation name for registries that use ``capability_type``."""
-        return self.operation
-
-    def matches(
-        self,
-        descriptor: ArtifactDescriptor,
-        *,
-        operation: str | None = None,
-        interface: str | None = None,
-        data_type: str | None = None,
-    ) -> bool:
-        """Return whether this capability can handle a descriptor."""
-        if operation is not None and operation != self.operation:
-            return False
-        if interface is not None and not has_claim(descriptor, kind="interface", name=interface):
-            return False
-        if data_type is not None and not has_claim(descriptor, kind="data_type", name=data_type):
-            return False
-        return all(_descriptor_has_claim(descriptor, claim) for claim in self.required_claims)
-
-    def supports(self, descriptor: ArtifactDescriptor, **criteria: object) -> bool:
-        """Compatibility alias for registries that call ``supports``."""
-        operation = criteria.get("operation")
-        interface = criteria.get("interface")
-        data_type = criteria.get("data_type")
-        return self.matches(
-            descriptor,
-            operation=None if operation is None else str(operation),
-            interface=None if interface is None else str(interface),
-            data_type=None if data_type is None else str(data_type),
-        )
 
 
 class BytesReader:
@@ -296,36 +236,36 @@ class PigLatinTextConverter:
         return TextWriter().write(output, converted, encoding=DEFAULT_TEXT_ENCODING)
 
 
-def stdlib_capabilities() -> tuple[object, ...]:
+def stdlib_capabilities() -> tuple[ArtifactCapability, ...]:
     """Create bundled stdlib capability examples."""
     return (
         _capability(
             name="bytes-reader",
-            operation="reader",
+            kind=CapabilityKind.READER,
             implementation=BytesReader(),
-            required_claims=(InterfaceClaim("bytes"),),
+            input_claims=(InterfaceClaim("bytes"),),
             output_claims=(InterfaceClaim("bytes"),),
             description="Read local path artifacts with Path.read_bytes.",
         ),
         _capability(
             name="bytes-writer",
-            operation="writer",
+            kind=CapabilityKind.WRITER,
             implementation=BytesWriter(),
             output_claims=(RepresentationClaim("file"), InterfaceClaim("bytes")),
             description="Write local path artifacts with Path.write_bytes.",
         ),
         _capability(
             name="text-reader",
-            operation="reader",
+            kind=CapabilityKind.READER,
             implementation=TextReader(),
-            required_claims=(InterfaceClaim("text"),),
+            input_claims=(InterfaceClaim("text"),),
             output_claims=(InterfaceClaim("text"),),
             required_facets=(encoding_facet_requirement(),),
             description="Read local path artifacts as text using encoding facets.",
         ),
         _capability(
             name="text-writer",
-            operation="writer",
+            kind=CapabilityKind.WRITER,
             implementation=TextWriter(),
             output_claims=(RepresentationClaim("text"), InterfaceClaim("text")),
             required_facets=(encoding_facet_requirement(),),
@@ -333,16 +273,16 @@ def stdlib_capabilities() -> tuple[object, ...]:
         ),
         _capability(
             name="delimited-table-reader",
-            operation="reader",
+            kind=CapabilityKind.READER,
             implementation=DelimitedTableReader(),
-            required_claims=(InterfaceClaim("table"),),
+            input_claims=(InterfaceClaim("table"),),
             output_claims=(InterfaceClaim("table"),),
             required_facets=(encoding_facet_requirement(), delimiter_facet_requirement()),
             description="Read delimited text tables with csv.DictReader.",
         ),
         _capability(
             name="delimited-table-writer",
-            operation="writer",
+            kind=CapabilityKind.WRITER,
             implementation=DelimitedTableWriter(),
             output_claims=(RepresentationClaim("text"), InterfaceClaim("text"), InterfaceClaim("table")),
             required_facets=(encoding_facet_requirement(), delimiter_facet_requirement()),
@@ -350,16 +290,16 @@ def stdlib_capabilities() -> tuple[object, ...]:
         ),
         _capability(
             name="json-reader",
-            operation="reader",
+            kind=CapabilityKind.READER,
             implementation=JsonReader(),
-            required_claims=(InterfaceClaim("json"),),
+            input_claims=(InterfaceClaim("json"),),
             output_claims=(InterfaceClaim("json"),),
             required_facets=(encoding_facet_requirement(),),
             description="Read JSON artifacts with json.load.",
         ),
         _capability(
             name="json-writer",
-            operation="writer",
+            kind=CapabilityKind.WRITER,
             implementation=JsonWriter(),
             output_claims=(
                 RepresentationClaim("text"),
@@ -372,18 +312,18 @@ def stdlib_capabilities() -> tuple[object, ...]:
         ),
         _capability(
             name="emoticon-to-emoji-text-converter",
-            operation="converter",
+            kind=CapabilityKind.CONVERTER,
             implementation=EmoticonEmojiTextConverter(),
-            required_claims=(InterfaceClaim("text"),),
+            input_claims=(InterfaceClaim("text"),),
             output_claims=(RepresentationClaim("text"), InterfaceClaim("text")),
             required_facets=(encoding_facet_requirement(),),
             description="Convert ASCII emoticons in text artifacts to Unicode emoji text.",
         ),
         _capability(
             name="pig-latin-text-converter",
-            operation="converter",
+            kind=CapabilityKind.CONVERTER,
             implementation=PigLatinTextConverter(),
-            required_claims=(InterfaceClaim("text"),),
+            input_claims=(InterfaceClaim("text"),),
             output_claims=(RepresentationClaim("text"), InterfaceClaim("text")),
             required_facets=(encoding_facet_requirement(),),
             description="Convert text artifacts to Pig Latin text.",
@@ -395,13 +335,15 @@ def register_stdlib_capabilities(registry: Any) -> Any:
     """Register bundled stdlib capabilities with a capability registry.
 
     Args:
-        registry: Registry object with a ``register`` method.
+        registry: Registry object with ``register_capability`` or ``register``.
 
     Returns:
         The registry, to support fluent setup in tests and examples.
     """
+    register = getattr(registry, "register_capability", None)
+    if register is None:
+        register = registry.register
     for capability in stdlib_capabilities():
-        register = getattr(registry, "register_capability", registry.register)
         register(capability)
     return registry
 
@@ -589,76 +531,25 @@ def descriptor_with_claims(
 def _capability(
     *,
     name: str,
-    operation: str,
+    kind: CapabilityKind,
     implementation: object,
     description: str,
-    required_claims: tuple[ArtifactClaim, ...] = (),
+    input_claims: tuple[ArtifactClaim, ...] = (),
     output_claims: tuple[ArtifactClaim, ...] = (),
     required_facets: tuple[ArtifactFacet, ...] = (),
-) -> object:
-    """Build a core ArtifactCapability when available, otherwise a local object."""
-    fallback = StdlibCapability(
+) -> ArtifactCapability:
+    """Build a bundled stdlib artifact capability."""
+    return ArtifactCapability(
+        kind=kind,
         name=name,
-        operation=operation,
-        implementation=implementation,
-        required_claims=required_claims,
+        namespace=PLUGIN_NAMESPACE,
+        version=SCHEMA_VERSION,
+        input_claims=input_claims,
+        output_claims=output_claims,
         required_facets=required_facets,
-        description=description,
+        metadata={"description": description, "plugin": "stdlib_io"},
+        implementation=implementation,
     )
-    try:
-        from ogcat.capabilities import ArtifactCapability
-    except ImportError:
-        return fallback
-    capability_factory = cast(Any, ArtifactCapability)
-
-    metadata: MetadataDict = {"plugin": "stdlib_io"}
-    values: dict[str, object] = {
-        "name": name,
-        "namespace": PLUGIN_NAMESPACE,
-        "version": SCHEMA_VERSION,
-        "operation": operation,
-        "kind": operation,
-        "capability_type": operation,
-        "implementation": implementation,
-        "handler": implementation,
-        "input_claims": required_claims,
-        "output_claims": output_claims,
-        "required_claims": required_claims,
-        "claims": required_claims,
-        "required_facets": required_facets,
-        "facets": required_facets,
-        "description": description,
-        "priority": 0,
-        "metadata": metadata,
-    }
-    try:
-        parameters = inspect.signature(capability_factory).parameters
-    except (TypeError, ValueError):
-        parameters = {}
-    kwargs = {name: values[name] for name in parameters if name in values}
-    if kwargs:
-        try:
-            return capability_factory(**kwargs)
-        except TypeError:
-            pass
-
-    for kwargs in (
-        {
-            "name": name,
-            "operation": operation,
-            "implementation": implementation,
-            "required_claims": required_claims,
-            "description": description,
-            "metadata": metadata,
-        },
-        {"name": name, "kind": operation, "implementation": implementation},
-        {"name": name, "implementation": implementation},
-    ):
-        try:
-            return capability_factory(**kwargs)
-        except TypeError:
-            continue
-    return fallback
 
 
 def _descriptor_path(descriptor: ArtifactDescriptor) -> Path:
@@ -671,17 +562,6 @@ def _descriptor_path(descriptor: ArtifactDescriptor) -> Path:
             f"artifact descriptor {descriptor.id!r} is not path-backed: {descriptor.locator.kind!r}"
         )
     return path
-
-
-def _descriptor_has_claim(descriptor: ArtifactDescriptor, claim: ArtifactClaim) -> bool:
-    """Return whether a descriptor has a matching claim envelope."""
-    return has_claim(
-        descriptor,
-        kind=claim.kind,
-        name=claim.name,
-        namespace=claim.namespace,
-        version=claim.version,
-    )
 
 
 def _fieldnames_from_rows(rows: Sequence[Mapping[str, object]]) -> list[str]:

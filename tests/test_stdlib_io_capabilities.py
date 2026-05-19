@@ -12,10 +12,11 @@ from ogcat.bundled_plugins.stdlib_io import (
     delimited_table_artifact_descriptor,
     json_artifact_descriptor,
     register_stdlib_capabilities,
+    stdlib_capabilities,
     temporary_text_artifact_descriptor,
     text_artifact_descriptor,
 )
-from ogcat.capabilities import MissingCapabilityError
+from ogcat.capabilities import ArtifactCapability, CapabilityKind, CapabilityRegistry, MissingCapabilityError
 from ogcat.models import ArtifactDescriptor, ArtifactLocator, DataTypeClaim, InterfaceClaim
 from ogcat.plugins import PluginRegistry
 
@@ -229,73 +230,73 @@ def test_stdlib_capabilities_register_through_plugin_registry(tmp_path: Path) ->
     assert plugins.hooks == ()
 
 
-def _registry() -> Any:
+def test_stdlib_capabilities_use_core_capability_model() -> None:
+    """Bundled capability examples should use the core capability model directly."""
+    capabilities = stdlib_capabilities()
+
+    assert all(isinstance(capability, ArtifactCapability) for capability in capabilities)
+    assert {capability.kind for capability in capabilities} == {
+        CapabilityKind.READER,
+        CapabilityKind.WRITER,
+        CapabilityKind.CONVERTER,
+    }
+    assert all(capability.namespace == "ogcat.stdlib" for capability in capabilities)
+
+
+def test_stdlib_registration_prefers_capability_method() -> None:
+    """Registration should call register_capability when a registry exposes it."""
+
+    class CapabilityOnlyRegistry:
+        """Minimal registry exposing only the capability registration method."""
+
+        def __init__(self) -> None:
+            self.capabilities: list[ArtifactCapability] = []
+
+        def register_capability(self, capability: ArtifactCapability) -> ArtifactCapability:
+            """Record the registered capability."""
+            self.capabilities.append(capability)
+            return capability
+
+    registry = CapabilityOnlyRegistry()
+
+    assert register_stdlib_capabilities(registry) is registry
+    assert {capability.name for capability in registry.capabilities} == {
+        capability.name for capability in stdlib_capabilities()
+    }
+
+
+def _registry() -> CapabilityRegistry:
     """Return a registry populated with bundled stdlib capabilities."""
-    capability_module = pytest.importorskip("ogcat.capabilities")
-    return register_stdlib_capabilities(capability_module.CapabilityRegistry())
+    return register_stdlib_capabilities(CapabilityRegistry())
 
 
 def _select(
-    registry: Any,
+    registry: CapabilityRegistry,
     descriptor: ArtifactDescriptor,
     *,
     operation: str,
     interface: str,
     name: str | None = None,
-) -> object:
-    """Select a capability across the small expected registry API variants."""
-    select = registry.select
-    capability_kind = {"read": "reader", "write": "writer", "convert": "converter"}[operation]
+) -> ArtifactCapability:
+    """Select a stdlib capability through the core registry API."""
+    capability_kind = {
+        "read": CapabilityKind.READER,
+        "write": CapabilityKind.WRITER,
+        "convert": CapabilityKind.CONVERTER,
+    }[operation]
     capability_name = name or {("write", "text"): "text-writer"}.get((operation, interface))
     input_claims = [InterfaceClaim(interface)] if operation in {"read", "convert"} else []
     output_claims = [InterfaceClaim(interface)] if operation in {"write", "convert"} else []
-    attempts = (
-        lambda: select(
-            kind=capability_kind,
-            name=capability_name,
-            descriptor=descriptor,
-            input_claims=input_claims,
-            output_claims=output_claims,
-        ),
-        lambda: select(kind=capability_kind, descriptor=descriptor),
-        lambda: select(descriptor, operation=operation, interface=interface),
-        lambda: select(descriptor, kind=capability_kind, interface=interface),
-        lambda: select(operation, descriptor, interface=interface),
-        lambda: select(operation=operation, descriptor=descriptor, interface=interface),
+    return registry.select(
+        kind=capability_kind,
+        name=capability_name,
+        descriptor=descriptor,
+        input_claims=input_claims,
+        output_claims=output_claims,
     )
-    errors: list[Exception] = []
-    for attempt in attempts:
-        try:
-            selected = attempt()
-        except TypeError as exc:
-            errors.append(exc)
-            continue
-        if selected is not None:
-            return selected
-
-    find = getattr(registry, "find", None)
-    if find is not None:
-        for kwargs in (
-            {
-                "kind": capability_kind,
-                "name": capability_name,
-                "descriptor": descriptor,
-                "input_claims": input_claims,
-                "output_claims": output_claims,
-            },
-            {"kind": capability_kind, "descriptor": descriptor},
-            {"operation": operation, "interface": interface},
-            {"kind": capability_kind, "interface": interface},
-        ):
-            try:
-                matches = list(find(**kwargs))
-            except TypeError:
-                continue
-            if matches:
-                return matches[0]
-    raise AssertionError(f"no capability selected for {operation}/{interface}: {errors}")
 
 
-def _implementation(capability: object) -> Any:
+def _implementation(capability: ArtifactCapability) -> Any:
     """Return an opaque implementation object from a selected capability."""
-    return getattr(capability, "implementation", getattr(capability, "handler", capability))
+    assert capability.implementation is not None
+    return capability.implementation
