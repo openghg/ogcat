@@ -298,14 +298,15 @@ This keeps storage shape separate from logical dataset shape:
 - collection facets say which members participate and how a reader should
   combine them.
 
-## Materializer-Produced Facts
+## Writer-Produced Facts
 
-Operation materializers are the natural source of produced artifact
-claims/facets because they know what they materialized. Issue #117 adds the
-merge path: descriptor-first materializer classes receive an
-``ArtifactWriteRequest`` and return an ``ArtifactWriteResult``. The operation
-runner builds a planned ``data`` descriptor first, calls the materializer, and
-merges returned descriptor facts before staging the catalog record.
+Writer capabilities are the natural source of produced artifact claims/facets
+because they know what they materialized. Issue #117 adds the merge path:
+writer capabilities return an ``ArtifactWriteResult`` and operation
+materializers wrap those capabilities or one-off functions inside the catalog
+operation lifecycle. The operation runner builds a planned ``data`` descriptor
+first, calls the materializer, and merges returned descriptor facts before
+staging the catalog record.
 
 The planned data descriptor has id ``data``, role ``data_artifact``, the planned
 locator, and state ``available``. A returned data descriptor may omit the
@@ -316,7 +317,7 @@ is kept. Duplicate artifact ids fail before commit, and only the ``data``
 descriptor may use role ``data_artifact``.
 
 Claims and facets merge by their envelope key:
-``(namespace, kind, name, version)``. Later materializer-produced facts replace
+``(namespace, kind, name, version)``. Later writer-produced facts replace
 earlier facts with the same envelope deterministically. Relationship metadata
 merges shallowly with result keys winning. Result diagnostics and provenance are
 normalized to JSON-compatible metadata and copied only into the artifact-write
@@ -326,6 +327,16 @@ This result model describes persisted artifact facts and catalog merge behavior.
 It does not define read handles, ``open_artifact()``, managed collection
 ergonomics, runtime pipe types such as ``str`` or ``xarray.Dataset``, or a
 pipeline value-adapter layer.
+
+Current ``source_kind`` and ``target_kind`` values are legacy operation helper
+shortcuts, not the future dispatch vocabulary. Source identity should migrate
+toward descriptors with claims/facets: for example, ``zip_file`` maps to
+``data_type=zip`` plus archive-member interface/facets, text input maps to
+``interface=text`` plus encoding facets, and local-file input maps to a path
+locator facet plus an appropriate representation claim. ``target_kind`` only
+describes storage shape: ``file`` maps to ``representation=file`` and
+``directory`` maps to ``representation=directory``. Collection-ness belongs in
+``interface=collection`` and collection facets, not in ``target_kind``.
 
 ## Relationship To Classification Metadata
 

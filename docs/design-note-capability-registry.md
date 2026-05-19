@@ -9,12 +9,13 @@ The scope is deliberately narrow:
 - define how capabilities are declared, registered, and selected;
 - dispatch by `ArtifactDescriptor` claims and facets, not by `record_type`;
 - explain how bundled and external plugins use the same route;
-- preserve room for future typed reader handles and operation-materializer
-  result merging.
+- preserve room for future typed reader handles, converter plans, and operation
+  merge of writer-capability results.
 
 This slice does not define the public `open_artifact()` API, read-handle
-lifecycle, shell-like pipeline syntax, or catalog merge of writer-returned
-artifact descriptors. Those remain separate work items.
+lifecycle, shell-like pipeline syntax, or a complete operation pipeline
+executor. Catalog merge of writer-returned artifact descriptors is #117's
+result boundary.
 
 ## Core Idea
 
@@ -36,10 +37,12 @@ slice does not make core invoke it implicitly.
 
 Terminology matters: a registry writer capability is not the same thing as the
 operation-scoped `ArtifactWriter`/materializer helpers in `ogcat.writers`.
-Writer capabilities declare typed I/O behavior. Operation materializers prepare
-the target descriptor, invoke a capability or one-off function, register
-rollback, collect produced descriptor facts, and hand those facts to the
-operation runner for merge.
+Writer capabilities are sinks: they accept a runtime value, source handle, or
+operation input plus a target `ArtifactDescriptor`, materialize the output, and
+return an `ArtifactWriteResult`. Operation materializers are wrappers around
+those sinks or one-off functions. They prepare the target descriptor, invoke the
+capability, register rollback, collect produced descriptor facts, and hand the
+result to the operation runner for merge.
 
 ## Declaration Shape
 
@@ -169,6 +172,23 @@ the artifact lacks required claims/facets, or the request needs a more exact
 interface. Malformed lookup filters should raise a lookup-domain validation
 error rather than leaking raw schema normalization exceptions.
 
+A conversion from CSV to JSON illustrates the executable shape without
+requiring a full pipeline runtime. The caller selects a table reader for the
+source descriptor, selects or calls a table-to-JSON converter, and then passes
+the converter's runtime JSON document to a JSON writer capability. The writer
+returns an `ArtifactWriteResult`; an add/update operation materializer would
+wrap that result with rollback and pass it to the operation runner for catalog
+merge. In a later pipeline executor, the same composition should be selected
+as:
+
+```text
+Descriptor[interface=table, data_type=csv]
+  -> Reader[table rows]
+  -> Converter[json document]
+  -> WriterCapability[interface=json, representation=text]
+  -> ArtifactWriteResult
+```
+
 ## Dispatch Inputs
 
 Dispatch uses `ArtifactDescriptor` facts:
@@ -229,16 +249,19 @@ Useful examples:
   Unicode emoji;
 - a Pig Latin text converter that shows CSV-like descriptors can be routed as
   text when text input and text output are requested, but the same converter
-  must not be selected when the requested output is CSV or a table.
+  must not be selected when the requested output is CSV or a table;
+- a delimited-table-to-JSON converter that demonstrates reader/filter/writer
+  composition with `ArtifactWriteResult` as the writer-capability result.
 
 These examples are meant to exercise the registry design. They must not bend
 core matching rules to make toy examples pass, and they must not introduce
 optional scientific dependencies. NetCDF, HDF5, Zarr, xarray, pandas, Intake,
 and OpenGHG-specific behavior remain optional plugin territory.
-The bundled converter implementations call the bundled text reader and writer
-directly only to keep this slice executable without the future handle API. That
-is useful as a plugin-style pressure test, but it is not the intended long-term
-pipeline executor.
+The bundled converter implementations operate only on runtime values. Tests and
+examples manually connect bundled readers, converters, and writers to keep this
+slice executable without the future handle API. That is useful as a
+plugin-style pressure test, but it is not the intended long-term pipeline
+executor.
 
 The long-term executor should make composition explicit. A reader selected with
 zero or more converters can be exposed as a reader/read plan for a requested
@@ -267,8 +290,8 @@ scope:
   that is not catalogued;
 - allow the registry to store and return runtime implementation objects, but do
   not make core invoke them implicitly;
-- keep reader handle APIs for #118 and catalog materializer-result merge for
-  #117.
+- keep reader handle APIs for #118 and catalog merge of writer-capability
+  results for #117.
 
 ## Deferred
 
@@ -278,7 +301,7 @@ This note intentionally leaves several choices to implementation:
 - trust and authentication policy for third-party plugin declarations;
 - how `PluginRegistry` exposes capability contribution methods;
 - the read-handle API that consumes selected reader implementations;
-- the operation-materializer result model that persists produced claims/facets;
+- richer writer-capability result provenance beyond #117's audit-only details;
 - optional integration with Intake pipelines or other external registries.
 - a converter orchestration layer that passes opened handles or runtime values
   between readers, filters, and writer capabilities so chained conversions do

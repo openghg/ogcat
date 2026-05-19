@@ -59,14 +59,17 @@ def memory_source(
     kind: str = "memory",
     descriptor: str | None = None,
     metadata: MetadataDict | None = None,
+    artifact: ArtifactDescriptor | None = None,
 ) -> OperationSource:
     """Build an operation source carrying an in-memory Python object.
 
     Args:
         data: In-memory object to pass to a memory writer.
-        kind: Source kind used for writer validation.
+        kind: Legacy source kind used for materializer validation.
         descriptor: Optional human-readable source description.
         metadata: Optional JSON-compatible source metadata.
+        artifact: Optional descriptor for claim/facet-based capability
+            selection when the payload represents an artifact-like source.
 
     Returns:
         An operation source with ``payload`` set to ``data``.
@@ -76,6 +79,7 @@ def memory_source(
         descriptor=descriptor,
         metadata={} if metadata is None else dict(metadata),
         payload=data,
+        artifact=artifact,
     )
 
 
@@ -85,15 +89,18 @@ def path_source(
     kind: str = "path",
     descriptor: str | None = None,
     metadata: MetadataDict | None = None,
+    artifact: ArtifactDescriptor | None = None,
 ) -> OperationSource:
     """Build an operation source carrying a local path.
 
     Args:
         path: Local source path.
-        kind: Source kind used for writer validation.
+        kind: Legacy source kind used for materializer validation.
         descriptor: Optional human-readable source description. Defaults to the
             resolved source path string.
         metadata: Optional JSON-compatible source metadata.
+        artifact: Optional descriptor for claim/facet-based reader, converter,
+            or writer capability selection.
 
     Returns:
         An operation source with ``path`` set to the resolved local path.
@@ -104,6 +111,7 @@ def path_source(
         path=source_path,
         descriptor=descriptor or str(source_path),
         metadata={} if metadata is None else dict(metadata),
+        artifact=artifact,
     )
 
 

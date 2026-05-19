@@ -820,13 +820,16 @@ class CatalogRecord:
 
 @dataclass(slots=True, init=False)
 class ArtifactWriteResult:
-    """Transient writer output describing artifacts produced by an operation.
+    """Transient writer-capability output describing produced artifacts.
 
-    ``ArtifactWriteResult`` is not stored directly. Operation runners merge its
-    artifact descriptors into the catalog record and copy diagnostics and
-    provenance into operation audit details. Writers should use artifact claims
-    and facets for persisted descriptor facts, and use diagnostics/provenance
-    only for JSON-compatible operation audit context.
+    ``ArtifactWriteResult`` is not stored directly. Writer capabilities return
+    it to describe artifact facts produced while materializing an output
+    descriptor. Operation-scoped materializers may wrap those capabilities or
+    one-off functions, then pass the same result shape to operation runners.
+    Runners merge artifact descriptors into the catalog record and copy
+    diagnostics/provenance into operation audit details. Writers should use
+    artifact claims and facets for persisted descriptor facts, and use
+    diagnostics/provenance only for JSON-compatible operation audit context.
 
     Args:
         artifacts: Artifact descriptors produced or enriched by the writer.
@@ -855,6 +858,23 @@ class ArtifactWriteResult:
             {} if provenance is None else provenance,
             field_name="artifact_write_result.provenance",
         )
+
+    @property
+    def artifact(self) -> ArtifactDescriptor:
+        """Return the sole artifact descriptor in a single-output result.
+
+        Returns:
+            The only artifact descriptor in this result.
+
+        Raises:
+            ValueError: If the result has zero or multiple artifact
+                descriptors.
+        """
+        if len(self.artifacts) != 1:
+            raise ValueError(
+                f"ArtifactWriteResult.artifact requires exactly one artifact; got {len(self.artifacts)}"
+            )
+        return self.artifacts[0]
 
     @classmethod
     def for_data_artifact(

@@ -111,10 +111,11 @@ database transactions.
 
 Operation materializers materialise data before the catalog record is written. They receive the
 active `ArtifactWriteRequest`, which contains the `OperationContext`, `OperationSource`, planned
-target `ArtifactDescriptor`, and storage plan. Materializers should create the artifact, register
-rollback for anything they created, and return an `ArtifactWriteResult` with descriptor facts to
-merge into the catalog record. Diagnostics and provenance on the result are audit-only; persisted
-artifact facts belong in descriptor claims, facets, relationship metadata, locator, or state.
+target `ArtifactDescriptor`, and storage plan. Materializers should prepare the target, register
+rollback for anything they created, invoke a writer capability or one-off function, and return the
+writer's `ArtifactWriteResult` with descriptor facts to merge into the catalog record. Diagnostics
+and provenance on the result are audit-only; persisted artifact facts belong in descriptor claims,
+facets, relationship metadata, locator, or state.
 
 This operation-scoped materializer layer is distinct from registry writer capabilities. A writer
 capability declares and implements typed output behavior such as `TextWriter.write(descriptor, str)`.

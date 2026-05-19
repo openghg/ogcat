@@ -865,7 +865,7 @@ the ADR makes each slice concrete enough to open as a separate sub-issue.
 3. Data type, representation, interface, and facet claim schemas.
 4. Reader, writer-capability, and converter capability registry.
 5. Managed collections as operation targets, including #109.
-6. Structured operation-materializer result model.
+6. Structured writer-capability result model and operation merge.
 7. Read-side artifact handles and accessors.
 8. Intake plugin design spike.
 9. Migration and compatibility plan for existing single-locator catalogs.

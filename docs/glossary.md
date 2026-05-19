@@ -57,18 +57,20 @@ Operation context
 
 Operation materializer
 : Any object satisfying the `ArtifactMaterializer` protocol. Materializers
-  materialise artifact data from an `ArtifactWriteRequest` and return an
-  `ArtifactWriteResult` describing produced descriptor facts.
+  prepare operation targets, register rollback, and wrap writer capabilities or
+  one-off functions from an `ArtifactWriteRequest`.
 
 Writer capability
 : A registered `ArtifactCapability` with kind `writer`. Writer capabilities
-  declare typed output behavior; operation materializers wrap them when catalog
+  declare typed output behavior and return `ArtifactWriteResult` values with
+  produced descriptor facts; operation materializers wrap them when catalog
   rollback, audit, and descriptor merge are needed.
 
 Operation source
 : The `OperationSource` description passed to operation materializers. It can
   carry a local path, non-path descriptor, source metadata, or in-memory
-  payload.
+  payload. New capability dispatch should prefer source artifact descriptor
+  claims/facets when available.
 
 Unit of work
 : The current best-effort transaction helper. It stages catalog changes,

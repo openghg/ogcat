@@ -32,6 +32,7 @@ from ogcat.models import (
     ArtifactFacet,
     ArtifactFacetInput,
     ArtifactLocator,
+    ArtifactWriteResult,
     DataTypeClaim,
     InterfaceClaim,
     JsonValue,
@@ -72,7 +73,7 @@ class BytesReader:
 class BytesWriter:
     """Write path-backed artifacts as raw bytes."""
 
-    def write(self, descriptor: ArtifactDescriptor, data: bytes) -> ArtifactDescriptor:
+    def write(self, descriptor: ArtifactDescriptor, data: bytes) -> ArtifactWriteResult:
         """Write bytes to the descriptor's path locator.
 
         Args:
@@ -80,17 +81,20 @@ class BytesWriter:
             data: Bytes to write.
 
         Returns:
-            Descriptor metadata with bytes/file claims and path locator facet.
+            Result containing descriptor metadata with bytes/file claims and
+            path locator facet.
 
         Raises:
             ValueError: If the descriptor has no local path locator.
             OSError: If the path cannot be written.
         """
         _descriptor_path(descriptor).write_bytes(data)
-        return descriptor_with_claims(
-            descriptor,
-            claims=(InterfaceClaim("bytes"), RepresentationClaim("file")),
-            facets=(path_locator_facet(),),
+        return ArtifactWriteResult.from_artifact(
+            descriptor_with_claims(
+                descriptor,
+                claims=(InterfaceClaim("bytes"), RepresentationClaim("file")),
+                facets=(path_locator_facet(),),
+            )
         )
 
 
@@ -126,7 +130,7 @@ class TextWriter:
         text: str,
         *,
         encoding: str | None = None,
-    ) -> ArtifactDescriptor:
+    ) -> ArtifactWriteResult:
         """Write text and return descriptor metadata with an encoding facet.
 
         Args:
@@ -136,8 +140,8 @@ class TextWriter:
                 stdlib encoding facet is used, falling back to UTF-8.
 
         Returns:
-            Descriptor metadata with text claims, path locator facet, and the
-            resolved encoding facet.
+            Result containing descriptor metadata with text claims, path
+            locator facet, and the resolved encoding facet.
 
         Raises:
             ValueError: If the descriptor has no local path locator.
@@ -147,10 +151,12 @@ class TextWriter:
         """
         resolved_encoding = encoding or encoding_from_descriptor(descriptor)
         _descriptor_path(descriptor).write_text(text, encoding=resolved_encoding)
-        return descriptor_with_claims(
-            descriptor,
-            claims=(RepresentationClaim("text"), InterfaceClaim("text")),
-            facets=(path_locator_facet(), encoding_facet(resolved_encoding)),
+        return ArtifactWriteResult.from_artifact(
+            descriptor_with_claims(
+                descriptor,
+                claims=(RepresentationClaim("text"), InterfaceClaim("text")),
+                facets=(path_locator_facet(), encoding_facet(resolved_encoding)),
+            )
         )
 
 
@@ -206,7 +212,7 @@ class DelimitedTableWriter:
         fieldnames: Sequence[str] | None = None,
         delimiter: str | None = None,
         encoding: str | None = None,
-    ) -> ArtifactDescriptor:
+    ) -> ArtifactWriteResult:
         """Write a delimited table using ``csv.DictWriter``.
 
         Args:
@@ -220,8 +226,8 @@ class DelimitedTableWriter:
                 stdlib encoding facet is used, falling back to UTF-8.
 
         Returns:
-            Descriptor metadata with text/table claims plus path, encoding, and
-            delimiter facets.
+            Result containing descriptor metadata with text/table claims plus
+            path, encoding, and delimiter facets.
 
         Raises:
             ValueError: If the descriptor has no local path locator.
@@ -241,17 +247,19 @@ class DelimitedTableWriter:
             )
             writer.writeheader()
             writer.writerows(row_list)
-        return descriptor_with_claims(
-            descriptor,
-            claims=(
-                RepresentationClaim("text"),
-                InterfaceClaim("text"),
-                InterfaceClaim("table"),
-            ),
-            facets=(
-                path_locator_facet(),
-                encoding_facet(resolved_encoding),
-                delimiter_facet(resolved_delimiter),
+        return ArtifactWriteResult.from_artifact(
+            descriptor_with_claims(
+                descriptor,
+                claims=(
+                    RepresentationClaim("text"),
+                    InterfaceClaim("text"),
+                    InterfaceClaim("table"),
+                ),
+                facets=(
+                    path_locator_facet(),
+                    encoding_facet(resolved_encoding),
+                    delimiter_facet(resolved_delimiter),
+                ),
             ),
         )
 
@@ -290,7 +298,7 @@ class JsonWriter:
         *,
         indent: int | None = 2,
         encoding: str | None = None,
-    ) -> ArtifactDescriptor:
+    ) -> ArtifactWriteResult:
         """Write JSON and return descriptor metadata with JSON claims.
 
         Args:
@@ -301,8 +309,8 @@ class JsonWriter:
                 stdlib encoding facet is used, falling back to UTF-8.
 
         Returns:
-            Descriptor metadata with JSON/text claims plus path and encoding
-            facets.
+            Result containing descriptor metadata with JSON/text claims plus
+            path and encoding facets.
 
         Raises:
             TypeError: If ``document`` contains values that ``json.dump`` cannot
@@ -314,15 +322,17 @@ class JsonWriter:
         with _descriptor_path(descriptor).open("w", encoding=resolved_encoding) as stream:
             json.dump(document, stream, ensure_ascii=False, indent=indent)
             stream.write("\n")
-        return descriptor_with_claims(
-            descriptor,
-            claims=(
-                RepresentationClaim("text"),
-                DataTypeClaim("json", namespace="iana.media-types"),
-                InterfaceClaim("text"),
-                InterfaceClaim("json"),
-            ),
-            facets=(path_locator_facet(), encoding_facet(resolved_encoding)),
+        return ArtifactWriteResult.from_artifact(
+            descriptor_with_claims(
+                descriptor,
+                claims=(
+                    RepresentationClaim("text"),
+                    DataTypeClaim("json", namespace="iana.media-types"),
+                    InterfaceClaim("text"),
+                    InterfaceClaim("json"),
+                ),
+                facets=(path_locator_facet(), encoding_facet(resolved_encoding)),
+            )
         )
 
 
@@ -338,67 +348,49 @@ class EmoticonEmojiTextConverter:
         ";-)": "😉",
     }
 
-    def convert(
-        self,
-        source_descriptor: ArtifactDescriptor,
-        output_descriptor: ArtifactDescriptor,
-    ) -> ArtifactDescriptor:
-        """Read ASCII-compatible text and write UTF-8 emoji text output.
+    def convert(self, text: str) -> str:
+        """Convert ASCII-compatible text to Unicode emoji text.
 
         Args:
-            source_descriptor: Path-backed text descriptor to read.
-            output_descriptor: Path-backed descriptor to write.
+            text: Runtime text value to convert.
 
         Returns:
-            Output descriptor with text claims, UTF-8 encoding, path facet, and
-            relationship metadata linking the source.
+            Converted runtime text value.
         """
-        source_text = TextReader().read(source_descriptor)
-        converted = source_text
+        converted = text
         for emoticon, emoji in self.emoticons.items():
             converted = converted.replace(emoticon, emoji)
-
-        output = descriptor_with_claims(
-            output_descriptor,
-            claims=(RepresentationClaim("text"), InterfaceClaim("text")),
-            facets=(encoding_facet(DEFAULT_TEXT_ENCODING),),
-            relationship={
-                "generated_by": "ogcat.stdlib.emoticon_to_emoji",
-                "source_artifact_id": source_descriptor.id,
-            },
-        )
-        return TextWriter().write(output, converted, encoding=DEFAULT_TEXT_ENCODING)
+        return converted
 
 
 class PigLatinTextConverter:
     """Convert text artifacts to Pig Latin text."""
 
-    def convert(
-        self,
-        source_descriptor: ArtifactDescriptor,
-        output_descriptor: ArtifactDescriptor,
-    ) -> ArtifactDescriptor:
-        """Read text and write UTF-8 Pig Latin text output.
+    def convert(self, text: str) -> str:
+        """Convert runtime text to Pig Latin text.
 
         Args:
-            source_descriptor: Path-backed text descriptor to read.
-            output_descriptor: Path-backed descriptor to write.
+            text: Runtime text value to convert.
 
         Returns:
-            Output descriptor with text claims, UTF-8 encoding, path facet, and
-            relationship metadata linking the source.
+            Converted runtime text value.
         """
-        converted = _pig_latin_text(TextReader().read(source_descriptor))
-        output = descriptor_with_claims(
-            output_descriptor,
-            claims=(RepresentationClaim("text"), InterfaceClaim("text")),
-            facets=(encoding_facet(DEFAULT_TEXT_ENCODING),),
-            relationship={
-                "generated_by": "ogcat.stdlib.pig_latin",
-                "source_artifact_id": source_descriptor.id,
-            },
-        )
-        return TextWriter().write(output, converted, encoding=DEFAULT_TEXT_ENCODING)
+        return _pig_latin_text(text)
+
+
+class DelimitedTableToJsonConverter:
+    """Convert table rows to a JSON-compatible document."""
+
+    def convert(self, rows: TableRows) -> JsonDocument:
+        """Convert runtime table rows to a JSON-compatible document.
+
+        Args:
+            rows: Runtime table rows from a table reader.
+
+        Returns:
+            JSON-compatible list of row dictionaries.
+        """
+        return cast(JsonDocument, [dict(row) for row in rows])
 
 
 def stdlib_capabilities() -> tuple[ArtifactCapability, ...]:
@@ -498,7 +490,6 @@ def stdlib_capabilities() -> tuple[ArtifactCapability, ...]:
             implementation=EmoticonEmojiTextConverter(),
             input_claims=(InterfaceClaim("text"),),
             output_claims=(RepresentationClaim("text"), InterfaceClaim("text")),
-            required_facets=(path_locator_facet_requirement(), encoding_facet_requirement()),
             description="Convert ASCII emoticons in text artifacts to Unicode emoji text.",
         ),
         _capability(
@@ -507,8 +498,20 @@ def stdlib_capabilities() -> tuple[ArtifactCapability, ...]:
             implementation=PigLatinTextConverter(),
             input_claims=(InterfaceClaim("text"),),
             output_claims=(RepresentationClaim("text"), InterfaceClaim("text")),
-            required_facets=(path_locator_facet_requirement(), encoding_facet_requirement()),
             description="Convert text artifacts to Pig Latin text.",
+        ),
+        _capability(
+            name="delimited-table-to-json-converter",
+            kind=CapabilityKind.CONVERTER,
+            implementation=DelimitedTableToJsonConverter(),
+            input_claims=(InterfaceClaim("table"),),
+            output_claims=(
+                RepresentationClaim("text"),
+                DataTypeClaim("json", namespace="iana.media-types"),
+                InterfaceClaim("text"),
+                InterfaceClaim("json"),
+            ),
+            description="Read delimited text rows and write a JSON document.",
         ),
     )
 

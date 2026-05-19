@@ -200,14 +200,22 @@ class RollbackRegistrar(Protocol):
 
 @dataclass(slots=True)
 class OperationSource:
-    """Description of the artifact source for a catalog operation.
+    """Description of the source envelope for a catalog operation.
+
+    ``OperationSource`` is a compatibility and provenance DTO for current
+    operation helpers. Future reader/source dispatch should prefer
+    descriptor claims and facets on ``artifact`` over the legacy ``kind``
+    string whenever a descriptor is available.
 
     Args:
-        kind: Short source kind, such as ``"local_file"`` or ``"external"``.
+        kind: Legacy short source kind, such as ``"local_file"`` or
+            ``"external"``.
         path: Optional local source path.
         descriptor: Optional non-path source description or URI.
         metadata: Source-specific JSON-compatible metadata.
         payload: Optional in-memory Python object for writer helpers.
+        artifact: Optional source artifact descriptor for claim/facet-based
+            reader, converter, or writer capability selection.
     """
 
     kind: str
@@ -215,6 +223,7 @@ class OperationSource:
     descriptor: str | None = None
     metadata: MetadataDict = field(default_factory=dict)
     payload: object | None = None
+    artifact: ArtifactDescriptor | None = None
 
 
 class ArtifactMaterializer(Protocol):
