@@ -328,14 +328,18 @@ It does not define read handles, ``open_artifact()``, managed collection
 ergonomics, runtime pipe types such as ``str`` or ``xarray.Dataset``, or a
 pipeline value-adapter layer.
 
-Current ``source_kind`` and ``target_kind`` values are legacy operation helper
-shortcuts, not the future dispatch vocabulary. Source identity should migrate
-toward descriptors with claims/facets: for example, ``zip_file`` maps to
+Current ``source_kind`` and ``target_kind`` values are operation helper
+shortcuts, not the future dispatch vocabulary. Follow-up issue
+[#127](https://github.com/openghg/ogcat/issues/127) tracks replacing them with
+descriptor-based source/sink declarations. Source identity should migrate toward
+descriptors with claims/facets: for example, ``zip_file`` maps to
 ``data_type=zip`` plus archive-member interface/facets, text input maps to
 ``interface=text`` plus encoding facets, and local-file input maps to a path
-locator facet plus an appropriate representation claim. ``target_kind`` only
-describes storage shape: ``file`` maps to ``representation=file`` and
-``directory`` maps to ``representation=directory``. Collection-ness belongs in
+locator facet plus an appropriate representation claim. In-memory sources need
+runtime value/interface declarations so a future pipe/read-plan helper can
+adapt values between converters. ``target_kind`` only describes storage shape:
+``file`` maps to ``representation=file`` and ``directory`` maps to
+``representation=directory``. Collection-ness belongs in
 ``interface=collection`` and collection facets, not in ``target_kind``.
 
 ## Relationship To Classification Metadata

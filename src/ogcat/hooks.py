@@ -202,13 +202,14 @@ class RollbackRegistrar(Protocol):
 class OperationSource:
     """Description of the source envelope for a catalog operation.
 
-    ``OperationSource`` is a compatibility and provenance DTO for current
-    operation helpers. Future reader/source dispatch should prefer
-    descriptor claims and facets on ``artifact`` over the legacy ``kind``
-    string whenever a descriptor is available.
+    ``OperationSource`` is a compatibility and provenance container for current
+    operation helpers. Its modern replacement is a source
+    ``ArtifactDescriptor`` plus a selected reader and converter plan. New
+    dispatch should prefer descriptor claims and facets on ``artifact`` over
+    the ``kind`` string whenever a descriptor is available.
 
     Args:
-        kind: Legacy short source kind, such as ``"local_file"`` or
+        kind: Compatibility source label, such as ``"local_file"`` or
             ``"external"``.
         path: Optional local source path.
         descriptor: Optional non-path source description or URI.

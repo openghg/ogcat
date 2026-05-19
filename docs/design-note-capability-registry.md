@@ -178,8 +178,9 @@ source descriptor, selects or calls a table-to-JSON converter, and then passes
 the converter's runtime JSON document to a JSON writer capability. The writer
 returns an `ArtifactWriteResult`; an add/update operation materializer would
 wrap that result with rollback and pass it to the operation runner for catalog
-merge. In a later pipeline executor, the same composition should be selected
-as:
+merge. Issue [#108](https://github.com/openghg/ogcat/issues/108) tracks the
+larger pipeline/read-plan design. In a later pipeline executor, the same
+composition should be selected as:
 
 ```text
 Descriptor[interface=table, data_type=csv]

@@ -65,11 +65,13 @@ def memory_source(
 
     Args:
         data: In-memory object to pass to a memory writer.
-        kind: Legacy source kind used for materializer validation.
+        kind: Compatibility source label used for materializer validation.
         descriptor: Optional human-readable source description.
         metadata: Optional JSON-compatible source metadata.
         artifact: Optional descriptor for claim/facet-based capability
             selection when the payload represents an artifact-like source.
+            Runtime value/interface declarations are the expected replacement
+            for this helper when pipeline composition is implemented.
 
     Returns:
         An operation source with ``payload`` set to ``data``.
@@ -95,7 +97,7 @@ def path_source(
 
     Args:
         path: Local source path.
-        kind: Legacy source kind used for materializer validation.
+        kind: Compatibility source label used for materializer validation.
         descriptor: Optional human-readable source description. Defaults to the
             resolved source path string.
         metadata: Optional JSON-compatible source metadata.
