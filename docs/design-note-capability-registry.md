@@ -44,7 +44,10 @@ Each declaration needs stable identity and typed input/output requirements:
 - `version`: declaration contract version.
 - `input_claims`: exact claims or claim patterns the capability can accept.
 - `output_claims`: exact claims or claim patterns the capability can produce.
-- `required_facets`: optional structured facts required for lookup.
+- `required_facets`: optional structured facts required for lookup. Matching
+  uses the facet namespace/kind/name/version envelope plus required metadata as
+  a subset, so `encoding=utf-8` and `encoding=ascii` can be distinguished even
+  when the discriminating value lives in `facet.metadata`.
 - `metadata`: optional structured facts the capability promises or records
   about produced outputs.
 - `options`: optional plugin-owned JSON-compatible option metadata.
@@ -122,6 +125,14 @@ it. The caller must request a specific input interface such as
 `interface=bytes`, `interface=text`, or `interface=table`. `select()` should
 raise an ambiguity error until the request is specific enough.
 
+Facet requirements are metadata-aware. A capability that requires an
+`encoding/charset` facet with metadata `{"encoding": "utf-8"}` should match a
+descriptor facet with the same envelope and at least that metadata, but it
+should not match a descriptor that declares `{"encoding": "ascii"}`.
+If a capability can use any declared value for that facet, it should require
+the facet envelope with empty metadata and then interpret the actual descriptor
+metadata at runtime.
+
 Writers and converters use the same rule. A caller requests exact input and
 output claims or interfaces:
 
@@ -138,7 +149,8 @@ The registry may return candidate matches through a `find()` method and a
 single match through `select()`. Missing, unsupported, and ambiguous matches
 should raise distinct errors so callers can explain whether a plugin is absent,
 the artifact lacks required claims/facets, or the request needs a more exact
-interface.
+interface. Malformed lookup filters should raise a lookup-domain validation
+error rather than leaking raw schema normalization exceptions.
 
 ## Dispatch Inputs
 

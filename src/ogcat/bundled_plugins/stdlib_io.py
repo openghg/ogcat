@@ -320,7 +320,7 @@ def stdlib_capabilities() -> tuple[object, ...]:
             implementation=TextReader(),
             required_claims=(InterfaceClaim("text"),),
             output_claims=(InterfaceClaim("text"),),
-            required_facets=(encoding_facet(DEFAULT_TEXT_ENCODING),),
+            required_facets=(encoding_facet_requirement(),),
             description="Read local path artifacts as text using encoding facets.",
         ),
         _capability(
@@ -328,7 +328,7 @@ def stdlib_capabilities() -> tuple[object, ...]:
             operation="writer",
             implementation=TextWriter(),
             output_claims=(RepresentationClaim("text"), InterfaceClaim("text")),
-            required_facets=(encoding_facet(DEFAULT_TEXT_ENCODING),),
+            required_facets=(encoding_facet_requirement(),),
             description="Write local path artifacts as text.",
         ),
         _capability(
@@ -337,7 +337,7 @@ def stdlib_capabilities() -> tuple[object, ...]:
             implementation=DelimitedTableReader(),
             required_claims=(InterfaceClaim("table"),),
             output_claims=(InterfaceClaim("table"),),
-            required_facets=(encoding_facet(DEFAULT_TEXT_ENCODING), delimiter_facet(",")),
+            required_facets=(encoding_facet_requirement(), delimiter_facet_requirement()),
             description="Read delimited text tables with csv.DictReader.",
         ),
         _capability(
@@ -345,7 +345,7 @@ def stdlib_capabilities() -> tuple[object, ...]:
             operation="writer",
             implementation=DelimitedTableWriter(),
             output_claims=(RepresentationClaim("text"), InterfaceClaim("text"), InterfaceClaim("table")),
-            required_facets=(encoding_facet(DEFAULT_TEXT_ENCODING), delimiter_facet(",")),
+            required_facets=(encoding_facet_requirement(), delimiter_facet_requirement()),
             description="Write delimited text tables with csv.DictWriter.",
         ),
         _capability(
@@ -354,7 +354,7 @@ def stdlib_capabilities() -> tuple[object, ...]:
             implementation=JsonReader(),
             required_claims=(InterfaceClaim("json"),),
             output_claims=(InterfaceClaim("json"),),
-            required_facets=(encoding_facet(DEFAULT_TEXT_ENCODING),),
+            required_facets=(encoding_facet_requirement(),),
             description="Read JSON artifacts with json.load.",
         ),
         _capability(
@@ -367,7 +367,7 @@ def stdlib_capabilities() -> tuple[object, ...]:
                 InterfaceClaim("text"),
                 InterfaceClaim("json"),
             ),
-            required_facets=(encoding_facet(DEFAULT_TEXT_ENCODING),),
+            required_facets=(encoding_facet_requirement(),),
             description="Write JSON artifacts with json.dump.",
         ),
         _capability(
@@ -376,7 +376,7 @@ def stdlib_capabilities() -> tuple[object, ...]:
             implementation=EmoticonEmojiTextConverter(),
             required_claims=(InterfaceClaim("text"),),
             output_claims=(RepresentationClaim("text"), InterfaceClaim("text")),
-            required_facets=(encoding_facet(DEFAULT_TEXT_ENCODING),),
+            required_facets=(encoding_facet_requirement(),),
             description="Convert ASCII emoticons in text artifacts to Unicode emoji text.",
         ),
         _capability(
@@ -385,7 +385,7 @@ def stdlib_capabilities() -> tuple[object, ...]:
             implementation=PigLatinTextConverter(),
             required_claims=(InterfaceClaim("text"),),
             output_claims=(RepresentationClaim("text"), InterfaceClaim("text")),
-            required_facets=(encoding_facet(DEFAULT_TEXT_ENCODING),),
+            required_facets=(encoding_facet_requirement(),),
             description="Convert text artifacts to Pig Latin text.",
         ),
     )
@@ -504,6 +504,15 @@ def encoding_facet(encoding: str) -> ArtifactFacet:
     )
 
 
+def encoding_facet_requirement() -> ArtifactFacet:
+    """Build a requirement for a declared text encoding facet."""
+    return ArtifactFacet(
+        kind="encoding",
+        name="charset",
+        namespace=PLUGIN_NAMESPACE,
+    )
+
+
 def delimiter_facet(delimiter: str) -> ArtifactFacet:
     """Build the stdlib delimited text facet."""
     return ArtifactFacet(
@@ -511,6 +520,15 @@ def delimiter_facet(delimiter: str) -> ArtifactFacet:
         name="delimited-text",
         namespace=PLUGIN_NAMESPACE,
         metadata={"delimiter": delimiter},
+    )
+
+
+def delimiter_facet_requirement() -> ArtifactFacet:
+    """Build a requirement for a declared delimited-text facet."""
+    return ArtifactFacet(
+        kind="format",
+        name="delimited-text",
+        namespace=PLUGIN_NAMESPACE,
     )
 
 

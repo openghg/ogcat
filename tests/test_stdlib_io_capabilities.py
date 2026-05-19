@@ -70,9 +70,10 @@ def test_delimited_table_reader_and_writer_examples_support_csv_and_options(
     csv_result = writer.write(csv_descriptor, rows)
     pipe_result = writer.write(pipe_descriptor, rows, delimiter="|")
     reader = _implementation(_select(registry, csv_result, operation="read", interface="table"))
+    pipe_reader = _implementation(_select(registry, pipe_result, operation="read", interface="table"))
 
     assert reader.read(csv_result) == rows
-    assert reader.read(pipe_result) == rows
+    assert pipe_reader.read(pipe_result) == rows
     assert (tmp_path / "table.psv").read_text(encoding="utf-8").splitlines()[0] == "station|value"
 
 

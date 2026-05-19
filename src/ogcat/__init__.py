@@ -10,6 +10,7 @@ from ogcat.capabilities import (
     CapabilityLookupError,
     CapabilityRegistrationError,
     CapabilityRegistry,
+    InvalidCapabilityLookupError,
     MissingCapabilityError,
     UnsupportedInterfaceError,
 )
@@ -91,6 +92,7 @@ __all__ = [
     "CapabilityLookupError",
     "CapabilityRegistrationError",
     "CapabilityRegistry",
+    "InvalidCapabilityLookupError",
     "Catalog",
     "CatalogRecord",
     "CatalogRecordSet",

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 
 from ogcat import (
@@ -12,6 +14,7 @@ from ogcat import (
     CapabilityRegistry,
     DataTypeClaim,
     InterfaceClaim,
+    InvalidCapabilityLookupError,
     MissingCapabilityError,
     PluginRegistry,
     UnsupportedInterfaceError,
@@ -127,6 +130,96 @@ def test_descriptor_lookup_uses_artifact_claims_not_record_type() -> None:
     )
 
 
+def test_descriptor_lookup_matches_required_facet_metadata() -> None:
+    """Descriptor facet metadata should discriminate otherwise identical facet keys."""
+    text_claim = InterfaceClaim("text")
+    utf8_requirement = ArtifactFacet(
+        "encoding",
+        "charset",
+        metadata={"encoding": "utf-8"},
+    )
+    ascii_requirement = ArtifactFacet(
+        "encoding",
+        "charset",
+        metadata={"encoding": "ascii"},
+    )
+    descriptor = ArtifactDescriptor(
+        id="data",
+        role="data_artifact",
+        claims=[text_claim],
+        facets=[
+            ArtifactFacet(
+                "encoding",
+                "charset",
+                metadata={"encoding": "utf-8", "byte_order_mark": False},
+            )
+        ],
+    )
+    utf8_reader = ArtifactCapability(
+        kind=CapabilityKind.READER,
+        name="utf8-reader",
+        input_claims=[text_claim],
+        required_facets=[utf8_requirement],
+    )
+    ascii_reader = ArtifactCapability(
+        kind=CapabilityKind.READER,
+        name="ascii-reader",
+        input_claims=[text_claim],
+        required_facets=[ascii_requirement],
+    )
+    registry = CapabilityRegistry([utf8_reader, ascii_reader])
+
+    assert registry.find(
+        kind=CapabilityKind.READER,
+        descriptor=descriptor,
+        input_claims=[text_claim],
+    ) == (utf8_reader,)
+    assert (
+        registry.select(
+            kind=CapabilityKind.READER,
+            descriptor=descriptor,
+            input_claims=[text_claim],
+        )
+        is utf8_reader
+    )
+
+
+def test_find_required_facets_matches_metadata() -> None:
+    """Facet filters should include required metadata, not only schema keys."""
+    text_claim = InterfaceClaim("text")
+    utf8_requirement = ArtifactFacet(
+        "encoding",
+        "charset",
+        metadata={"encoding": "utf-8"},
+    )
+    ascii_requirement = ArtifactFacet(
+        "encoding",
+        "charset",
+        metadata={"encoding": "ascii"},
+    )
+    utf8_reader = ArtifactCapability(
+        kind=CapabilityKind.READER,
+        name="utf8-reader",
+        input_claims=[text_claim],
+        required_facets=[utf8_requirement],
+    )
+    ascii_reader = ArtifactCapability(
+        kind=CapabilityKind.READER,
+        name="ascii-reader",
+        input_claims=[text_claim],
+        required_facets=[ascii_requirement],
+    )
+    registry = CapabilityRegistry([utf8_reader, ascii_reader])
+
+    assert registry.find(kind=CapabilityKind.READER, required_facets=[utf8_requirement]) == (utf8_reader,)
+    assert registry.find(
+        kind=CapabilityKind.READER, required_facets=[ArtifactFacet("encoding", "charset")]
+    ) == (
+        utf8_reader,
+        ascii_reader,
+    )
+
+
 def test_select_raises_unsupported_interface_when_descriptor_lacks_request() -> None:
     """Requested interface claims must be present on the descriptor."""
     descriptor = ArtifactDescriptor(
@@ -203,6 +296,20 @@ def test_select_raises_ambiguous_with_sorted_candidate_names() -> None:
         "example.alpha:reader:alpha-reader@1",
         "example.beta:reader:beta-reader@1",
     )
+
+
+def test_lookup_rejects_malformed_filters_with_lookup_error() -> None:
+    """Malformed public lookup filters should raise capability lookup errors."""
+    registry = CapabilityRegistry()
+
+    with pytest.raises(InvalidCapabilityLookupError, match="input_claims"):
+        registry.find(input_claims=cast(Any, [object()]))
+
+    with pytest.raises(InvalidCapabilityLookupError, match="required_facets"):
+        registry.find(required_facets=cast(Any, [object()]))
+
+    with pytest.raises(InvalidCapabilityLookupError, match="input_claims"):
+        registry.select(input_claims=cast(Any, [object()]))
 
 
 def test_duplicate_and_invalid_registration_raise_registration_errors() -> None:

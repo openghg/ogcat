@@ -45,6 +45,10 @@ class CapabilityLookupError(CapabilityError):
     """Base class for capability lookup errors."""
 
 
+class InvalidCapabilityLookupError(CapabilityLookupError):
+    """Raised when lookup filters contain malformed claims, facets, or kinds."""
+
+
 class MissingCapabilityError(CapabilityLookupError):
     """Raised when no registered capability satisfies a supported request."""
 
@@ -202,33 +206,39 @@ class CapabilityRegistry:
 
         Returns:
             Matching capabilities in registration order.
-        """
-        kind_filter = None if kind is None else _kind_text(kind, field_name="kind")
-        input_keys = _claim_keys(input_claims, field_name="input_claims")
-        output_keys = _claim_keys(output_claims, field_name="output_claims")
-        required_facet_keys = _facet_keys(required_facets, field_name="required_facets")
-        descriptor_claim_keys: frozenset[ArtifactSchemaKey] | None = None
-        descriptor_facet_keys: frozenset[ArtifactSchemaKey] | None = None
-        if descriptor is not None:
-            descriptor_claim_keys = frozenset(claim_key(claim) for claim in iter_claims(descriptor))
-            descriptor_facet_keys = frozenset(facet_key(facet) for facet in iter_facets(descriptor))
 
-        return tuple(
-            capability
-            for capability in self._capabilities.values()
-            if _capability_matches(
-                capability,
-                kind=kind_filter,
-                name=name,
-                namespace=namespace,
-                version=version,
-                descriptor_claim_keys=descriptor_claim_keys,
-                descriptor_facet_keys=descriptor_facet_keys,
-                input_keys=input_keys,
-                output_keys=output_keys,
-                required_facet_keys=required_facet_keys,
+        Raises:
+            InvalidCapabilityLookupError: If lookup claim or facet filters are malformed.
+        """
+        try:
+            kind_filter = None if kind is None else _kind_text(kind, field_name="kind")
+            input_keys = _claim_keys(input_claims, field_name="input_claims")
+            output_keys = _claim_keys(output_claims, field_name="output_claims")
+            required_facet_filters = _normalize_facets(required_facets, field_name="required_facets")
+            descriptor_claim_keys: frozenset[ArtifactSchemaKey] | None = None
+            descriptor_facets: tuple[MetadataDict, ...] | None = None
+            if descriptor is not None:
+                descriptor_claim_keys = frozenset(claim_key(claim) for claim in iter_claims(descriptor))
+                descriptor_facets = tuple(iter_facets(descriptor))
+
+            return tuple(
+                capability
+                for capability in self._capabilities.values()
+                if _capability_matches(
+                    capability,
+                    kind=kind_filter,
+                    name=name,
+                    namespace=namespace,
+                    version=version,
+                    descriptor_claim_keys=descriptor_claim_keys,
+                    descriptor_facets=descriptor_facets,
+                    input_keys=input_keys,
+                    output_keys=output_keys,
+                    required_facet_filters=required_facet_filters,
+                )
             )
-        )
+        except (TypeError, ValueError) as exc:
+            raise InvalidCapabilityLookupError(f"Invalid capability lookup request: {exc}") from exc
 
     def select(
         self,
@@ -250,10 +260,14 @@ class CapabilityRegistry:
             MissingCapabilityError: If no capability supports the request.
             AmbiguousCapabilityError: If more than one capability supports the
                 request.
+            InvalidCapabilityLookupError: If lookup claim or facet filters are malformed.
         """
-        normalized_input_claims = _normalize_claims(input_claims, field_name="input_claims")
-        if descriptor is not None:
-            _require_requested_interfaces(descriptor, normalized_input_claims)
+        try:
+            normalized_input_claims = _normalize_claims(input_claims, field_name="input_claims")
+            if descriptor is not None:
+                _require_requested_interfaces(descriptor, normalized_input_claims)
+        except (TypeError, ValueError) as exc:
+            raise InvalidCapabilityLookupError(f"Invalid capability lookup request: {exc}") from exc
 
         matches = self.find(
             kind=kind,
@@ -280,15 +294,15 @@ def _capability_matches(
     namespace: str | None,
     version: str | None,
     descriptor_claim_keys: frozenset[ArtifactSchemaKey] | None,
-    descriptor_facet_keys: frozenset[ArtifactSchemaKey] | None,
+    descriptor_facets: tuple[MetadataDict, ...] | None,
     input_keys: frozenset[ArtifactSchemaKey],
     output_keys: frozenset[ArtifactSchemaKey],
-    required_facet_keys: frozenset[ArtifactSchemaKey],
+    required_facet_filters: tuple[MetadataDict, ...],
 ) -> bool:
     """Return whether a capability satisfies registry filters."""
     capability_input_keys = _claim_keys(capability.input_claims, field_name="capability.input_claims")
     capability_output_keys = _claim_keys(capability.output_claims, field_name="capability.output_claims")
-    capability_required_facet_keys = _facet_keys(
+    capability_required_facets = _normalize_facets(
         capability.required_facets,
         field_name="capability.required_facets",
     )
@@ -304,11 +318,13 @@ def _capability_matches(
         return False
     if not output_keys.issubset(capability_output_keys):
         return False
-    if not required_facet_keys.issubset(capability_required_facet_keys):
+    if not _facets_satisfy(required_facet_filters, candidates=capability_required_facets):
         return False
     if descriptor_claim_keys is not None and not capability_input_keys.issubset(descriptor_claim_keys):
         return False
-    return descriptor_facet_keys is None or capability_required_facet_keys.issubset(descriptor_facet_keys)
+    return descriptor_facets is None or _facets_satisfy(
+        capability_required_facets, candidates=descriptor_facets
+    )
 
 
 def _validate_capability_contract(capability: ArtifactCapability) -> None:
@@ -430,6 +446,47 @@ def _facet_keys(
     return frozenset(facet_key(facet) for facet in _normalize_facets(facets, field_name=field_name))
 
 
+def _facets_satisfy(
+    requirements: Iterable[MetadataDict],
+    *,
+    candidates: Iterable[MetadataDict],
+) -> bool:
+    """Return whether candidates cover all required facet envelopes and metadata."""
+    candidate_tuple = tuple(candidates)
+    return all(
+        any(_facet_satisfies(requirement, candidate) for candidate in candidate_tuple)
+        for requirement in requirements
+    )
+
+
+def _facet_satisfies(requirement: MetadataDict, candidate: MetadataDict) -> bool:
+    """Return whether a candidate facet satisfies one required facet."""
+    if facet_key(requirement) != facet_key(candidate):
+        return False
+    required_metadata = requirement.get("metadata", {})
+    candidate_metadata = candidate.get("metadata", {})
+    if not isinstance(required_metadata, Mapping) or not isinstance(candidate_metadata, Mapping):
+        return candidate_metadata == required_metadata
+    return _metadata_contains(candidate_metadata, required_metadata)
+
+
+def _metadata_contains(candidate: Mapping[str, object], required: Mapping[str, object]) -> bool:
+    """Return whether candidate metadata contains the required metadata subset."""
+    for key, required_value in required.items():
+        if key not in candidate:
+            return False
+        if not _metadata_value_satisfies(candidate[key], required_value):
+            return False
+    return True
+
+
+def _metadata_value_satisfies(candidate_value: object, required_value: object) -> bool:
+    """Return whether one candidate metadata value satisfies one required value."""
+    if isinstance(candidate_value, Mapping) and isinstance(required_value, Mapping):
+        return _metadata_contains(candidate_value, required_value)
+    return candidate_value == required_value
+
+
 def _reject_duplicate_schema_keys(
     keys: Iterable[ArtifactSchemaKey],
     *,
@@ -492,6 +549,7 @@ __all__ = [
     "CapabilityLookupError",
     "CapabilityRegistrationError",
     "CapabilityRegistry",
+    "InvalidCapabilityLookupError",
     "MissingCapabilityError",
     "UnsupportedInterfaceError",
 ]

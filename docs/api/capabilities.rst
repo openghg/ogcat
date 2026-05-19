@@ -61,6 +61,11 @@ Errors
    :member-order: bysource
    :no-show-inheritance:
 
+.. autoclass:: ogcat.InvalidCapabilityLookupError
+   :members:
+   :member-order: bysource
+   :no-show-inheritance:
+
 .. autoclass:: ogcat.MissingCapabilityError
    :members:
    :member-order: bysource
