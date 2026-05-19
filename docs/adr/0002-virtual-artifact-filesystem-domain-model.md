@@ -13,14 +13,16 @@ fields, and metadata namespaces for user, derived, and naming metadata.
 `add_file()` handles managed local-file ingest. `add_reference()` records an
 existing locator. `add_collection()` records a directory-like logical dataset.
 `add_artifact()` exposes a lower-level operation path with storage plans and
-artifact writers.
+operation materializers.
 
 This works for the current local catalog model, but issue #108 asks for a more
 explicit domain model: `ogcat` should behave like a virtual artifact
 filesystem. Logical catalog objects should be separate from physical storage,
-and artifacts should expose typed access capabilities through readers, writers,
-and converters. The analogy is Unix-like design, not POSIX compatibility:
-dependency inversion through stable interfaces is the important lesson.
+and artifacts should expose typed access capabilities through readers, writer
+capabilities, and converters. The analogy is Unix-like design, not POSIX
+compatibility: artifacts should be openable catalog objects with durable
+descriptors, runtime handles, permissions, leases, locators, and pipe-like
+composition. They do not need to behave exactly like POSIX byte-stream files.
 
 The target model also needs to align with two external design references:
 
@@ -78,6 +80,12 @@ evolve during implementation.
   manifests, previews, logs, derived artifacts, replicas, cache copies, and
   archive copies.
 
+`ArtifactDescriptor`
+: Durable, file-descriptor-like catalog description of one artifact. It is the
+  object that readers, writer capabilities, converters, and operation
+  materializers select against or enrich. It is not the physical artifact
+  itself and it is not an opened runtime handle.
+
 `Locator`
 : Serializable description of where an artifact is or can be resolved. Locators
   may be path, urlpath, URI, opaque identifier, service endpoint, query, or a
@@ -116,13 +124,21 @@ evolve during implementation.
 : Capability that opens an artifact through a declared interface and returns a
   runtime handle or object.
 
-`Writer`
+`WriterCapability`
 : Capability that materializes runtime data, source handles, or operation inputs
   into artifacts and returns structured artifact result metadata.
 
 `Converter`
 : Capability that maps one runtime interface to another, optionally
   materializing a new artifact.
+
+`OperationMaterializer`
+: Operation-scoped adapter that prepares a target artifact, invokes a writer
+  capability or one-off write function, registers rollback, resolves produced
+  descriptor facts, and returns a structured materialization result for catalog
+  merge. This is the role historically served by ``ArtifactWriter`` in
+  ``ogcat.hooks`` and helpers in ``ogcat.writers``. It is distinct from a
+  registry writer capability.
 
 `Handle`
 : Runtime opened object for one artifact through one reader/interface. Handles
@@ -131,8 +147,9 @@ evolve during implementation.
 
 `Operation`
 : Execution envelope for typed pipelines. Operations coordinate reader,
-  writer, and converter invocation; authorization; lock/lease acquisition;
-  validation; staging; rollback; audit; and provenance.
+  writer-capability, converter, and operation-materializer invocation;
+  authorization; lock/lease acquisition; validation; staging; rollback; audit;
+  and provenance.
 
 ## Artifact Roles And Replication
 
@@ -202,23 +219,32 @@ logical collection artifact.
 
 ## Capability Registry And Pipelines
 
-Readers, writers, and converters form a typed pipes-and-filters architecture.
-The pipe is a runtime interface, not necessarily a byte stream.
+Readers, writer capabilities, and converters form a typed pipes-and-filters
+architecture. The pipe is a runtime interface or value, not necessarily a byte
+stream. Readers source values from artifact descriptors; converters are filters
+between runtime interfaces; operation materializers sink final values into
+planned target descriptors and return descriptor facts to merge.
 
 Example:
 
 ```text
 zip artifact
   -> Reader[archive-members]
-  -> Writer[managed directory + collection facets]
+  -> WriterCapability[managed directory + collection facets]
   -> Reader[xarray.Dataset]
   -> Converter[domain boundary-condition dataset]
-  -> Writer[Zarr store artifact]
+  -> WriterCapability[Zarr store artifact]
 ```
 
 Capabilities should be registered through a plugin-facing registry. Core can
 ship or vendor useful capabilities, but they should use the same registration
 route as external plugins.
+
+Following Intake's composition model, a selected reader plus zero or more
+converters can itself be treated as a reader/read plan for the requested output
+interface. Converters remain independent filter primitives, but user-facing
+read APIs should not force callers to manually assemble every converter step
+when the registry can select a compatible plan.
 
 Core responsibilities:
 
@@ -239,6 +265,14 @@ Plugin or optional-extra responsibilities:
   external storage integrations.
 - Domain validation and source-specific versioning rules.
 
+Terminology clarification for #117/#119: the registry owns writer capabilities;
+add/update operations own operation materializers. A materializer may wrap a
+registered writer capability, a converter chain ending in a writer capability,
+or a small one-off write function. It also owns operation concerns such as
+target preparation, rollback registration, audit details, and descriptor-result
+merge. A writer capability by itself only declares and implements typed output
+behavior.
+
 Implementation clarification for #119: the first capability registry slice is a
 registration and lookup layer only. Selection starts from explicit caller
 requests for input and output claims or interfaces and matches those requests
@@ -246,8 +280,8 @@ against `ArtifactDescriptor` claims and facets. It must not dispatch from
 `record_type`. If one artifact advertises several interfaces, such as bytes,
 text, table, and JSON, selection should report ambiguity until the caller asks
 for a specific enough interface. Public read-handle lifecycle APIs remain #118,
-and catalog merge of writer-produced artifact claims/facets is the #117
-writer-result boundary. That boundary is descriptor merge only: it does not
+and catalog merge of operation-materializer-produced artifact claims/facets is
+the #117 result boundary. That boundary is descriptor merge only: it does not
 define read handles, managed collection ergonomics, runtime pipe/value types, or
 durable provenance storage.
 Bundled examples such as bytes, text-with-encoding, CSV/table, JSON, and an
@@ -399,9 +433,9 @@ slices from #108:
 1. First-class artifact descriptor target model.
 2. Claim and facet schemas for data type, representation, interface, and
    evidence/confidence.
-3. Reader, writer, and converter capability registry.
+3. Reader, writer-capability, and converter capability registry.
 4. Managed collections as operation targets, including #109.
-5. Structured writer result model.
+5. Structured operation-materializer result model.
 6. Read-side handles and accessors.
 7. Intake plugin design spike.
 8. Migration and compatibility for one-locator catalogs.

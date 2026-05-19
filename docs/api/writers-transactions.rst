@@ -1,22 +1,27 @@
-Writers and transactions
-========================
+Materializers and transactions
+==============================
 
 .. automodule:: ogcat.writers
    :no-members:
 
-Writer protocol
----------------
+Operation materializer protocol
+-------------------------------
 
-Writer classes do not need to inherit from a concrete base class. They satisfy
-the structural :class:`ogcat.hooks.ArtifactWriter` protocol by providing a
+Materializer classes do not need to inherit from a concrete base class. They satisfy
+the structural :class:`ogcat.hooks.ArtifactMaterializer` protocol by providing a
 ``write(request)`` method. The request carries the operation context, source,
 planned target descriptor, and storage plan; the method returns an
 :class:`ogcat.ArtifactWriteResult` describing the artifact facts to merge into
 the catalog record.
 
+.. autoclass:: ogcat.hooks.ArtifactMaterializer
+   :members:
+   :member-order: bysource
+
 .. autoclass:: ogcat.hooks.ArtifactWriter
    :members:
    :member-order: bysource
+   :no-index:
 
 .. autoclass:: ogcat.ArtifactWriteRequest
    :members:
@@ -31,14 +36,18 @@ the catalog record.
    :no-index:
 
 The operation runner creates a planned ``data`` artifact descriptor before
-calling the writer. Writer results may enrich that descriptor with claims,
-facets, relationship metadata, or state. If a writer returns only auxiliary
-artifact descriptors, the planned data descriptor is preserved. Diagnostics and
-provenance are normalized to JSON-compatible shapes and included only in the
-artifact-write audit event.
+calling the materializer. Materializer results may enrich that descriptor with
+claims, facets, relationship metadata, or state. If a materializer returns only
+auxiliary artifact descriptors, the planned data descriptor is preserved.
+Diagnostics and provenance are normalized to JSON-compatible shapes and
+included only in the artifact-write audit event.
 
-Writer helpers
---------------
+Materializer helpers
+--------------------
+
+The helpers in ``ogcat.writers`` keep their historical names, but they are
+operation materializers. Registry writer capabilities live under
+``ogcat.capabilities`` and bundled plugin modules such as ``ogcat.bundled_plugins.stdlib_io``.
 
 .. autofunction:: ogcat.writers.memory_source
 

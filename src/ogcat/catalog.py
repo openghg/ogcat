@@ -21,7 +21,7 @@ from ogcat.audit import (
 from ogcat.catalog_application import CatalogApplication
 from ogcat.classification import CLASSIFICATION_METADATA_KEY, collection_classification_metadata
 from ogcat.hooks import (
-    ArtifactWriter,
+    ArtifactMaterializer,
     HookLifecycleEvent,
     HookManager,
     OperationContext,
@@ -382,7 +382,7 @@ class Catalog:
         naming_metadata: Mapping[Any, Any] | None = None,
         time_added: str | None = None,
         source: OperationSource | None = None,
-        artifact_writer: ArtifactWriter | None = None,
+        artifact_writer: ArtifactMaterializer | None = None,
         transaction: UnitOfWork | None = None,
     ) -> CatalogRecord:
         """Add an artifact record and optionally materialise planned storage.
@@ -405,16 +405,16 @@ class Catalog:
             derived_metadata: Optional derived metadata to persist.
             naming_metadata: Optional naming metadata to persist.
             time_added: Optional timestamp override.
-            source: Optional operation source for hooks and writers.
-            artifact_writer: Optional writer that materialises data before the
-                record is written.
+            source: Optional operation source for hooks and materializers.
+            artifact_writer: Optional operation materializer that materialises
+                data before the record is written.
             transaction: Optional caller-owned unit of work.
 
         Returns:
             Persisted or staged catalog record.
 
         Raises:
-            TypeError: If metadata or writer inputs are invalid.
+            TypeError: If metadata or materializer inputs are invalid.
             ValueError: If validation fails or the transaction belongs to a
                 different repository.
         """
@@ -728,8 +728,8 @@ class Catalog:
         """Add multiple artifact records.
 
         Each item should provide the same keyword-style fields accepted by
-        `add_artifact()`. Items are added one at a time so hooks and artifact
-        writers run consistently for each record. Earlier items remain
+        `add_artifact()`. Items are added one at a time so hooks and operation
+        materializers run consistently for each record. Earlier items remain
         committed if a later item fails.
 
         Args:
@@ -1235,7 +1235,7 @@ class Catalog:
         naming_metadata: MetadataDict | None,
         time_added: str | None,
         source: OperationSource | None,
-        artifact_writer: ArtifactWriter | None,
+        artifact_writer: ArtifactMaterializer | None,
         storage_plan: StoragePlan | None,
         schema: RecordSchema,
     ) -> CatalogRecord:
@@ -1656,8 +1656,8 @@ def _optional_operation_source(value: object) -> OperationSource | None:
     raise TypeError(f"source must be an OperationSource, got {type(value).__name__}")
 
 
-def _optional_artifact_writer(value: object) -> ArtifactWriter | None:
-    """Return an optional artifact writer for artifact batch forwarding."""
+def _optional_artifact_writer(value: object) -> ArtifactMaterializer | None:
+    """Return an optional artifact materializer for artifact batch forwarding."""
     return _validate_artifact_writer(value)
 
 
@@ -1670,12 +1670,12 @@ def _optional_storage_plan(value: object) -> StoragePlan | None:
     raise TypeError(f"storage_plan must be a StoragePlan, got {type(value).__name__}")
 
 
-def _validate_artifact_writer(value: object) -> ArtifactWriter | None:
-    """Return an artifact writer when the optional value implements the writer protocol."""
+def _validate_artifact_writer(value: object) -> ArtifactMaterializer | None:
+    """Return a materializer when the optional value implements the protocol."""
     if value is None:
         return None
     if callable(getattr(value, "write", None)):
-        return cast(ArtifactWriter, value)
+        return cast(ArtifactMaterializer, value)
     raise TypeError(f"artifact_writer must provide a callable write() method, got {type(value).__name__}")
 
 

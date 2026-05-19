@@ -585,7 +585,8 @@ Use fsspec as the generic filesystem abstraction while preserving simple local p
 
 - `StorageManager`
 - `PathPlanner`
-- `ArtifactWriter`
+- `ArtifactMaterializer`
+- `WriterCapability`
 - `ArtifactReader`
 - `FSSpecLocator`
 - `StorageProfile`

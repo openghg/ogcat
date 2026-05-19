@@ -261,7 +261,7 @@ The resulting record points at a managed directory under ``data/objects``. It is
 still one logical dataset, not 36 separate file records. The explicit
 ``collection_pattern`` and ``reader_hint`` in the classification metadata
 document how downstream code should read the members. This uses the lower-level
-artifact writer path because managed collections are not yet a first-class
+operation materializer path because managed collections are not yet a first-class
 ``add_collection(...)`` write target. When that API grows, archive-to-collection
 workflows should be expressible without manually attaching collection
 classification metadata.

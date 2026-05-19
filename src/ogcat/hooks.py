@@ -1,4 +1,4 @@
-"""Lifecycle hooks, writer protocols, and operation context objects.
+"""Lifecycle hooks, materializer protocols, and operation context objects.
 
 Hooks are structural protocols: a plugin object participates in a lifecycle
 phase by implementing the corresponding method, such as
@@ -21,9 +21,11 @@ public mapping used during dispatch and validation. ``HOOK_METHOD_NAMES`` is
 derived from that source of truth for compatibility with existing validation
 callers.
 
-Artifact writers use the same context model. Any object satisfying
-:class:`ArtifactWriter` can materialise an :class:`ogcat.models.ArtifactLocator`
-from an :class:`OperationSource` before the catalog record is committed.
+Artifact materializers use the same context model. Any object satisfying
+:class:`ArtifactMaterializer` can materialise a planned
+:class:`ogcat.models.ArtifactDescriptor` from an :class:`OperationSource`
+before the catalog record is committed. This operation-scoped materializer
+boundary is distinct from registry writer capabilities.
 """
 
 from __future__ import annotations
@@ -215,12 +217,21 @@ class OperationSource:
     payload: object | None = None
 
 
-class ArtifactWriter(Protocol):
-    """Plugin-facing writer that materialises artifact data before record write."""
+class ArtifactMaterializer(Protocol):
+    """Operation-scoped adapter that materialises artifact data before record write."""
 
     def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
         """Write artifact data from the request and return produced artifact facts."""
         ...
+
+
+class ArtifactWriter(ArtifactMaterializer, Protocol):
+    """Deprecated alias for :class:`ArtifactMaterializer`.
+
+    Registry writer capabilities are represented by
+    :class:`ogcat.capabilities.ArtifactCapability` with ``kind="writer"``. This
+    protocol names the older operation-scoped materializer surface.
+    """
 
 
 @dataclass(slots=True)
@@ -310,13 +321,13 @@ class OperationContext:
 
 @dataclass(frozen=True, slots=True)
 class ArtifactWriteRequest:
-    """Operation input passed to an artifact writer.
+    """Operation input passed to an operation materializer.
 
     Args:
         context: Mutable operation context shared with hooks.
         source: Source description supplied for this operation.
-        target: Planned data artifact descriptor for the writer to materialise
-            or enrich.
+        target: Planned data artifact descriptor for the materializer to
+            materialise or enrich.
         storage_plan: Planned storage decision for the target.
     """
 
@@ -662,6 +673,7 @@ __all__ = [
     "AfterCommitHook",
     "AfterValidateMetadataHook",
     "AfterRecordWriteHook",
+    "ArtifactMaterializer",
     "ArtifactWriter",
     "ArtifactWriteRequest",
     "BeforeCommitHook",

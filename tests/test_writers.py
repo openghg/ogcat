@@ -37,7 +37,7 @@ from ogcat.models import MetadataDict
 
 
 def test_memory_writer_writes_file_and_persists_metadata(tmp_path: Path) -> None:
-    """Memory writer writes file data and records returned metadata."""
+    """Memory writer helper writes file data and records returned metadata."""
 
     def write_text(data: object, target: Path) -> MetadataDict:
         text = str(data)
@@ -59,7 +59,7 @@ def test_memory_writer_writes_file_and_persists_metadata(tmp_path: Path) -> None
 
 
 def test_path_writer_writes_directory_and_rolls_back_on_hook_failure(tmp_path: Path) -> None:
-    """Path writer directory targets are cleaned up on later hook failure."""
+    """Path writer helper directory targets are cleaned up on later hook failure."""
 
     def copy_tree(source: Path, target: Path) -> MetadataDict:
         (target / "copied.txt").write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
@@ -87,8 +87,8 @@ def test_path_writer_writes_directory_and_rolls_back_on_hook_failure(tmp_path: P
     assert catalog.repository.all() == []
 
 
-def test_locator_writer_fallback_plan_uses_writer_intent(tmp_path: Path) -> None:
-    """Plain locator-plus-writer calls expose writer storage intent in context."""
+def test_locator_materializer_fallback_plan_uses_materializer_intent(tmp_path: Path) -> None:
+    """Plain locator-plus-materializer calls expose storage intent in context."""
     seen: list[tuple[str, str]] = []
 
     def copy_tree(source: Path, target: Path) -> MetadataDict:
@@ -117,7 +117,7 @@ def test_locator_writer_fallback_plan_uses_writer_intent(tmp_path: Path) -> None
 
 
 def test_source_writer_receives_full_operation_source(tmp_path: Path) -> None:
-    """Source writer receives the full OperationSource object."""
+    """Source writer helper receives the full OperationSource object."""
 
     def write_source(source: OperationSource, target: Path) -> MetadataDict:
         assert source.path is None
@@ -145,7 +145,7 @@ def test_source_writer_receives_full_operation_source(tmp_path: Path) -> None:
 
 
 def test_memory_writer_adapts_none_return_to_base_result(tmp_path: Path) -> None:
-    """Convenience writers can wrap one-off functions that return None."""
+    """Convenience materializer helpers can wrap one-off functions that return None."""
 
     def write_text(data: object, target: Path) -> None:
         target.write_text(str(data), encoding="utf-8")
@@ -166,7 +166,7 @@ def test_memory_writer_adapts_none_return_to_base_result(tmp_path: Path) -> None
 
 
 def test_memory_writer_adapts_descriptor_return(tmp_path: Path) -> None:
-    """Convenience writers can wrap functions that return descriptor facts."""
+    """Convenience materializer helpers can wrap functions that return descriptor facts."""
 
     def write_text(data: object, target: Path) -> ArtifactDescriptor:
         target.write_text(str(data), encoding="utf-8")
@@ -199,8 +199,8 @@ def test_memory_writer_adapts_descriptor_return(tmp_path: Path) -> None:
     ]
 
 
-def test_writer_result_merges_claims_facets_diagnostics_and_provenance(tmp_path: Path) -> None:
-    """Structured writer results enrich the data descriptor and audit event."""
+def test_materializer_result_merges_claims_facets_diagnostics_and_provenance(tmp_path: Path) -> None:
+    """Structured materializer results enrich the data descriptor and audit event."""
 
     class TextWriter:
         def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
@@ -265,14 +265,14 @@ def test_writer_result_merges_claims_facets_diagnostics_and_provenance(tmp_path:
         for event in catalog.audit_events(event_type="write")
         if event.details.get("write_phase") == "artifact-write"
     ][0]
-    assert write_event.details["writer_diagnostics"] == {
+    assert write_event.details["materializer_diagnostics"] == {
         "target_path": str(target),
         "checks": ["encoded", "written"],
     }
-    assert write_event.details["writer_provenance"] == {"source_descriptor": "inline text"}
+    assert write_event.details["materializer_provenance"] == {"source_descriptor": "inline text"}
 
 
-def test_writer_result_with_only_auxiliary_artifact_preserves_data_descriptor(tmp_path: Path) -> None:
+def test_materializer_result_with_only_auxiliary_artifact_preserves_data_descriptor(tmp_path: Path) -> None:
     """Auxiliary-only results keep the planned base data descriptor."""
 
     class PreviewWriter:
@@ -316,8 +316,8 @@ def test_writer_result_with_only_auxiliary_artifact_preserves_data_descriptor(tm
     assert record.artifacts[1].relationship["target_artifact_id"] == "data"
 
 
-def test_writer_result_locator_conflict_rolls_back_written_artifact(tmp_path: Path) -> None:
-    """A conflicting data locator is rejected after writer cleanup is registered."""
+def test_materializer_result_locator_conflict_rolls_back_written_artifact(tmp_path: Path) -> None:
+    """A conflicting data locator is rejected after materializer cleanup is registered."""
 
     class ConflictingLocatorWriter:
         def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
@@ -347,7 +347,7 @@ def test_writer_result_locator_conflict_rolls_back_written_artifact(tmp_path: Pa
     assert catalog.repository.all() == []
 
 
-def test_writer_result_duplicate_auxiliary_id_rolls_back_written_artifact(tmp_path: Path) -> None:
+def test_materializer_result_duplicate_auxiliary_id_rolls_back_written_artifact(tmp_path: Path) -> None:
     """Duplicate returned artifact ids fail before commit and trigger rollback."""
 
     class DuplicateAuxiliaryWriter:
@@ -381,8 +381,8 @@ def test_writer_result_duplicate_auxiliary_id_rolls_back_written_artifact(tmp_pa
     assert catalog.repository.all() == []
 
 
-def test_writer_result_can_describe_directory_collection_shape(tmp_path: Path) -> None:
-    """Writers can attach collection claims/facets without a collection API."""
+def test_materializer_result_can_describe_directory_collection_shape(tmp_path: Path) -> None:
+    """Materializers can attach collection claims/facets without a collection API."""
 
     class CollectionDirectoryWriter:
         target_kind = "directory"
@@ -566,7 +566,7 @@ def test_unzip_single_file_artifact_writer_rejects_path_traversal(tmp_path: Path
     assert not (tmp_path / "escape.nc").exists()
 
 
-def test_non_reference_storage_plan_requires_writer(tmp_path: Path) -> None:
+def test_non_reference_storage_plan_requires_materializer(tmp_path: Path) -> None:
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
     target = tmp_path / "catalog" / "files" / "generated.txt"
     plan = plan_storage(
@@ -665,7 +665,7 @@ def test_move_artifact_writer_rejects_urlpath_before_adapter_lookup(
     assert catalog.repository.all() == []
 
 
-def test_writer_receives_storage_plan_and_rolls_back_directory_target(tmp_path: Path) -> None:
+def test_materializer_receives_storage_plan_and_rolls_back_directory_target(tmp_path: Path) -> None:
     class FailingHook:
         def before_record_write(self, context: OperationContext) -> None:
             raise RuntimeError("stop after planned write")

@@ -36,7 +36,7 @@ from ogcat.hooks import (
 from ogcat.materialization import (
     MaterializationIntent,
     materialization_plan_from_locator,
-    validate_writer_matches_storage_plan,
+    validate_materializer_matches_storage_plan,
 )
 from ogcat.models import (
     DATA_ARTIFACT_ID,
@@ -251,7 +251,7 @@ class AddOperationRunner(OperationRunner):
             raise
 
     def _build_context(self) -> OperationContext:
-        """Build the mutable context shared by add-operation hooks and writers."""
+        """Build the mutable context shared by add-operation hooks and materializers."""
         return OperationContext(
             catalog_root=self.dependencies.catalog_root,
             operation_id=self.request.transaction.operation_id,
@@ -362,7 +362,7 @@ class AddOperationRunner(OperationRunner):
         set_phase: _PhaseSetter,
     ) -> None:
         """Materialise or skip the artifact write for an add operation."""
-        writer = self.request.materialization_intent.writer
+        materializer = self.request.materialization_intent.materializer
         base_artifact = _planned_data_artifact(add_plan.locator)
         if add_plan.storage_plan.write_mode == "reference":
             add_plan.artifacts = (base_artifact,)
@@ -377,15 +377,15 @@ class AddOperationRunner(OperationRunner):
                 locator=add_plan.locator,
             )
             return
-        if writer is None:
+        if materializer is None:
             raise ValueError(
                 f"Storage plan with write mode {add_plan.storage_plan.write_mode!r} "
                 "requires an artifact_writer."
             )
-        validate_writer_matches_storage_plan(writer, add_plan.storage_plan)
+        validate_materializer_matches_storage_plan(materializer, add_plan.storage_plan)
 
         set_phase("artifact-write")
-        write_result = writer.write(
+        write_result = materializer.write(
             ArtifactWriteRequest(
                 context=add_plan.context,
                 source=add_plan.context.source,
@@ -395,20 +395,20 @@ class AddOperationRunner(OperationRunner):
         )
         if not isinstance(write_result, ArtifactWriteResult):
             raise TypeError(
-                "ArtifactWriter.write() must return an ArtifactWriteResult. "
+                "ArtifactMaterializer.write() must return an ArtifactWriteResult. "
                 "Use source_writer(), memory_writer(), or path_writer() to adapt "
                 "one-off functions that return None, metadata, or descriptors."
             )
-        add_plan.artifacts = _merge_writer_artifacts(base_artifact, write_result)
+        add_plan.artifacts = _merge_materializer_artifacts(base_artifact, write_result)
         write_details: dict[str, object] = {
             "write_phase": "artifact-write",
-            "writer_type": type(writer).__name__,
+            "materializer_type": type(materializer).__name__,
             "write_mode": add_plan.storage_plan.write_mode,
         }
         if write_result.diagnostics:
-            write_details["writer_diagnostics"] = write_result.diagnostics
+            write_details["materializer_diagnostics"] = write_result.diagnostics
         if write_result.provenance:
-            write_details["writer_provenance"] = write_result.provenance
+            write_details["materializer_provenance"] = write_result.provenance
         self.dependencies.emit_operation_audit(
             add_plan.context,
             event_type="write",
@@ -666,11 +666,11 @@ def _planned_data_artifact(locator: ArtifactLocator) -> ArtifactDescriptor:
     return ArtifactDescriptor(id=DATA_ARTIFACT_ID, role="data_artifact", locator=locator)
 
 
-def _merge_writer_artifacts(
+def _merge_materializer_artifacts(
     base_artifact: ArtifactDescriptor,
     result: ArtifactWriteResult,
 ) -> tuple[ArtifactDescriptor, ...]:
-    """Merge writer-produced descriptors over the planned data descriptor."""
+    """Merge materializer-produced descriptors over the planned data descriptor."""
     data_result: ArtifactDescriptor | None = None
     auxiliary: list[ArtifactDescriptor] = []
     seen_auxiliary_ids: set[str] = set()
@@ -679,36 +679,38 @@ def _merge_writer_artifacts(
         if artifact.id == DATA_ARTIFACT_ID:
             if artifact.role != "data_artifact":
                 raise ValueError(
-                    f"writer result artifact {DATA_ARTIFACT_ID!r} must use role 'data_artifact', "
+                    f"materializer result artifact {DATA_ARTIFACT_ID!r} must use role 'data_artifact', "
                     f"got {artifact.role!r}"
                 )
             data_result = artifact
             continue
         if artifact.role == "data_artifact":
             raise ValueError(
-                "writer result may only describe the operation data artifact with "
+                "materializer result may only describe the operation data artifact with "
                 f"id {DATA_ARTIFACT_ID!r}; got id {artifact.id!r}"
             )
         if artifact.id in seen_auxiliary_ids:
-            raise ValueError(f"writer result contains duplicate artifact id: {artifact.id!r}")
+            raise ValueError(f"materializer result contains duplicate artifact id: {artifact.id!r}")
         seen_auxiliary_ids.add(artifact.id)
         auxiliary.append(_normalize_descriptor_schema(artifact))
 
     data_artifact = (
         _normalize_descriptor_schema(base_artifact)
         if data_result is None
-        else _merge_data_artifact(base_artifact, data_result)
+        else _merge_materialized_data_artifact(base_artifact, data_result)
     )
     return (data_artifact, *auxiliary)
 
 
-def _merge_data_artifact(
+def _merge_materialized_data_artifact(
     base_artifact: ArtifactDescriptor,
     result_artifact: ArtifactDescriptor,
 ) -> ArtifactDescriptor:
-    """Merge a writer-produced data descriptor over the planned base descriptor."""
+    """Merge a materializer-produced data descriptor over the planned base descriptor."""
     if result_artifact.locator is not None and result_artifact.locator != base_artifact.locator:
-        raise ValueError("writer result data artifact locator must match the planned locator or be omitted")
+        raise ValueError(
+            "materializer result data artifact locator must match the planned locator or be omitted"
+        )
     return ArtifactDescriptor(
         id=DATA_ARTIFACT_ID,
         role="data_artifact",

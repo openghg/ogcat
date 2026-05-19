@@ -9,7 +9,7 @@ actual architecture decision after these concepts have been reviewed.
 - GitHub issue #108, "Plan filesystem-like artifact interfaces and structured operator pipelines".
 - GitHub issue #109, "Make managed collections first-class operation targets".
 - Current `ogcat` code around `CatalogRecord`, `ArtifactLocator`, `StoragePlan`,
-  `OperationSource`, `ArtifactWriter`, `OperationContext`, collections, replicas,
+  `OperationSource`, `ArtifactWriter`/materializer helpers, `OperationContext`, collections, replicas,
   secondary artifacts, and plugins.
 - User-supplied notes:
   - `/Users/bm13805/Desktop/temp/chatgpt_unix_filesystem_review.md`
@@ -36,9 +36,10 @@ Storage and materialization are currently shaped around `StoragePlan` and
 `StoragePlan` describes where an artifact should be written or referenced and
 whether ogcat owns it.
 
-`OperationSource`, `ArtifactWriter`, and `OperationContext` are the existing
-write-side boundary. Writers materialize data into an `ArtifactLocator` and can
-mutate `context.derived_metadata` or register rollback actions.
+`OperationSource`, `ArtifactWriter`/materializer helpers, and
+`OperationContext` are the existing write-side boundary. Materializers write
+data into a planned artifact target and can return descriptor facts or register
+rollback actions.
 
 Collections are not a storage target today. They are explicit classification
 metadata layered over directory-like locators. This is a useful direction to
@@ -147,7 +148,7 @@ ogcat equivalents and gaps:
 | Replica | None yet for exact copies; symlink views are only links | Need checksum/freshness/resource/copy state. |
 | Resource | Storage root plus adapter hint | No resource hierarchy, health, policy, or cache/archive coordinator. |
 | Vault | `data/objects/` primary storage tree | Not necessarily archive storage and not a storage resource model. |
-| Rule engine | hooks, writers, secondary artifacts | Python-local, synchronous, and not a policy engine. |
+| Rule engine | hooks, materializers, secondary artifacts | Python-local, synchronous, and not a policy engine. |
 | Federation | explicit remote locators only | No zones, trust, ACL sync, or remote catalog protocol. |
 
 The ADR should avoid using "replica" for current symlink-based behavior without
@@ -339,8 +340,8 @@ versus prototype metadata first.
 
 `Operation`
 : Execution envelope that consumes and produces records/artifacts/handles
-  through declared readers, writers, and converters. Owns validation, rollback,
-  audit, and provenance.
+  through declared readers, writer capabilities, converters, and operation
+  materializers. Owns validation, rollback, audit, and provenance.
 
 ## Target Object Relationships
 
@@ -614,16 +615,17 @@ xarray unless a plugin provides the reader.
 | `Locator` | Serializable description of where an artifact is or can be resolved. | Resolved by mount/resource context and locator drivers. |
 | `StorageResource` | Named storage profile, root, adapter, and capabilities. | Used by locators, storage plans, replicas, caches, and mount resolver. |
 | `DataTypeClaim` | Intake-aligned source/external type assertion. | Informs readers, converters, validators, and documentation. |
-| `Representation` | Storage/encoding shape of an artifact. | Connects locators to readers and writers. |
+| `Representation` | Storage/encoding shape of an artifact. | Connects locators to readers and writer capabilities. |
 | `InterfaceClaim` | Capability contract an artifact can expose. | Dispatch key for reader/converter selection. |
-| `Facet` | Namespaced fact with evidence and confidence. | Produced by inspectors, readers, writers, validators, and plugins. |
+| `Facet` | Namespaced fact with evidence and confidence. | Produced by inspectors, readers, materializers, validators, and plugins. |
 | `PermissionPolicy` | Decides whether a principal can perform a catalog, record, artifact, resource, or operation action. | Uses principals, groups, record/artifact state, resource profiles, and plugin capability metadata. |
 | `LockManager` | Coordinates shared/exclusive locks, leases, and version checks. | Used by operations, handles, storage resources, and catalog backends. |
 | `Reader` | Opens an artifact through an interface and returns a runtime handle/object. | Uses locators, claims, facets, plugins, and operation context. |
-| `Writer` | Materializes runtime data or source handles into artifact storage. | Uses storage plans/resources and returns artifact result metadata. |
-| `Converter` | Transforms one runtime interface into another. | Composes readers and writers; may be lazy or materializing. |
+| `WriterCapability` | Declares and implements typed output behavior. | Uses descriptors, runtime values/handles, claims, facets, and plugin options. |
+| `OperationMaterializer` | Adapts a writer capability or one-off function into the catalog operation lifecycle. | Uses storage plans/resources, rollback registration, audit, and descriptor-result merge. |
+| `Converter` | Transforms one runtime interface into another. | Composes readers and writer capabilities; may be lazy or materializing. |
 | `Handle` | Runtime opened object scoped to an operation or user context. | Owned by operation lifecycle or user context; may hold read/write leases. |
-| `Operation` | Execution envelope for typed pipelines. | Coordinates readers, writers, converters, rollback, audit, and provenance. |
+| `Operation` | Execution envelope for typed pipelines. | Coordinates readers, writer capabilities, converters, materializers, rollback, audit, and provenance. |
 
 UML-style structural sketch:
 
@@ -757,7 +759,7 @@ Single-file ingest as the future model:
 
 ```text
 flowchart LR
-  A["Local source path"] --> B["copy/move writer"]
+  A["Local source path"] --> B["copy/move materializer"]
   B --> C["Primary artifact descriptor"]
   C --> D["record.locator compatibility field"]
   B --> E["facts: size, suffix, checksum, inferred claims"]
@@ -861,9 +863,9 @@ the ADR makes each slice concrete enough to open as a separate sub-issue.
 1. ADR: virtual artifact filesystem vocabulary and boundaries.
 2. First-class artifact descriptor target model.
 3. Data type, representation, interface, and facet claim schemas.
-4. Reader, writer, and converter capability registry.
+4. Reader, writer-capability, and converter capability registry.
 5. Managed collections as operation targets, including #109.
-6. Structured artifact writer result model.
+6. Structured operation-materializer result model.
 7. Read-side artifact handles and accessors.
 8. Intake plugin design spike.
 9. Migration and compatibility plan for existing single-locator catalogs.

@@ -1,19 +1,22 @@
-"""Artifact writer helpers for lightweight catalog workflows.
+"""Artifact materializer helpers for lightweight catalog workflows.
 
-Writers bridge ``Catalog.add_artifact`` and concrete storage code. A writer is
-any object that satisfies :class:`ogcat.hooks.ArtifactWriter`: it exposes a
-``write(request)`` method, receives an :class:`ogcat.hooks.ArtifactWriteRequest`,
-and returns :class:`ogcat.models.ArtifactWriteResult` metadata for the produced
-artifact descriptors.
+Materializers bridge ``Catalog.add_artifact`` and concrete storage code. A
+materializer is any object that satisfies
+:class:`ogcat.hooks.ArtifactMaterializer`: it exposes a ``write(request)``
+method, receives an :class:`ogcat.hooks.ArtifactWriteRequest`, registers
+operation rollback, and returns :class:`ogcat.models.ArtifactWriteResult`
+metadata for the produced artifact descriptors.
 
 This module provides small adapters for common examples. ``source_writer`` wraps
 a function that accepts an ``OperationSource`` and target ``Path``.
 ``memory_writer`` and ``path_writer`` adapt narrower functions for in-memory
-payloads and local files. ``UnzipArtifactWriter`` is a concrete directory writer
-used by tutorials and tests. ``UnzipSingleFileArtifactWriter`` extracts one zip
-member to a file target. These helpers register rollback actions through the
-operation context before writing so partially-created targets can be cleaned up
-if the catalog operation fails.
+payloads and local files. ``UnzipArtifactWriter`` is a concrete directory
+materializer used by tutorials and tests. These historical class and function
+names still use "writer", but they are operation materializer adapters, not
+registry writer capabilities. ``UnzipSingleFileArtifactWriter`` extracts one
+zip member to a file target. These helpers register rollback actions through
+the operation context before writing so partially-created targets can be
+cleaned up if the catalog operation fails.
 """
 
 from __future__ import annotations
@@ -106,7 +109,7 @@ def path_source(
 
 @dataclass(frozen=True, slots=True)
 class FunctionArtifactWriter:
-    """Artifact writer adapter around a small Python function.
+    """Operation materializer adapter around a small Python function.
 
     The wrapped function receives an ``OperationSource`` and a local target
     path. It should write either a single file or a directory, matching
@@ -131,7 +134,7 @@ class FunctionArtifactWriter:
         """Write artifact data and register rollback for the created target."""
         source = request.source
         if self.source_kind is not None and source.kind != self.source_kind:
-            raise ValueError(f"writer requires source kind {self.source_kind!r}, got {source.kind!r}")
+            raise ValueError(f"materializer requires source kind {self.source_kind!r}, got {source.kind!r}")
 
         target_path = _target_path(request.locator)
         _prepare_empty_target(target_path, self.target_kind)
@@ -145,7 +148,7 @@ class FunctionArtifactWriter:
 
 @dataclass(frozen=True, slots=True)
 class CopyArtifactWriter:
-    """Artifact writer that copies a local source path to a storage target."""
+    """Operation materializer that copies a local source path to a target."""
 
     source_kind: str = "local_file"
     target_kind: ClassVar[TargetKind] = "file"
@@ -155,9 +158,11 @@ class CopyArtifactWriter:
         """Copy a local source path to the target and register rollback."""
         source = request.source
         if source.kind != self.source_kind or source.path is None:
-            raise ValueError(f"copy writer requires OperationSource(kind={self.source_kind!r}, path=...)")
+            raise ValueError(
+                f"copy materializer requires OperationSource(kind={self.source_kind!r}, path=...)"
+            )
         if self.target_kind != "file":
-            raise ValueError("copy writer currently supports file targets only")
+            raise ValueError("copy materializer currently supports file targets only")
         target = request.locator
         adapter = adapter_for_locator(target)
         ensure_target_absent(target, adapter=adapter)
@@ -176,7 +181,7 @@ class CopyArtifactWriter:
 
 @dataclass(frozen=True, slots=True)
 class CopyDirectoryArtifactWriter:
-    """Artifact writer that copies a local source directory to a directory target."""
+    """Operation materializer that copies a local directory to a target."""
 
     source_kind: str = "local_file"
     target_kind: ClassVar[TargetKind] = "directory"
@@ -187,13 +192,13 @@ class CopyDirectoryArtifactWriter:
         source = request.source
         if source.kind != self.source_kind or source.path is None:
             raise ValueError(
-                f"copy directory writer requires OperationSource(kind={self.source_kind!r}, path=...)"
+                f"copy directory materializer requires OperationSource(kind={self.source_kind!r}, path=...)"
             )
         if not source.path.is_dir():
-            raise ValueError(f"copy directory writer requires an existing directory: {source.path}")
+            raise ValueError(f"copy directory materializer requires an existing directory: {source.path}")
         target = request.locator
         if target.kind != "path":
-            raise ValueError("copy directory writer currently requires a path-backed target")
+            raise ValueError("copy directory materializer currently requires a path-backed target")
         adapter = adapter_for_locator(target)
         ensure_target_absent(target, adapter=adapter)
         target_path = require_local_path(target)
@@ -212,7 +217,7 @@ class CopyDirectoryArtifactWriter:
 
 @dataclass(frozen=True, slots=True)
 class MoveArtifactWriter:
-    """Artifact writer that moves a local source path to a storage target."""
+    """Operation materializer that moves a local source path to a target."""
 
     source_kind: str = "local_file"
     target_kind: ClassVar[TargetKind] = "file"
@@ -222,12 +227,16 @@ class MoveArtifactWriter:
         """Move a local source path to the target and register rollback."""
         source = request.source
         if source.kind != self.source_kind or source.path is None:
-            raise ValueError(f"move writer requires OperationSource(kind={self.source_kind!r}, path=...)")
+            raise ValueError(
+                f"move materializer requires OperationSource(kind={self.source_kind!r}, path=...)"
+            )
         target = request.locator
         if target.kind != "path":
-            raise ValueError("move writer currently requires a path-backed target for rollback-safe moves")
+            raise ValueError(
+                "move materializer currently requires a path-backed target for rollback-safe moves"
+            )
         if self.target_kind != "file":
-            raise ValueError("move writer currently supports file targets only")
+            raise ValueError("move materializer currently supports file targets only")
         adapter = adapter_for_locator(target)
         ensure_target_absent(target, adapter=adapter)
         target_path = require_local_path(target)
@@ -245,7 +254,7 @@ class MoveArtifactWriter:
 
 @dataclass(frozen=True, slots=True)
 class MoveDirectoryArtifactWriter:
-    """Artifact writer that moves a local source directory to a directory target."""
+    """Operation materializer that moves a local source directory to a target."""
 
     source_kind: str = "local_file"
     target_kind: ClassVar[TargetKind] = "directory"
@@ -256,13 +265,13 @@ class MoveDirectoryArtifactWriter:
         source = request.source
         if source.kind != self.source_kind or source.path is None:
             raise ValueError(
-                f"move directory writer requires OperationSource(kind={self.source_kind!r}, path=...)"
+                f"move directory materializer requires OperationSource(kind={self.source_kind!r}, path=...)"
             )
         if not source.path.is_dir():
-            raise ValueError(f"move directory writer requires an existing directory: {source.path}")
+            raise ValueError(f"move directory materializer requires an existing directory: {source.path}")
         target = request.locator
         if target.kind != "path":
-            raise ValueError("move directory writer currently requires a path-backed target")
+            raise ValueError("move directory materializer currently requires a path-backed target")
         adapter = adapter_for_locator(target)
         ensure_target_absent(target, adapter=adapter)
         target_path = require_local_path(target)
@@ -319,7 +328,7 @@ def path_writer(
     def write_from_path(source: OperationSource, target: Path) -> FunctionWriteResult:
         """Write the source path to the target path."""
         if source.path is None:
-            raise ValueError("path writer requires source.path")
+            raise ValueError("path materializer requires source.path")
         return write_function(source.path, target)
 
     return source_writer(write_from_path, target_kind=target_kind, source_kind=source_kind)
@@ -330,7 +339,7 @@ def _adapt_function_write_result(
     *,
     request: ArtifactWriteRequest,
 ) -> ArtifactWriteResult:
-    """Adapt a convenience function return value to a structured writer result."""
+    """Adapt a convenience function return value to a materializer result."""
     if isinstance(result, ArtifactWriteResult):
         return result
     if isinstance(result, ArtifactDescriptor):
@@ -360,7 +369,9 @@ class UnzipArtifactWriter:
         """Extract a zip source into the target directory."""
         source = request.source
         if source.kind != self.source_kind or source.path is None:
-            raise ValueError(f"unzip writer requires OperationSource(kind={self.source_kind!r}, path=...)")
+            raise ValueError(
+                f"unzip materializer requires OperationSource(kind={self.source_kind!r}, path=...)"
+            )
 
         target_dir = _target_path(request.locator)
         _prepare_empty_target(target_dir, "directory")
@@ -415,7 +426,8 @@ class UnzipSingleFileArtifactWriter:
         source = request.source
         if source.kind != self.source_kind or source.path is None:
             raise ValueError(
-                f"single-file unzip writer requires OperationSource(kind={self.source_kind!r}, path=...)"
+                "single-file unzip materializer requires "
+                f"OperationSource(kind={self.source_kind!r}, path=...)"
             )
 
         target_path = _target_path(request.locator)
@@ -467,12 +479,12 @@ def _target_path(locator: ArtifactLocator) -> Path:
     """Return a path-backed locator target."""
     target_path = locator.as_path()
     if target_path is None:
-        raise ValueError("artifact writer requires a path-backed target locator")
+        raise ValueError("artifact materializer requires a path-backed target locator")
     return target_path
 
 
 def _prepare_empty_target(target_path: Path, target_kind: TargetKind) -> None:
-    """Prepare a target that this writer can safely remove on rollback."""
+    """Prepare a target that this materializer can safely remove on rollback."""
     if target_path.exists():
         raise FileExistsError(f"target {target_path} already exists")
     if target_kind == "file":

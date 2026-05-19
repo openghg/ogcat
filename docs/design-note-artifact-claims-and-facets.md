@@ -285,8 +285,8 @@ PR #122 clarified an important ADR distinction. Directory-backed artifacts are
 not automatically collections. A managed ``.zarr`` directory added with
 ``add_file()`` is one dataset artifact whose representation is ``directory``.
 A managed directory of monthly ``.nc`` files is a collection only when a caller,
-writer, or plugin explicitly adds collection claims/facets such as member
-pattern, member format, and member suffixes.
+operation materializer, or plugin explicitly adds collection claims/facets such
+as member pattern, member format, and member suffixes.
 
 This keeps storage shape separate from logical dataset shape:
 
@@ -298,29 +298,29 @@ This keeps storage shape separate from logical dataset shape:
 - collection facets say which members participate and how a reader should
   combine them.
 
-## Writer-Produced Facts
+## Materializer-Produced Facts
 
-Writers are the natural source of produced artifact claims/facets because they
-know what they materialized. Issue #117 adds the merge path: descriptor-first
-writer classes receive an ``ArtifactWriteRequest`` and return an
-``ArtifactWriteResult``. The operation runner builds a planned ``data``
-descriptor first, calls the writer, and merges returned descriptor facts before
-staging the catalog record.
+Operation materializers are the natural source of produced artifact
+claims/facets because they know what they materialized. Issue #117 adds the
+merge path: descriptor-first materializer classes receive an
+``ArtifactWriteRequest`` and return an ``ArtifactWriteResult``. The operation
+runner builds a planned ``data`` descriptor first, calls the materializer, and
+merges returned descriptor facts before staging the catalog record.
 
 The planned data descriptor has id ``data``, role ``data_artifact``, the planned
 locator, and state ``available``. A returned data descriptor may omit the
-locator; if it supplies one, it must equal the planned locator. A writer result
-may also return auxiliary descriptors such as previews, manifests, or logs. If
-the result has only auxiliary descriptors, the planned data descriptor is kept.
-Duplicate artifact ids fail before commit, and only the ``data`` descriptor may
-use role ``data_artifact``.
+locator; if it supplies one, it must equal the planned locator. A materializer
+result may also return auxiliary descriptors such as previews, manifests, or
+logs. If the result has only auxiliary descriptors, the planned data descriptor
+is kept. Duplicate artifact ids fail before commit, and only the ``data``
+descriptor may use role ``data_artifact``.
 
 Claims and facets merge by their envelope key:
-``(namespace, kind, name, version)``. Later writer-produced facts replace
+``(namespace, kind, name, version)``. Later materializer-produced facts replace
 earlier facts with the same envelope deterministically. Relationship metadata
-merges shallowly with writer-result keys winning. Result diagnostics and
-provenance are normalized to JSON-compatible metadata and copied only into the
-artifact-write audit event; durable/queryable provenance remains out of scope.
+merges shallowly with result keys winning. Result diagnostics and provenance are
+normalized to JSON-compatible metadata and copied only into the artifact-write
+audit event; durable/queryable provenance remains out of scope.
 
 This result model describes persisted artifact facts and catalog merge behavior.
 It does not define read handles, ``open_artifact()``, managed collection

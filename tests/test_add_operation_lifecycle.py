@@ -108,7 +108,7 @@ def test_run_add_operation_delegates_to_operation_runner(
     assert request.operation_type == "add_artifact"
     assert request.record_type == "external_reference"
     assert request.metadata == {"title": "Delegated"}
-    assert request.materialization_intent.writer is None
+    assert request.materialization_intent.materializer is None
     assert request.materialization_intent.write_mode == "reference"
     assert request.materialization_intent.ogcat_owned is False
     assert record.id == "runner"
@@ -150,7 +150,7 @@ def test_add_file_application_request_uses_copy_materialization(
     assert request.materialization_intent.target_kind == "file"
     assert request.materialization_intent.write_mode == "copy"
     assert request.materialization_intent.ogcat_owned is True
-    assert type(request.materialization_intent.writer).__name__ == "CopyArtifactWriter"
+    assert type(request.materialization_intent.materializer).__name__ == "CopyArtifactWriter"
     assert len(request.secondary_artifact_operations) == 1
     assert request.secondary_artifact_operations[0].role == "template_link"
 
@@ -227,19 +227,19 @@ def test_add_file_uuid_primary_can_skip_template_link_secondary(
     assert request.secondary_artifact_operations == ()
 
 
-def test_add_artifact_application_request_uses_writer_materialization(
+def test_add_artifact_application_request_uses_materializer_intent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Writer-backed artifact requests carry target kind and write mode intent."""
+    """Materializer-backed artifact requests carry target kind and write mode intent."""
     requests: list[AddOperationRequest] = []
 
-    class DirectoryWriter:
+    class DirectoryMaterializer:
         target_kind = "directory"
         write_mode = "write"
 
         def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
-            raise AssertionError("fake runner should not invoke writer")
+            raise AssertionError("fake runner should not invoke materializer")
 
     class FakeRunner(OperationRunner):
         def __init__(self, request: AddOperationRequest) -> None:
@@ -258,7 +258,7 @@ def test_add_artifact_application_request_uses_writer_materialization(
         requests.append(request)
         return FakeRunner(request)
 
-    writer = DirectoryWriter()
+    materializer = DirectoryMaterializer()
     monkeypatch.setattr(Catalog, "_build_add_operation_runner", build_fake_runner)
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
 
@@ -266,12 +266,12 @@ def test_add_artifact_application_request_uses_writer_materialization(
         record_type="zarr_store",
         locator=ArtifactLocator.path(tmp_path / "store.zarr"),
         source=OperationSource(kind="memory", descriptor="generated"),
-        artifact_writer=writer,
+        artifact_writer=materializer,
     )
 
     request = requests[0]
     assert request.operation_type == "add_artifact"
-    assert request.materialization_intent.writer is writer
+    assert request.materialization_intent.materializer is materializer
     assert request.materialization_intent.target_kind == "directory"
     assert request.materialization_intent.write_mode == "write"
     assert request.materialization_intent.ogcat_owned is True
@@ -446,15 +446,15 @@ def test_record_only_add_artifact_skips_artifact_write(tmp_path: Path) -> None:
     assert catalog.repository.all() == [record]
 
 
-def test_explicit_reference_storage_plan_skips_artifact_writer(tmp_path: Path) -> None:
-    """Explicit reference plans are authoritative and do not run supplied writers."""
+def test_explicit_reference_storage_plan_skips_materializer(tmp_path: Path) -> None:
+    """Explicit reference plans are authoritative and do not run supplied materializers."""
 
-    class ExplodingWriter:
+    class ExplodingMaterializer:
         target_kind = "file"
         write_mode = "write"
 
         def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
-            raise AssertionError("reference storage plan should skip the writer")
+            raise AssertionError("reference storage plan should skip the materializer")
 
     target = tmp_path / "planned.txt"
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
@@ -463,29 +463,29 @@ def test_explicit_reference_storage_plan_skips_artifact_writer(tmp_path: Path) -
         record_type="planned_reference",
         storage_plan=StoragePlan(locator=ArtifactLocator.path(target), write_mode="reference"),
         source=OperationSource(kind="text", descriptor="record only"),
-        artifact_writer=ExplodingWriter(),
+        artifact_writer=ExplodingMaterializer(),
     )
 
     assert record.locator == ArtifactLocator.path(target)
     assert not target.exists()
 
 
-def test_explicit_storage_plan_rejects_writer_write_mode_mismatch(tmp_path: Path) -> None:
-    """Writer-declared write modes must match authoritative explicit plans."""
+def test_explicit_storage_plan_rejects_materializer_write_mode_mismatch(tmp_path: Path) -> None:
+    """Materializer-declared write modes must match authoritative explicit plans."""
 
-    class CopyDeclaredWriter:
+    class CopyDeclaredMaterializer:
         target_kind = "file"
         write_mode = "copy"
 
         def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
-            raise AssertionError("mismatched writer should fail before writing")
+            raise AssertionError("mismatched materializer should fail before writing")
 
     target = tmp_path / "planned.txt"
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
 
     with pytest.raises(
         ValueError,
-        match="Artifact writer write_mode 'copy' does not match storage plan write_mode 'move'",
+        match="Artifact materializer write_mode 'copy' does not match storage plan write_mode 'move'",
     ):
         catalog.add_artifact(
             record_type="planned_move",
@@ -495,22 +495,24 @@ def test_explicit_storage_plan_rejects_writer_write_mode_mismatch(tmp_path: Path
                 ogcat_owned=True,
             ),
             source=OperationSource(kind="text", descriptor="planned move"),
-            artifact_writer=CopyDeclaredWriter(),
+            artifact_writer=CopyDeclaredMaterializer(),
         )
 
     assert not target.exists()
 
 
-def test_writer_backed_add_artifact_writes_and_persists_metadata(tmp_path: Path) -> None:
-    """Writer-backed add_artifact writes the target and persists writer metadata."""
+def test_materializer_backed_add_artifact_writes_and_persists_metadata(tmp_path: Path) -> None:
+    """Materializer-backed add_artifact writes the target and persists metadata."""
 
-    class TextWriter:
+    class TextMaterializer:
         def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
             target_path = request.locator.as_path()
             assert target_path is not None
             target_path.parent.mkdir(parents=True, exist_ok=True)
             target_path.write_text(str(request.source.metadata["text"]), encoding="utf-8")
-            request.context.derived_metadata["writer_text_length"] = len(str(request.source.metadata["text"]))
+            request.context.derived_metadata["materialized_text_length"] = len(
+                str(request.source.metadata["text"])
+            )
             return ArtifactWriteResult.from_artifact(request.target)
 
     target = tmp_path / "outputs" / "generated.txt"
@@ -520,18 +522,18 @@ def test_writer_backed_add_artifact_writes_and_persists_metadata(tmp_path: Path)
         record_type="generated_text",
         locator=ArtifactLocator.path(target),
         source=OperationSource(kind="text", descriptor="inline text", metadata={"text": "hello"}),
-        artifact_writer=TextWriter(),
+        artifact_writer=TextMaterializer(),
     )
 
     assert target.read_text(encoding="utf-8") == "hello"
-    assert record.derived_metadata["writer_text_length"] == 5
+    assert record.derived_metadata["materialized_text_length"] == 5
 
 
-def test_hook_failure_after_writer_rolls_back_artifact_and_record(tmp_path: Path) -> None:
-    """A post-write hook failure rolls back writer cleanup and the staged record."""
+def test_hook_failure_after_materializer_rolls_back_artifact_and_record(tmp_path: Path) -> None:
+    """A post-write hook failure rolls back materializer cleanup and the staged record."""
     rollback_calls: list[str] = []
 
-    class TextWriter:
+    class TextMaterializer:
         def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
             target_path = request.locator.as_path()
             assert target_path is not None
@@ -539,7 +541,7 @@ def test_hook_failure_after_writer_rolls_back_artifact_and_record(tmp_path: Path
             target_path.write_text("created", encoding="utf-8")
 
             def rollback() -> None:
-                rollback_calls.append("writer")
+                rollback_calls.append("materializer")
                 target_path.unlink(missing_ok=True)
 
             request.context.rollback(rollback, description="remove generated text")
@@ -547,7 +549,7 @@ def test_hook_failure_after_writer_rolls_back_artifact_and_record(tmp_path: Path
 
     class FailingHook:
         def before_record_write(self, context: OperationContext) -> None:
-            raise RuntimeError("stop after writer")
+            raise RuntimeError("stop after materializer")
 
     target = tmp_path / "outputs" / "generated.txt"
     catalog = Catalog.create(
@@ -556,15 +558,15 @@ def test_hook_failure_after_writer_rolls_back_artifact_and_record(tmp_path: Path
         plugins=PluginRegistry([FailingHook()]),
     )
 
-    with pytest.raises(RuntimeError, match="stop after writer"):
+    with pytest.raises(RuntimeError, match="stop after materializer"):
         catalog.add_artifact(
             record_type="generated_text",
             locator=ArtifactLocator.path(target),
             source=OperationSource(kind="text", descriptor="inline text"),
-            artifact_writer=TextWriter(),
+            artifact_writer=TextMaterializer(),
         )
 
-    assert rollback_calls == ["writer"]
+    assert rollback_calls == ["materializer"]
     assert not target.exists()
     assert catalog.repository.all() == []
 
@@ -667,9 +669,9 @@ def test_validation_failure_runs_after_validate_and_stops_before_write(tmp_path:
         def resolve_artifact_locator(self, context: OperationContext) -> None:
             calls.append("resolve_artifact_locator")
 
-    class TextWriter:
+    class TextMaterializer:
         def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
-            calls.append("writer")
+            calls.append("materializer")
             target_path = request.locator.as_path()
             assert target_path is not None
             target_path.write_text("should not happen", encoding="utf-8")
@@ -699,7 +701,7 @@ def test_validation_failure_runs_after_validate_and_stops_before_write(tmp_path:
             locator=ArtifactLocator.path(target),
             metadata={},
             source=OperationSource(kind="text", descriptor="inline text"),
-            artifact_writer=TextWriter(),
+            artifact_writer=TextMaterializer(),
         )
 
     assert calls == ["before_validate_metadata", "after_validate_metadata:False"]
@@ -707,7 +709,7 @@ def test_validation_failure_runs_after_validate_and_stops_before_write(tmp_path:
     assert catalog.repository.all() == []
 
 
-def test_derived_metadata_from_writer_extract_hook_and_record_hook_persists(tmp_path: Path) -> None:
+def test_derived_metadata_from_materializer_extract_hook_and_record_hook_persists(tmp_path: Path) -> None:
     """Derived metadata mutations from write, extract, and record phases persist."""
 
     class MetadataHook:
@@ -717,13 +719,13 @@ def test_derived_metadata_from_writer_extract_hook_and_record_hook_persists(tmp_
         def before_record_write(self, context: OperationContext) -> None:
             context.derived_metadata["record_hook"] = context.record_type
 
-    class TextWriter:
+    class TextMaterializer:
         def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
             target_path = request.locator.as_path()
             assert target_path is not None
             target_path.parent.mkdir(parents=True, exist_ok=True)
             target_path.write_text("payload", encoding="utf-8")
-            request.context.derived_metadata["writer"] = request.source.kind
+            request.context.derived_metadata["materializer"] = request.source.kind
             return ArtifactWriteResult.from_artifact(request.target)
 
     target = tmp_path / "outputs" / "metadata.txt"
@@ -737,19 +739,19 @@ def test_derived_metadata_from_writer_extract_hook_and_record_hook_persists(tmp_
         record_type="generated_text",
         locator=ArtifactLocator.path(target),
         source=OperationSource(kind="text", descriptor="inline text"),
-        artifact_writer=TextWriter(),
+        artifact_writer=TextMaterializer(),
     )
 
-    assert record.derived_metadata["writer"] == "text"
+    assert record.derived_metadata["materializer"] == "text"
     assert record.derived_metadata["extract_hook"] is True
     assert record.derived_metadata["record_hook"] == "generated_text"
 
 
-def test_writer_failure_runs_registered_rollback_and_leaves_no_record(tmp_path: Path) -> None:
-    """A failing writer rolls back registered cleanup before any record exists."""
+def test_materializer_failure_runs_registered_rollback_and_leaves_no_record(tmp_path: Path) -> None:
+    """A failing materializer rolls back registered cleanup before any record exists."""
     rollback_calls: list[str] = []
 
-    class FailingWriter:
+    class FailingMaterializer:
         def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
             target_path = request.locator.as_path()
             assert target_path is not None
@@ -757,23 +759,23 @@ def test_writer_failure_runs_registered_rollback_and_leaves_no_record(tmp_path: 
             target_path.write_text("partial", encoding="utf-8")
 
             def rollback() -> None:
-                rollback_calls.append("writer")
+                rollback_calls.append("materializer")
                 target_path.unlink(missing_ok=True)
 
-            request.context.rollback(rollback, description="remove partial writer output")
-            raise OSError("writer failed")
+            request.context.rollback(rollback, description="remove partial materializer output")
+            raise OSError("materializer failed")
 
     target = tmp_path / "outputs" / "partial.txt"
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
 
-    with pytest.raises(OSError, match="writer failed"):
+    with pytest.raises(OSError, match="materializer failed"):
         catalog.add_artifact(
             record_type="generated_text",
             locator=ArtifactLocator.path(target),
             source=OperationSource(kind="text", descriptor="inline text"),
-            artifact_writer=FailingWriter(),
+            artifact_writer=FailingMaterializer(),
         )
 
-    assert rollback_calls == ["writer"]
+    assert rollback_calls == ["materializer"]
     assert not target.exists()
     assert catalog.repository.all() == []

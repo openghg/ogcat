@@ -9,7 +9,8 @@ The scope is deliberately narrow:
 - define how capabilities are declared, registered, and selected;
 - dispatch by `ArtifactDescriptor` claims and facets, not by `record_type`;
 - explain how bundled and external plugins use the same route;
-- preserve room for future typed reader handles and writer-result merging.
+- preserve room for future typed reader handles and operation-materializer
+  result merging.
 
 This slice does not define the public `open_artifact()` API, read-handle
 lifecycle, shell-like pipeline syntax, or catalog merge of writer-returned
@@ -32,6 +33,13 @@ Capability declarations are data. Implementations are opaque to the registry.
 An implementation may be a function, object, class instance, protocol
 implementation, or plugin-owned adapter. The registry may return it, but this
 slice does not make core invoke it implicitly.
+
+Terminology matters: a registry writer capability is not the same thing as the
+operation-scoped `ArtifactWriter`/materializer helpers in `ogcat.writers`.
+Writer capabilities declare typed I/O behavior. Operation materializers prepare
+the target descriptor, invoke a capability or one-off function, register
+rollback, collect produced descriptor facts, and hand those facts to the
+operation runner for merge.
 
 ## Declaration Shape
 
@@ -142,8 +150,8 @@ metadata at runtime. Runtime helpers should consume the same namespaced
 facet/version that the capability declares, so unrelated plugins cannot change
 behavior by using the same facet kind/name in their own namespace.
 
-Writers and converters use the same rule. A caller requests exact input and
-output claims or interfaces:
+Writer capabilities and converters use the same rule. A caller requests exact
+input and output claims or interfaces:
 
 ```python
 emoji_converter = registry.select(
@@ -183,7 +191,7 @@ capabilities.
 participate in operation hooks such as `before_validate_metadata`,
 `extract_metadata`, and `after_commit`.
 
-The capability registry owns typed declarations for readers, writers, and
+The capability registry owns typed declarations for readers, writer capabilities, and
 converters. A plugin object may contribute both lifecycle hooks and capability
 declarations, but those are different extension points:
 
@@ -232,6 +240,13 @@ directly only to keep this slice executable without the future handle API. That
 is useful as a plugin-style pressure test, but it is not the intended long-term
 pipeline executor.
 
+The long-term executor should make composition explicit. A reader selected with
+zero or more converters can be exposed as a reader/read plan for a requested
+output interface, following Intake's idea that a pipeline of reader/converters
+is itself reader-like. Operation materializers then consume the final runtime
+value or handle and use writer capabilities to produce artifact descriptors
+inside the operation rollback/audit boundary.
+
 ## Preserved Testing Request
 
 When #119 moves from documentation into implementation, preserve this testing
@@ -252,7 +267,8 @@ scope:
   that is not catalogued;
 - allow the registry to store and return runtime implementation objects, but do
   not make core invoke them implicitly;
-- keep reader handle APIs for #118 and catalog writer-result merge for #117.
+- keep reader handle APIs for #118 and catalog materializer-result merge for
+  #117.
 
 ## Deferred
 
@@ -262,8 +278,8 @@ This note intentionally leaves several choices to implementation:
 - trust and authentication policy for third-party plugin declarations;
 - how `PluginRegistry` exposes capability contribution methods;
 - the read-handle API that consumes selected reader implementations;
-- the writer-result model that persists produced claims/facets;
+- the operation-materializer result model that persists produced claims/facets;
 - optional integration with Intake pipelines or other external registries.
 - a converter orchestration layer that passes opened handles or runtime values
-  between readers, filters, and writers so chained conversions do not repeat
-  reader/writer boilerplate.
+  between readers, filters, and writer capabilities so chained conversions do
+  not repeat reader/writer boilerplate.

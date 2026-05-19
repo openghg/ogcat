@@ -6,7 +6,8 @@
 
 Capability registration is a separate extension point. Lifecycle hooks observe
 or mutate catalog operations; capability declarations describe typed readers,
-writers, and converters that can be selected from artifact claims and facets.
+writer capabilities, and converters that can be selected from artifact claims
+and facets.
 A single plugin object may provide both, but the capability registry remains a
 registration and lookup layer rather than another hook lifecycle.
 
@@ -24,10 +25,10 @@ Terminology matters:
   hooks, and rollback.
 
 `Catalog.add_artifact(...)` is record-only by default: it records a locator for an artifact, but does
-not write artifact data unless an artifact writer is explicitly supplied. `Catalog.add_file(...)` is a
+not write artifact data unless an operation materializer is explicitly supplied. `Catalog.add_file(...)` is a
 bundled local-file operation: it resolves a path locator, copies or moves the source file, extracts
 generic metadata, and writes the record. Future data-from-memory writes should be modeled as explicit
-operations or artifact writers rather than as record-write hooks.
+operations or materializers rather than as record-write hooks.
 
 ## Direct Registration
 
@@ -106,22 +107,27 @@ class ExternalIndexPlugin:
 Rollback actions run in reverse registration order. They are best-effort compensating actions, not
 database transactions.
 
-## Writing Artifacts From Plugins
+## Materializing Artifacts From Plugins
 
-Artifact writers materialise data before the catalog record is written. They receive the active
-`ArtifactWriteRequest`, which contains the `OperationContext`, `OperationSource`, planned target
-`ArtifactDescriptor`, and storage plan. Writers should create the artifact, register rollback for
-anything they created, and return an `ArtifactWriteResult` with descriptor facts to merge into the
-catalog record. Diagnostics and provenance on the result are audit-only; persisted artifact facts
-belong in descriptor claims, facets, relationship metadata, locator, or state.
+Operation materializers materialise data before the catalog record is written. They receive the
+active `ArtifactWriteRequest`, which contains the `OperationContext`, `OperationSource`, planned
+target `ArtifactDescriptor`, and storage plan. Materializers should create the artifact, register
+rollback for anything they created, and return an `ArtifactWriteResult` with descriptor facts to
+merge into the catalog record. Diagnostics and provenance on the result are audit-only; persisted
+artifact facts belong in descriptor claims, facets, relationship metadata, locator, or state.
+
+This operation-scoped materializer layer is distinct from registry writer capabilities. A writer
+capability declares and implements typed output behavior such as `TextWriter.write(descriptor, str)`.
+A materializer may wrap that capability later, adding target preparation, rollback, audit, and result
+merge behavior needed by the catalog operation.
 
 The convenience wrappers in `ogcat.writers` keep one-off functions small. Wrapped functions can still
 return `None` or a metadata dictionary, and the adapter converts that return value into an
-`ArtifactWriteResult`. A descriptor-first writer class should implement `write(request)` directly.
+`ArtifactWriteResult`. A descriptor-first materializer class should implement `write(request)` directly.
 `ogcat.writers` remains intentionally minimal: it is not a read-handle API, managed collection API,
 or runtime pipeline system.
 
-`add_artifact()` remains record-only unless a writer is explicitly supplied:
+`add_artifact()` remains record-only unless a materializer is explicitly supplied:
 
 ```python
 from pathlib import Path
@@ -144,22 +150,23 @@ record = catalog.add_artifact(
 )
 ```
 
-Writers are the right place for artifact creation such as copying, extracting, parsing, or
-materialising data. Record hooks still surround catalog metadata and record persistence:
+Materializers are the right place for artifact creation such as copying, extracting, parsing, or
+materialising data inside today's add-operation lifecycle. Record hooks still surround catalog metadata and record persistence:
 `before_record_write` and `after_record_write` should not perform data writes unless the hook object
-is intentionally being used as an artifact writer.
+is intentionally being used as an operation materializer.
 
 `add_artifacts()` is equivalent to calling `add_artifact()` once per item. Each item runs the normal
-hook, writer, and commit lifecycle independently; if a later item fails, earlier successful items
+hook, materializer, and commit lifecycle independently; if a later item fails, earlier successful items
 remain committed.
 
 Internally, `Catalog` prepares an `AddOperationRequest` and delegates the ordered lifecycle to an
 `AddOperationRunner`. The runner is not public API, but the boundary matters for plugin behavior:
-hooks and artifact writers see the same `OperationContext`, hook ordering, rollback behavior, and
+hooks and operation materializers see the same `OperationContext`, hook ordering, rollback behavior, and
 audit events whether the operation started from `add_file()` or `add_artifact()`. The runner also
 owns the single result merge path: it builds a planned `data` descriptor, passes it to the writer,
-merges returned data facts deterministically, appends auxiliary descriptors, and stages the merged
-artifact list with the record. The generic
+owns the single result merge path: it builds a planned `data` descriptor, passes it to the
+materializer, merges returned data facts deterministically, appends auxiliary descriptors, and stages
+the merged artifact list with the record. The generic
 `OperationRunner` interface is intentionally broader than add operations so future operation
 families can use the same command boundary without changing the public hook API.
 
@@ -267,7 +274,7 @@ derived metadata, planned locators, source information, storage mode, and rollba
 The #119 capability registry builds on the plugin ergonomics described here
 without merging lifecycle hooks and typed artifact access. `PluginRegistry`
 continues to collect hook objects for operation lifecycle points. A
-`CapabilityRegistry` collects declarations for readers, writers, and
+`CapabilityRegistry` collects declarations for readers, writer capabilities, and
 converters: what input claims or interfaces they accept, what output claims or
 interfaces they produce, and any plugin-owned option metadata.
 

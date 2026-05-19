@@ -90,12 +90,12 @@ sequenceDiagram
 | CLI (`cli.py`) | Command-line presentation layer: parse arguments, call `Catalog`, render tables and machine-readable output. | `Catalog`, `CatalogRecordSet`, `SearchQuery`, `RecordSchema`. |
 | `CatalogSpec` / `RecordSchema` | Self-describing catalog configuration and schema defaults stored in `catalog.json`. | `Catalog`, validation, CLI. |
 | `CatalogRecord` / `ArtifactLocator` | Persisted record model and locator abstraction. Keeps compatibility path fields while the locator model becomes primary. | repository, storage planning, search, record sets, validation. |
-| `CatalogApplication` | Internal application service that turns public add requests into runner requests, chooses copy/move writers, and schedules secondary artifacts. | `Catalog`, `AddOperationRunner`, storage planning, writers, `TemplateLinkSecondaryArtifact`. |
-| `AddOperationRunner` | Lifecycle coordinator for add operations: validation, hooks, storage planning, writing, record staging, secondary artifacts, commit, rollback, audit. | `AddOperationRequest`, `OperationServices`, `HookDispatcher`, `UnitOfWork`, writers, repository, audit sink. |
+| `CatalogApplication` | Internal application service that turns public add requests into runner requests, chooses copy/move materializers, and schedules secondary artifacts. | `Catalog`, `AddOperationRunner`, storage planning, materializers, `TemplateLinkSecondaryArtifact`. |
+| `AddOperationRunner` | Lifecycle coordinator for add operations: validation, hooks, storage planning, materializing, record staging, secondary artifacts, commit, rollback, audit. | `AddOperationRequest`, `OperationServices`, `HookDispatcher`, `UnitOfWork`, materializers, repository, audit sink. |
 | `OperationServices` | Bundle of runner dependencies and callbacks. | `Catalog`, hooks, repository, validation, audit. |
-| `OperationContext` | Mutable operation-scoped context shared with hooks and writers. | hooks, writers, runner, storage plans, rollback registrar. |
+| `OperationContext` | Mutable operation-scoped context shared with hooks and materializers. | hooks, materializers, runner, storage plans, rollback registrar. |
 | Hook protocols / `HookDispatcher` | Structural plugin extension points for lifecycle phases. | `OperationContext`, `ValidationReport`, `HookManager`, runner. |
-| `UnitOfWork` | Best-effort rollback coordinator for staged record writes and side-effect cleanup. | repository, writers, secondary artifacts, hooks. |
+| `UnitOfWork` | Best-effort rollback coordinator for staged record writes and side-effect cleanup. | repository, materializers, secondary artifacts, hooks. |
 | `CatalogRepository` | Backend protocol for record persistence and search. | `Catalog`, runner, `TinyDbCatalogRepository`, `CatalogRecord`. |
 | `TinyDbCatalogRepository` | Current TinyDB-backed repository implementation. | TinyDB, search predicates, `CatalogRecord`. |
 | `SearchQuery` and search helpers | Backend-neutral search terms and in-memory matching semantics. | repository, `CatalogRecordSet`, CLI. |
@@ -201,8 +201,8 @@ central domain rule that deserves careful tests.
 | Principle | Current state |
 |-----------|---------------|
 | Single responsibility | Improving. `AddOperationRunner`, storage planning, secondary artifacts, and repository are now clearer. `Catalog` and `OperationContext` remain broad. |
-| Open/closed | Mixed. Hook protocols, writer protocols, repository protocol, and storage adapters support extension. Storage placement still uses branching in functions. |
-| Liskov substitution | Good where protocols are explicit: repository, hooks, writers, secondary artifact operations. Concrete code should keep depending on those protocols where possible. |
+| Open/closed | Mixed. Hook protocols, materializer protocols, repository protocol, and storage adapters support extension. Storage placement still uses branching in functions. |
+| Liskov substitution | Good where protocols are explicit: repository, hooks, materializers, secondary artifact operations. Concrete code should keep depending on those protocols where possible. |
 | Interface segregation | Good for hook phase protocols and repository. Less strong for `OperationContext` and `CatalogApplication`, which expose broad collaborators. |
 | Dependency inversion | Repository is the strongest example. `CatalogApplication` depending on concrete `Catalog` is the main remaining inversion gap. |
 

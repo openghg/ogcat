@@ -20,7 +20,7 @@ Future content should show:
 - `context.add_warning(...)` for non-fatal findings
 - focused tests for hook outcomes
 
-## Artifact writers
+## Operation materializers
 
 Use this level for examples that materialise data during `add_artifact()`, for
 example writing an in-memory object or unpacking a zip archive with helpers from
@@ -31,7 +31,7 @@ Future content should show:
 - `memory_source()` with `memory_writer()`
 - `path_source()` with `path_writer()`
 - `UnzipArtifactWriter`
-- rollback behavior when a writer fails
+- rollback behavior when a materializer fails
 
 ## Validation patterns
 

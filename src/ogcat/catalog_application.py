@@ -7,13 +7,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ogcat.extractors import extract_derived_metadata
-from ogcat.hooks import ArtifactWriter, OperationContext, OperationSource
+from ogcat.hooks import ArtifactMaterializer, OperationContext, OperationSource
 from ogcat.materialization import (
     MaterializationIntent,
     MaterializationPlan,
+    materializer_intent,
     reference_intent,
     storage_plan_intent,
-    writer_intent,
 )
 from ogcat.models import ArtifactLocator, CatalogRecord, MetadataDict
 from ogcat.operation_helpers import storage_plan_with_locator
@@ -127,7 +127,7 @@ class CatalogApplication:
 
         source_description = OperationSource(kind="local_file", path=source, descriptor=str(source))
         artifact_writer = _managed_path_writer(source=source, operation=operation)
-        materialization_intent = writer_intent(artifact_writer)
+        materialization_intent = materializer_intent(artifact_writer)
         secondary_artifact_operations = self._template_link_secondary_artifacts(
             primary_location=primary_location,
             create_template_replica=create_template_replica,
@@ -175,7 +175,7 @@ class CatalogApplication:
         naming_metadata: MetadataDict | None,
         time_added: str | None,
         source: OperationSource | None,
-        artifact_writer: ArtifactWriter | None,
+        artifact_writer: ArtifactMaterializer | None,
         storage_plan: StoragePlan | None,
         schema: RecordSchema,
     ) -> CatalogRecord:
@@ -186,10 +186,10 @@ class CatalogApplication:
             descriptor=locator.value,
         )
         if storage_plan is not None:
-            materialization_intent = storage_plan_intent(storage_plan, writer=artifact_writer)
+            materialization_intent = storage_plan_intent(storage_plan, materializer=artifact_writer)
         else:
             materialization_intent = (
-                reference_intent() if artifact_writer is None else writer_intent(artifact_writer)
+                reference_intent() if artifact_writer is None else materializer_intent(artifact_writer)
             )
         return self.run_add_operation(
             transaction=transaction,
@@ -289,8 +289,8 @@ class CatalogApplication:
         )
 
 
-def _managed_path_writer(*, source: Path, operation: str) -> ArtifactWriter:
-    """Return the managed-ingest writer for the source path shape."""
+def _managed_path_writer(*, source: Path, operation: str) -> ArtifactMaterializer:
+    """Return the managed-ingest materializer for the source path shape."""
     if source.is_dir():
         return CopyDirectoryArtifactWriter() if operation == "copy" else MoveDirectoryArtifactWriter()
     return CopyArtifactWriter() if operation == "copy" else MoveArtifactWriter()

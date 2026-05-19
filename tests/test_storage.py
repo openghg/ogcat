@@ -164,7 +164,7 @@ def test_primary_storage_planner_builds_materialization_target(tmp_path: Path) -
     plan = MaterializationPlan(
         primary_target=target,
         intent=MaterializationIntent(
-            writer=None,
+            materializer=None,
             target_kind="directory",
             write_mode="write",
             ogcat_owned=True,
@@ -271,10 +271,10 @@ def test_primary_storage_planner_uuid_urlpath_root_has_remote_plan_metadata(tmp_
     assert plan.primary_location == "uuid"
 
 
-def test_locator_materialization_plan_supports_directory_writer_intent() -> None:
-    """Locator-backed writer materialization preserves target kind and adapter metadata."""
+def test_locator_materialization_plan_supports_directory_materializer_intent() -> None:
+    """Locator-backed materialization preserves target kind and adapter metadata."""
     intent = MaterializationIntent(
-        writer=None,
+        materializer=None,
         target_kind="directory",
         write_mode="write",
         ogcat_owned=True,
@@ -791,7 +791,7 @@ def test_add_file_hook_urlpath_redirect_updates_plan_and_skips_path_extractor(
     def fake_write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
         assert request.source.path == source_file
         assert request.locator.kind == "urlpath"
-        request.context.derived_metadata["writer"] = "redirected"
+        request.context.derived_metadata["materializer"] = "redirected"
         return ArtifactWriteResult.from_artifact(request.target)
 
     def fail_extract(path: Path) -> dict[str, object]:
@@ -810,7 +810,7 @@ def test_add_file_hook_urlpath_redirect_updates_plan_and_skips_path_extractor(
     record = catalog.add_file(source_file, operation="copy")
 
     assert record.locator.kind == "urlpath"
-    assert record.derived_metadata["writer"] == "redirected"
+    assert record.derived_metadata["materializer"] == "redirected"
     assert record.naming_metadata["storage_relative_path"] == "copied.nc"
     assert record.naming_metadata["resolved_directory"] == ""
     assert record.naming_metadata["resolved_filename"] == "copied.nc"

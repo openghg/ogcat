@@ -128,7 +128,7 @@ class PrimaryStoragePlanResult:
             Storage plan carrying the primary storage planning metadata.
         """
         intent = MaterializationIntent(
-            writer=None,
+            materializer=None,
             target_kind=target_kind,
             write_mode=write_mode,
             ogcat_owned=ogcat_owned,

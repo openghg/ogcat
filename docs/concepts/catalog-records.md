@@ -129,8 +129,8 @@ Current first-slice roles are ``data_artifact``, ``auxiliary_artifact``,
 Descriptor roles are stored as strings so future ADR or plugin-owned roles can
 be persisted before their lifecycle behavior exists.
 
-``claims`` describe artifact facts that future readers, writers, and converters
-can use for dispatch. Core recognizes the claim kinds ``data_type``,
+``claims`` describe artifact facts that future readers, writer capabilities,
+and converters can use for dispatch. Core recognizes the claim kinds ``data_type``,
 ``representation``, and ``interface``. The vocabulary of claim names remains
 open and namespaced. For example, one artifact can carry an ``interface`` claim
 named ``bytes`` in the ``ogcat.core`` namespace, a ``data_type`` claim named

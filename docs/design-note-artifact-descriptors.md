@@ -99,12 +99,13 @@ version, evidence, confidence, and metadata are filled with defaults when the
 shape is otherwise clear. Older facet payloads with extra top-level fields have
 those fields folded into ``metadata``.
 
-## Writer Result Merge
+## Materializer Result Merge
 
-Artifact writers can produce descriptor facts through ``ArtifactWriteResult``.
-The add-operation runner owns the single merge path: it prepares a planned
-``data`` descriptor with the target locator, invokes ``writer.write(request)``,
-and stages the merged descriptor list with the record.
+Operation materializers can produce descriptor facts through
+``ArtifactWriteResult``. The add-operation runner owns the single merge path: it
+prepares a planned ``data`` descriptor with the target locator, invokes
+``materializer.write(request)``, and stages the merged descriptor list with the
+record.
 
 Returned data descriptors enrich the planned data descriptor. They may omit the
 locator; if present, it must match the planned locator. Returned claims and

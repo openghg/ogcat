@@ -2,8 +2,8 @@
 
 This module keeps storage decisions explicit without turning ``ogcat`` into a
 domain storage framework.  Plans describe where an artifact should live and how
-it should be materialised; :class:`ogcat.hooks.ArtifactWriter` implementations
-perform any side effects.
+it should be materialised; :class:`ogcat.hooks.ArtifactMaterializer`
+implementations perform any side effects.
 """
 
 from __future__ import annotations
