@@ -158,6 +158,12 @@ member facets, and collection readers can use member-pattern facets. These
 facts are plugin-readable metadata; they do not require core to import optional
 scientific libraries.
 
+Capability selection treats claim metadata as descriptive. Claims match by
+their namespace/kind/name/version envelope. Facets match by the same envelope
+plus required metadata as a subset, so dispatch-significant details such as
+encoding values, delimiters, archive members, or local path requirements should
+be modeled as facets.
+
 ## Worked Examples
 
 These examples are design targets for writers, inspectors, and future readers.

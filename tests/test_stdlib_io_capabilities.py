@@ -9,8 +9,10 @@ import pytest
 
 from ogcat.artifact_claims import has_claim, has_facet
 from ogcat.bundled_plugins.stdlib_io import (
+    bytes_artifact_descriptor,
     delimited_table_artifact_descriptor,
     delimiter_from_descriptor,
+    encoding_facet,
     encoding_from_descriptor,
     json_artifact_descriptor,
     register_stdlib_capabilities,
@@ -19,19 +21,14 @@ from ogcat.bundled_plugins.stdlib_io import (
     text_artifact_descriptor,
 )
 from ogcat.capabilities import ArtifactCapability, CapabilityKind, CapabilityRegistry, MissingCapabilityError
-from ogcat.models import ArtifactDescriptor, ArtifactLocator, DataTypeClaim, InterfaceClaim
+from ogcat.models import ArtifactDescriptor, ArtifactFacet, ArtifactLocator, DataTypeClaim, InterfaceClaim
 from ogcat.plugins import PluginRegistry
 
 
 def test_bytes_reader_and_writer_examples_round_trip_bytes(tmp_path: Path) -> None:
     """Bytes capabilities should use Path.read_bytes and Path.write_bytes."""
     path = tmp_path / "payload.bin"
-    descriptor = ArtifactDescriptor(
-        id="data",
-        role="data_artifact",
-        locator=ArtifactLocator.path(path),
-        claims=[InterfaceClaim("bytes")],
-    )
+    descriptor = bytes_artifact_descriptor(path)
     registry = _registry()
 
     writer = _implementation(_select(registry, descriptor, operation="write", interface="bytes"))
@@ -40,6 +37,7 @@ def test_bytes_reader_and_writer_examples_round_trip_bytes(tmp_path: Path) -> No
 
     assert path.read_bytes() == b"abc\x00def"
     assert reader.read(result) == b"abc\x00def"
+    assert has_facet(result, kind="locator", name="path", namespace="ogcat.stdlib")
 
 
 def test_text_reader_and_writer_examples_use_encoding_facets(tmp_path: Path) -> None:
@@ -60,6 +58,7 @@ def test_text_reader_and_writer_examples_use_encoding_facets(tmp_path: Path) -> 
     assert reader.read(utf8_result) == "hello 🙂"
     assert reader.read(override_result) == "hello 🙂"
     assert encoding_from_descriptor(override_result) == "utf-8"
+    assert has_facet(ascii_result, kind="locator", name="path", namespace="ogcat.stdlib")
     assert has_facet(ascii_result, kind="encoding", name="charset", namespace="ogcat.stdlib")
     assert has_facet(utf8_result, kind="encoding", name="charset", namespace="ogcat.stdlib")
 
@@ -86,6 +85,7 @@ def test_delimited_table_reader_and_writer_examples_support_csv_and_options(
     assert pipe_reader.read(pipe_result) == rows
     assert override_reader.read(override_result) == rows
     assert delimiter_from_descriptor(override_result) == "|"
+    assert has_facet(csv_result, kind="locator", name="path", namespace="ogcat.stdlib")
     assert (tmp_path / "table.psv").read_text(encoding="utf-8").splitlines()[0] == "station|value"
 
 
@@ -239,6 +239,80 @@ def test_csv_artifact_can_be_selected_as_bytes_text_or_table(tmp_path: Path) -> 
     assert table_reader.read(descriptor) == [{"name": "alpha", "value": "1"}]
 
 
+def test_stdlib_runtime_helpers_ignore_same_name_facets_from_other_namespaces(tmp_path: Path) -> None:
+    """Runtime helpers should consume the same namespaced facets selection used."""
+    registry = _registry()
+    text_descriptor = text_artifact_descriptor(tmp_path / "utf8.txt", encoding="utf-8")
+    text_descriptor.facets = [
+        ArtifactFacet(
+            "encoding",
+            "charset",
+            namespace="example.plugin",
+            metadata={"encoding": "ascii"},
+        ),
+        *text_descriptor.facets,
+    ]
+    text_path = text_descriptor.locator.as_path() if text_descriptor.locator is not None else None
+    assert text_path is not None
+    text_path.write_text("hello 🙂", encoding="utf-8")
+
+    table_descriptor = delimited_table_artifact_descriptor(tmp_path / "table.csv", delimiter=",")
+    table_descriptor.facets = [
+        ArtifactFacet(
+            "format",
+            "delimited-text",
+            namespace="example.plugin",
+            metadata={"delimiter": "|"},
+        ),
+        *table_descriptor.facets,
+    ]
+    table_path = table_descriptor.locator.as_path() if table_descriptor.locator is not None else None
+    assert table_path is not None
+    table_path.write_text("name,value\nhello,world\n", encoding="utf-8")
+
+    text_reader = _implementation(_select(registry, text_descriptor, operation="read", interface="text"))
+    table_reader = _implementation(_select(registry, table_descriptor, operation="read", interface="table"))
+
+    assert encoding_from_descriptor(text_descriptor) == "utf-8"
+    assert delimiter_from_descriptor(table_descriptor) == ","
+    assert text_reader.read(text_descriptor) == "hello 🙂"
+    assert table_reader.read(table_descriptor) == [{"name": "hello", "value": "world"}]
+
+
+def test_non_path_descriptors_do_not_select_stdlib_path_backed_capabilities() -> None:
+    """Stdlib capabilities should fail selection when the path facet is absent."""
+    registry = _registry()
+    remote_text = ArtifactDescriptor(
+        id="remote-text",
+        role="data_artifact",
+        locator=ArtifactLocator.from_urlpath("s3://example/input.txt"),
+        claims=[InterfaceClaim("text")],
+        facets=[encoding_facet("utf-8")],
+    )
+    remote_output = ArtifactDescriptor(
+        id="remote-output",
+        role="derived_artifact",
+        locator=ArtifactLocator.from_urlpath("s3://example/output.txt"),
+        claims=[InterfaceClaim("text")],
+        facets=[encoding_facet("utf-8")],
+    )
+
+    with pytest.raises(MissingCapabilityError):
+        registry.select(
+            kind=CapabilityKind.READER,
+            descriptor=remote_text,
+            input_claims=[InterfaceClaim("text")],
+        )
+
+    with pytest.raises(MissingCapabilityError):
+        registry.select(
+            kind=CapabilityKind.WRITER,
+            name="text-writer",
+            descriptor=remote_output,
+            output_claims=[InterfaceClaim("text")],
+        )
+
+
 def test_temporary_artifact_descriptor_can_be_used_for_selection(tmp_path: Path) -> None:
     """A non-catalog descriptor should still participate in registry selection."""
     descriptor = temporary_text_artifact_descriptor(tmp_path / "scratch.txt")
@@ -317,7 +391,19 @@ def _select(
     interface: str,
     name: str | None = None,
 ) -> ArtifactCapability:
-    """Select a stdlib capability through the core registry API."""
+    """Select a stdlib capability through the core registry API.
+
+    Args:
+        registry: Registry populated with stdlib capabilities.
+        descriptor: Descriptor used as the source for reads/converts or the
+            desired output shape for writes.
+        operation: One of ``read``, ``write``, or ``convert``.
+        interface: Interface claim name requested for the operation.
+        name: Optional capability name used to disambiguate converters.
+
+    Returns:
+        Selected stdlib capability.
+    """
     capability_kind = {
         "read": CapabilityKind.READER,
         "write": CapabilityKind.WRITER,

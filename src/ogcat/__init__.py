@@ -1,4 +1,10 @@
-"""Public package interface for ogcat."""
+"""Public package interface for ogcat.
+
+The top-level namespace re-exports the catalog APIs, descriptor and locator
+models, artifact claim/facet helpers, lifecycle hook plumbing, storage helpers,
+writers, validation, search, replicas, and the capability registry models used
+for reader, writer, and converter discovery.
+"""
 
 from ogcat.artifact_claims import claim_key, facet_key, has_claim, has_facet, iter_claims, iter_facets
 from ogcat.audit import AuditEvent, AuditSink, JsonlAuditSink, read_audit_events

@@ -55,9 +55,14 @@ Each declaration needs stable identity and typed input/output requirements:
   declaration.
 
 The registry validates the common envelope and JSON-compatible declaration
-metadata. Plugin-owned option schemas and implementation objects remain
-plugin-owned. Core should not import pandas, xarray, Zarr, Intake, or
-OpenGHG-specific packages to validate declarations for those domains.
+metadata. Claim matching is envelope-only: claim metadata is descriptive and is
+not dispatch-significant in this slice. Facet metadata is dispatch-significant
+through subset matching, so plugin authors should put values such as encodings,
+delimiters, member names, or locator requirements in facets rather than claim
+metadata when selection must inspect them. Plugin-owned option schemas and
+implementation objects remain plugin-owned. Core should not import pandas,
+xarray, Zarr, Intake, or OpenGHG-specific packages to validate declarations for
+those domains.
 
 ## Registration
 
@@ -116,6 +121,8 @@ once. For example, a CSV artifact may advertise:
 - `interface=text`;
 - `interface=table`;
 - `data_type=csv`;
+- `representation=file` or a plugin-owned `locator/path` facet for a local
+  path-backed implementation;
 - `representation=text`;
 - `encoding/charset` with metadata `{"encoding": "utf-8"}`;
 - `format/delimited-text` with metadata `{"delimiter": ","}`.
@@ -131,7 +138,9 @@ descriptor facet with the same envelope and at least that metadata, but it
 should not match a descriptor that declares `{"encoding": "ascii"}`.
 If a capability can use any declared value for that facet, it should require
 the facet envelope with empty metadata and then interpret the actual descriptor
-metadata at runtime.
+metadata at runtime. Runtime helpers should consume the same namespaced
+facet/version that the capability declares, so unrelated plugins cannot change
+behavior by using the same facet kind/name in their own namespace.
 
 Writers and converters use the same rule. A caller requests exact input and
 output claims or interfaces:
@@ -200,8 +209,11 @@ into core dispatch.
 
 Useful examples:
 
-- bytes reader/writer declarations for file-like artifacts;
-- text reader/writer declarations with encoding facets such as UTF-8 and ASCII;
+- bytes reader/writer declarations for local path-backed artifacts, using a
+  path locator facet rather than relying on `ArtifactLocator.kind` during
+  registry matching;
+- text reader/writer declarations with path locator and encoding facets such as
+  UTF-8 and ASCII;
 - CSV and other delimited table readers using `csv`, with bytes, text, and
   table interfaces advertised separately;
 - JSON reader/writer declarations using `json`, with `interface=json`;

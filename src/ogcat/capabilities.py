@@ -1,4 +1,19 @@
-"""Artifact capability registration and lookup."""
+"""Artifact capability registration and lookup.
+
+The capability registry is the #119 dispatch surface for readers, writers, and
+converters. It stores typed declarations and optional opaque implementation
+objects, then answers discovery and selection requests from
+``ArtifactDescriptor`` claims and facets. Core does not invoke implementations
+or dispatch by ``CatalogRecord.record_type``.
+
+Matching treats claim identity as the namespace/kind/name/version envelope.
+Claim metadata is descriptive and is not used for dispatch. Facets use the same
+envelope plus metadata-subset matching, so plugin declarations can require
+facts such as a text encoding, delimiter, or local path locator without making
+those values part of a claim key. Lookup errors stay in the capability error
+hierarchy, with separate missing, unsupported-interface, ambiguous, and invalid
+request failures.
+"""
 
 from __future__ import annotations
 
@@ -75,9 +90,15 @@ class ArtifactCapability:
         name: Namespace-local capability name.
         namespace: Stable namespace that owns the capability.
         version: Version of the capability contract.
-        input_claims: Claims required on input descriptors.
-        output_claims: Claims produced by the capability.
-        required_facets: Facets required on input descriptors.
+        input_claims: Claims required on input descriptors. Inputs may be
+            ``ArtifactClaim`` instances or normalized claim dictionaries and are
+            stored as normalized dictionaries.
+        output_claims: Claims produced by the capability. Inputs may be
+            ``ArtifactClaim`` instances or normalized claim dictionaries and are
+            stored as normalized dictionaries.
+        required_facets: Facets required on descriptors used for lookup. Facets
+            may be ``ArtifactFacet`` instances or normalized facet dictionaries
+            and are stored as normalized dictionaries.
         options: JSON-compatible capability option metadata.
         metadata: JSON-compatible descriptive metadata.
         implementation: Opaque implementation object stored by the registry.
@@ -253,6 +274,19 @@ class CapabilityRegistry:
         required_facets: Iterable[ArtifactFacetInput] = (),
     ) -> ArtifactCapability:
         """Select exactly one capability for an explicit request.
+
+        Args:
+            kind: Optional capability kind filter.
+            name: Optional capability name filter.
+            namespace: Optional capability namespace filter.
+            version: Optional capability version filter.
+            descriptor: Optional artifact descriptor capabilities must support.
+            input_claims: Input claims the capability must require.
+            output_claims: Output claims the capability must produce.
+            required_facets: Required facets the capability must declare.
+
+        Returns:
+            The single selected capability.
 
         Raises:
             UnsupportedInterfaceError: If a requested interface claim is absent

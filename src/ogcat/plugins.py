@@ -22,6 +22,12 @@ class PluginRegistry:
         *,
         capabilities: Iterable[ArtifactCapability] = (),
     ) -> None:
+        """Create a plugin registry.
+
+        Args:
+            hooks: Hook objects to register in dispatch order.
+            capabilities: Artifact capabilities to register in lookup order.
+        """
         self._hooks: list[object] = list(hooks)
         self._capabilities = CapabilityRegistry(capabilities)
 

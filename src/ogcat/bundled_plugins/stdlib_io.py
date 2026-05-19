@@ -1,4 +1,18 @@
-"""Dependency-free stdlib reader, writer, and converter capability examples."""
+"""Dependency-free stdlib reader, writer, and converter examples.
+
+This bundled module is intentionally shaped like a plugin: it declares
+``ArtifactCapability`` objects, stores opaque implementation instances on those
+declarations, and registers through the same capability registry route that an
+external package would use. The implementations are small stdlib examples for
+tests and documentation, not privileged core behavior.
+
+All implementations in this module are local-path backed. Their declarations
+therefore require the stdlib ``locator/path`` facet in addition to interface and
+format claims. Text, table, and JSON examples also require stdlib-owned facets
+for encoding and delimiter information. Runtime helpers consume only facets from
+this module's namespace/version so plugin-owned facts with the same kind/name do
+not silently alter stdlib behavior.
+"""
 
 from __future__ import annotations
 
@@ -40,7 +54,18 @@ class BytesReader:
     """Read path-backed artifacts as raw bytes."""
 
     def read(self, descriptor: ArtifactDescriptor) -> bytes:
-        """Read bytes from the descriptor's path locator."""
+        """Read bytes from the descriptor's path locator.
+
+        Args:
+            descriptor: Path-backed artifact descriptor to read.
+
+        Returns:
+            Raw bytes stored at the descriptor path.
+
+        Raises:
+            ValueError: If the descriptor has no local path locator.
+            OSError: If the path cannot be read.
+        """
         return _descriptor_path(descriptor).read_bytes()
 
 
@@ -48,11 +73,24 @@ class BytesWriter:
     """Write path-backed artifacts as raw bytes."""
 
     def write(self, descriptor: ArtifactDescriptor, data: bytes) -> ArtifactDescriptor:
-        """Write bytes to the descriptor's path locator and return descriptor metadata."""
+        """Write bytes to the descriptor's path locator.
+
+        Args:
+            descriptor: Path-backed output descriptor.
+            data: Bytes to write.
+
+        Returns:
+            Descriptor metadata with bytes/file claims and path locator facet.
+
+        Raises:
+            ValueError: If the descriptor has no local path locator.
+            OSError: If the path cannot be written.
+        """
         _descriptor_path(descriptor).write_bytes(data)
         return descriptor_with_claims(
             descriptor,
             claims=(InterfaceClaim("bytes"), RepresentationClaim("file")),
+            facets=(path_locator_facet(),),
         )
 
 
@@ -60,7 +98,20 @@ class TextReader:
     """Read path-backed artifacts as text using descriptor encoding facets."""
 
     def read(self, descriptor: ArtifactDescriptor) -> str:
-        """Read text from the descriptor's path locator."""
+        """Read text from the descriptor's path locator.
+
+        Args:
+            descriptor: Path-backed descriptor with a stdlib encoding facet.
+
+        Returns:
+            Decoded text content.
+
+        Raises:
+            ValueError: If the descriptor has no local path locator.
+            OSError: If the path cannot be read.
+            UnicodeError: If the file cannot be decoded with the declared
+                encoding.
+        """
         return _descriptor_path(descriptor).read_text(
             encoding=encoding_from_descriptor(descriptor),
         )
@@ -76,13 +127,30 @@ class TextWriter:
         *,
         encoding: str | None = None,
     ) -> ArtifactDescriptor:
-        """Write text and return descriptor metadata with an encoding facet."""
+        """Write text and return descriptor metadata with an encoding facet.
+
+        Args:
+            descriptor: Path-backed output descriptor.
+            text: Text to write.
+            encoding: Optional encoding override. When omitted, the descriptor's
+                stdlib encoding facet is used, falling back to UTF-8.
+
+        Returns:
+            Descriptor metadata with text claims, path locator facet, and the
+            resolved encoding facet.
+
+        Raises:
+            ValueError: If the descriptor has no local path locator.
+            OSError: If the path cannot be written.
+            UnicodeError: If the text cannot be encoded with the resolved
+                encoding.
+        """
         resolved_encoding = encoding or encoding_from_descriptor(descriptor)
         _descriptor_path(descriptor).write_text(text, encoding=resolved_encoding)
         return descriptor_with_claims(
             descriptor,
             claims=(RepresentationClaim("text"), InterfaceClaim("text")),
-            facets=(encoding_facet(resolved_encoding),),
+            facets=(path_locator_facet(), encoding_facet(resolved_encoding)),
         )
 
 
@@ -95,7 +163,24 @@ class DelimitedTableReader:
         *,
         delimiter: str | None = None,
     ) -> TableRows:
-        """Read a delimited table using ``csv.DictReader``."""
+        """Read a delimited table using ``csv.DictReader``.
+
+        Args:
+            descriptor: Path-backed descriptor with stdlib encoding and
+                delimiter facets.
+            delimiter: Optional delimiter override. When omitted, the descriptor
+                delimiter facet is used, falling back to a comma.
+
+        Returns:
+            Rows as dictionaries with string keys and string values.
+
+        Raises:
+            ValueError: If the descriptor is not path-backed or if a row has
+                extra columns without headers.
+            OSError: If the path cannot be read.
+            UnicodeError: If the file cannot be decoded with the declared
+                encoding.
+        """
         resolved_delimiter = delimiter or delimiter_from_descriptor(descriptor)
         with _descriptor_path(descriptor).open(
             newline="",
@@ -122,7 +207,28 @@ class DelimitedTableWriter:
         delimiter: str | None = None,
         encoding: str | None = None,
     ) -> ArtifactDescriptor:
-        """Write a delimited table using ``csv.DictWriter``."""
+        """Write a delimited table using ``csv.DictWriter``.
+
+        Args:
+            descriptor: Path-backed output descriptor.
+            rows: Row mappings to write.
+            fieldnames: Optional explicit field order. When omitted, field names
+                are collected from row keys in first-seen order.
+            delimiter: Optional delimiter override. When omitted, the descriptor
+                delimiter facet is used, falling back to a comma.
+            encoding: Optional encoding override. When omitted, the descriptor's
+                stdlib encoding facet is used, falling back to UTF-8.
+
+        Returns:
+            Descriptor metadata with text/table claims plus path, encoding, and
+            delimiter facets.
+
+        Raises:
+            ValueError: If the descriptor has no local path locator.
+            OSError: If the path cannot be written.
+            UnicodeError: If table text cannot be encoded with the resolved
+                encoding.
+        """
         row_list = [dict(row) for row in rows]
         resolved_fieldnames = list(fieldnames or _fieldnames_from_rows(row_list))
         resolved_delimiter = delimiter or delimiter_from_descriptor(descriptor)
@@ -143,6 +249,7 @@ class DelimitedTableWriter:
                 InterfaceClaim("table"),
             ),
             facets=(
+                path_locator_facet(),
                 encoding_facet(resolved_encoding),
                 delimiter_facet(resolved_delimiter),
             ),
@@ -153,7 +260,22 @@ class JsonReader:
     """Read JSON text artifacts with the stdlib ``json`` module."""
 
     def read(self, descriptor: ArtifactDescriptor) -> JsonDocument:
-        """Read JSON from the descriptor's path locator."""
+        """Read JSON from the descriptor's path locator.
+
+        Args:
+            descriptor: Path-backed JSON descriptor with a stdlib encoding
+                facet.
+
+        Returns:
+            JSON-compatible document loaded from the file.
+
+        Raises:
+            ValueError: If the descriptor has no local path locator.
+            OSError: If the path cannot be read.
+            json.JSONDecodeError: If the file does not contain valid JSON.
+            UnicodeError: If the file cannot be decoded with the declared
+                encoding.
+        """
         with _descriptor_path(descriptor).open(encoding=encoding_from_descriptor(descriptor)) as stream:
             return cast(JsonDocument, json.load(stream))
 
@@ -169,7 +291,25 @@ class JsonWriter:
         indent: int | None = 2,
         encoding: str | None = None,
     ) -> ArtifactDescriptor:
-        """Write JSON and return descriptor metadata with JSON claims."""
+        """Write JSON and return descriptor metadata with JSON claims.
+
+        Args:
+            descriptor: Path-backed output descriptor.
+            document: JSON-compatible document to serialize.
+            indent: Indentation passed to ``json.dump``.
+            encoding: Optional encoding override. When omitted, the descriptor's
+                stdlib encoding facet is used, falling back to UTF-8.
+
+        Returns:
+            Descriptor metadata with JSON/text claims plus path and encoding
+            facets.
+
+        Raises:
+            TypeError: If ``document`` contains values that ``json.dump`` cannot
+                serialize.
+            ValueError: If the descriptor has no local path locator.
+            OSError: If the path cannot be written.
+        """
         resolved_encoding = encoding or encoding_from_descriptor(descriptor)
         with _descriptor_path(descriptor).open("w", encoding=resolved_encoding) as stream:
             json.dump(document, stream, ensure_ascii=False, indent=indent)
@@ -182,7 +322,7 @@ class JsonWriter:
                 InterfaceClaim("text"),
                 InterfaceClaim("json"),
             ),
-            facets=(encoding_facet(resolved_encoding),),
+            facets=(path_locator_facet(), encoding_facet(resolved_encoding)),
         )
 
 
@@ -203,7 +343,16 @@ class EmoticonEmojiTextConverter:
         source_descriptor: ArtifactDescriptor,
         output_descriptor: ArtifactDescriptor,
     ) -> ArtifactDescriptor:
-        """Read ASCII-compatible text and write UTF-8 emoji text output."""
+        """Read ASCII-compatible text and write UTF-8 emoji text output.
+
+        Args:
+            source_descriptor: Path-backed text descriptor to read.
+            output_descriptor: Path-backed descriptor to write.
+
+        Returns:
+            Output descriptor with text claims, UTF-8 encoding, path facet, and
+            relationship metadata linking the source.
+        """
         source_text = TextReader().read(source_descriptor)
         converted = source_text
         for emoticon, emoji in self.emoticons.items():
@@ -229,7 +378,16 @@ class PigLatinTextConverter:
         source_descriptor: ArtifactDescriptor,
         output_descriptor: ArtifactDescriptor,
     ) -> ArtifactDescriptor:
-        """Read text and write UTF-8 Pig Latin text output."""
+        """Read text and write UTF-8 Pig Latin text output.
+
+        Args:
+            source_descriptor: Path-backed text descriptor to read.
+            output_descriptor: Path-backed descriptor to write.
+
+        Returns:
+            Output descriptor with text claims, UTF-8 encoding, path facet, and
+            relationship metadata linking the source.
+        """
         converted = _pig_latin_text(TextReader().read(source_descriptor))
         output = descriptor_with_claims(
             output_descriptor,
@@ -244,7 +402,14 @@ class PigLatinTextConverter:
 
 
 def stdlib_capabilities() -> tuple[ArtifactCapability, ...]:
-    """Create bundled stdlib capability examples."""
+    """Create bundled stdlib capability examples.
+
+    Returns:
+        Capability declarations for the local path-backed stdlib examples. Each
+        declaration uses the same ``ArtifactCapability`` model as external
+        plugins and stores an opaque implementation object for tests and
+        documentation examples.
+    """
     return (
         _capability(
             name="bytes-reader",
@@ -252,6 +417,7 @@ def stdlib_capabilities() -> tuple[ArtifactCapability, ...]:
             implementation=BytesReader(),
             input_claims=(InterfaceClaim("bytes"),),
             output_claims=(InterfaceClaim("bytes"),),
+            required_facets=(path_locator_facet_requirement(),),
             description="Read local path artifacts with Path.read_bytes.",
         ),
         _capability(
@@ -259,6 +425,7 @@ def stdlib_capabilities() -> tuple[ArtifactCapability, ...]:
             kind=CapabilityKind.WRITER,
             implementation=BytesWriter(),
             output_claims=(RepresentationClaim("file"), InterfaceClaim("bytes")),
+            required_facets=(path_locator_facet_requirement(),),
             description="Write local path artifacts with Path.write_bytes.",
         ),
         _capability(
@@ -267,7 +434,7 @@ def stdlib_capabilities() -> tuple[ArtifactCapability, ...]:
             implementation=TextReader(),
             input_claims=(InterfaceClaim("text"),),
             output_claims=(InterfaceClaim("text"),),
-            required_facets=(encoding_facet_requirement(),),
+            required_facets=(path_locator_facet_requirement(), encoding_facet_requirement()),
             description="Read local path artifacts as text using encoding facets.",
         ),
         _capability(
@@ -275,7 +442,7 @@ def stdlib_capabilities() -> tuple[ArtifactCapability, ...]:
             kind=CapabilityKind.WRITER,
             implementation=TextWriter(),
             output_claims=(RepresentationClaim("text"), InterfaceClaim("text")),
-            required_facets=(encoding_facet_requirement(),),
+            required_facets=(path_locator_facet_requirement(), encoding_facet_requirement()),
             description="Write local path artifacts as text.",
         ),
         _capability(
@@ -284,7 +451,11 @@ def stdlib_capabilities() -> tuple[ArtifactCapability, ...]:
             implementation=DelimitedTableReader(),
             input_claims=(InterfaceClaim("table"),),
             output_claims=(InterfaceClaim("table"),),
-            required_facets=(encoding_facet_requirement(), delimiter_facet_requirement()),
+            required_facets=(
+                path_locator_facet_requirement(),
+                encoding_facet_requirement(),
+                delimiter_facet_requirement(),
+            ),
             description="Read delimited text tables with csv.DictReader.",
         ),
         _capability(
@@ -292,7 +463,11 @@ def stdlib_capabilities() -> tuple[ArtifactCapability, ...]:
             kind=CapabilityKind.WRITER,
             implementation=DelimitedTableWriter(),
             output_claims=(RepresentationClaim("text"), InterfaceClaim("text"), InterfaceClaim("table")),
-            required_facets=(encoding_facet_requirement(), delimiter_facet_requirement()),
+            required_facets=(
+                path_locator_facet_requirement(),
+                encoding_facet_requirement(),
+                delimiter_facet_requirement(),
+            ),
             description="Write delimited text tables with csv.DictWriter.",
         ),
         _capability(
@@ -301,7 +476,7 @@ def stdlib_capabilities() -> tuple[ArtifactCapability, ...]:
             implementation=JsonReader(),
             input_claims=(InterfaceClaim("json"),),
             output_claims=(InterfaceClaim("json"),),
-            required_facets=(encoding_facet_requirement(),),
+            required_facets=(path_locator_facet_requirement(), encoding_facet_requirement()),
             description="Read JSON artifacts with json.load.",
         ),
         _capability(
@@ -314,7 +489,7 @@ def stdlib_capabilities() -> tuple[ArtifactCapability, ...]:
                 InterfaceClaim("text"),
                 InterfaceClaim("json"),
             ),
-            required_facets=(encoding_facet_requirement(),),
+            required_facets=(path_locator_facet_requirement(), encoding_facet_requirement()),
             description="Write JSON artifacts with json.dump.",
         ),
         _capability(
@@ -323,7 +498,7 @@ def stdlib_capabilities() -> tuple[ArtifactCapability, ...]:
             implementation=EmoticonEmojiTextConverter(),
             input_claims=(InterfaceClaim("text"),),
             output_claims=(RepresentationClaim("text"), InterfaceClaim("text")),
-            required_facets=(encoding_facet_requirement(),),
+            required_facets=(path_locator_facet_requirement(), encoding_facet_requirement()),
             description="Convert ASCII emoticons in text artifacts to Unicode emoji text.",
         ),
         _capability(
@@ -332,7 +507,7 @@ def stdlib_capabilities() -> tuple[ArtifactCapability, ...]:
             implementation=PigLatinTextConverter(),
             input_claims=(InterfaceClaim("text"),),
             output_claims=(RepresentationClaim("text"), InterfaceClaim("text")),
-            required_facets=(encoding_facet_requirement(),),
+            required_facets=(path_locator_facet_requirement(), encoding_facet_requirement()),
             description="Convert text artifacts to Pig Latin text.",
         ),
     )
@@ -356,12 +531,21 @@ def register_stdlib_capabilities(registry: Any) -> Any:
 
 
 def bytes_artifact_descriptor(path: str | Path, *, id: str = "data") -> ArtifactDescriptor:
-    """Build a path-backed descriptor selectable as bytes."""
+    """Build a path-backed descriptor selectable as bytes.
+
+    Args:
+        path: Local filesystem path.
+        id: Descriptor identifier.
+
+    Returns:
+        Artifact descriptor with bytes/file claims and stdlib path facet.
+    """
     return ArtifactDescriptor(
         id=id,
         role="data_artifact",
         locator=ArtifactLocator.path(path),
         claims=[RepresentationClaim("file"), InterfaceClaim("bytes")],
+        facets=[path_locator_facet()],
     )
 
 
@@ -371,13 +555,23 @@ def text_artifact_descriptor(
     id: str = "data",
     encoding: str = DEFAULT_TEXT_ENCODING,
 ) -> ArtifactDescriptor:
-    """Build a path-backed descriptor selectable as text."""
+    """Build a path-backed descriptor selectable as text.
+
+    Args:
+        path: Local filesystem path.
+        id: Descriptor identifier.
+        encoding: Text encoding recorded in the stdlib encoding facet.
+
+    Returns:
+        Artifact descriptor with text interface claims plus path and encoding
+        facets.
+    """
     return ArtifactDescriptor(
         id=id,
         role="data_artifact",
         locator=ArtifactLocator.path(path),
         claims=[RepresentationClaim("text"), InterfaceClaim("text")],
-        facets=[encoding_facet(encoding)],
+        facets=[path_locator_facet(), encoding_facet(encoding)],
     )
 
 
@@ -389,19 +583,32 @@ def delimited_table_artifact_descriptor(
     encoding: str = DEFAULT_TEXT_ENCODING,
     data_type: str = "csv",
 ) -> ArtifactDescriptor:
-    """Build a descriptor selectable as bytes, text, or a delimited table."""
+    """Build a descriptor selectable as bytes, text, or a delimited table.
+
+    Args:
+        path: Local filesystem path.
+        id: Descriptor identifier.
+        delimiter: Delimiter recorded in the stdlib delimited-text facet.
+        encoding: Text encoding recorded in the stdlib encoding facet.
+        data_type: IANA media type data-type claim name.
+
+    Returns:
+        Artifact descriptor with bytes/text/table interfaces plus path,
+        encoding, and delimiter facets.
+    """
     return ArtifactDescriptor(
         id=id,
         role="data_artifact",
         locator=ArtifactLocator.path(path),
         claims=[
+            RepresentationClaim("file"),
             RepresentationClaim("text"),
             DataTypeClaim(data_type, namespace="iana.media-types"),
             InterfaceClaim("bytes"),
             InterfaceClaim("text"),
             InterfaceClaim("table"),
         ],
-        facets=[encoding_facet(encoding), delimiter_facet(delimiter)],
+        facets=[path_locator_facet(), encoding_facet(encoding), delimiter_facet(delimiter)],
     )
 
 
@@ -411,18 +618,29 @@ def json_artifact_descriptor(
     id: str = "data",
     encoding: str = DEFAULT_TEXT_ENCODING,
 ) -> ArtifactDescriptor:
-    """Build a path-backed descriptor selectable as JSON text."""
+    """Build a path-backed descriptor selectable as JSON text.
+
+    Args:
+        path: Local filesystem path.
+        id: Descriptor identifier.
+        encoding: Text encoding recorded in the stdlib encoding facet.
+
+    Returns:
+        Artifact descriptor with JSON/text interface claims plus path and
+        encoding facets.
+    """
     return ArtifactDescriptor(
         id=id,
         role="data_artifact",
         locator=ArtifactLocator.path(path),
         claims=[
+            RepresentationClaim("file"),
             RepresentationClaim("text"),
             DataTypeClaim("json", namespace="iana.media-types"),
             InterfaceClaim("text"),
             InterfaceClaim("json"),
         ],
-        facets=[encoding_facet(encoding)],
+        facets=[path_locator_facet(), encoding_facet(encoding)],
     )
 
 
@@ -432,52 +650,113 @@ def temporary_text_artifact_descriptor(
     id: str = "temporary-output",
     encoding: str = DEFAULT_TEXT_ENCODING,
 ) -> ArtifactDescriptor:
-    """Build a non-catalog output descriptor suitable for capability selection."""
+    """Build a non-catalog output descriptor suitable for capability selection.
+
+    Args:
+        path: Local filesystem path for temporary output.
+        id: Descriptor identifier.
+        encoding: Text encoding recorded in the stdlib encoding facet.
+
+    Returns:
+        Derived artifact descriptor marked as temporary/non-catalogued with text
+        claims plus path and encoding facets.
+    """
     return ArtifactDescriptor(
         id=id,
         role="derived_artifact",
         locator=ArtifactLocator.path(path),
         relationship={"catalogued": False, "temporary": True},
         claims=[RepresentationClaim("text"), InterfaceClaim("text")],
-        facets=[encoding_facet(encoding)],
+        facets=[path_locator_facet(), encoding_facet(encoding)],
     )
 
 
+def path_locator_facet() -> ArtifactFacet:
+    """Build the stdlib facet declaring a local path-backed descriptor.
+
+    Returns:
+        Facet whose namespace/version belongs to the bundled stdlib examples.
+    """
+    return ArtifactFacet(
+        kind="locator",
+        name="path",
+        namespace=PLUGIN_NAMESPACE,
+        version=SCHEMA_VERSION,
+    )
+
+
+def path_locator_facet_requirement() -> ArtifactFacet:
+    """Build a requirement for the stdlib local path locator facet.
+
+    Returns:
+        Facet requirement used by path-backed stdlib capabilities.
+    """
+    return path_locator_facet()
+
+
 def encoding_facet(encoding: str) -> ArtifactFacet:
-    """Build the stdlib text encoding facet."""
+    """Build the stdlib text encoding facet.
+
+    Args:
+        encoding: Text encoding name.
+
+    Returns:
+        Namespaced facet containing the encoding metadata consumed by stdlib
+        text implementations.
+    """
     return ArtifactFacet(
         kind="encoding",
         name="charset",
         namespace=PLUGIN_NAMESPACE,
+        version=SCHEMA_VERSION,
         metadata={"encoding": encoding},
     )
 
 
 def encoding_facet_requirement() -> ArtifactFacet:
-    """Build a requirement for a declared text encoding facet."""
+    """Build a requirement for a declared text encoding facet.
+
+    Returns:
+        Facet requirement that accepts any stdlib charset metadata value.
+    """
     return ArtifactFacet(
         kind="encoding",
         name="charset",
         namespace=PLUGIN_NAMESPACE,
+        version=SCHEMA_VERSION,
     )
 
 
 def delimiter_facet(delimiter: str) -> ArtifactFacet:
-    """Build the stdlib delimited text facet."""
+    """Build the stdlib delimited text facet.
+
+    Args:
+        delimiter: Delimiter string used by ``csv`` readers/writers.
+
+    Returns:
+        Namespaced facet containing the delimiter metadata consumed by stdlib
+        delimited-table implementations.
+    """
     return ArtifactFacet(
         kind="format",
         name="delimited-text",
         namespace=PLUGIN_NAMESPACE,
+        version=SCHEMA_VERSION,
         metadata={"delimiter": delimiter},
     )
 
 
 def delimiter_facet_requirement() -> ArtifactFacet:
-    """Build a requirement for a declared delimited-text facet."""
+    """Build a requirement for a declared delimited-text facet.
+
+    Returns:
+        Facet requirement that accepts any stdlib delimiter metadata value.
+    """
     return ArtifactFacet(
         kind="format",
         name="delimited-text",
         namespace=PLUGIN_NAMESPACE,
+        version=SCHEMA_VERSION,
     )
 
 
@@ -486,9 +765,19 @@ def encoding_from_descriptor(
     *,
     default: str = DEFAULT_TEXT_ENCODING,
 ) -> str:
-    """Return a descriptor encoding from facets, falling back to an explicit default."""
+    """Return a descriptor encoding from stdlib facets.
+
+    Args:
+        descriptor: Descriptor whose facets should be inspected.
+        default: Encoding returned when no stdlib charset facet has encoding
+            metadata.
+
+    Returns:
+        Encoding declared by the stdlib ``encoding/charset`` facet, or
+        ``default`` when absent.
+    """
     for facet in iter_facets(descriptor):
-        if facet["kind"] != "encoding" or facet["name"] != "charset":
+        if not _is_stdlib_facet(facet, kind="encoding", name="charset"):
             continue
         metadata = facet["metadata"]
         if not isinstance(metadata, Mapping):
@@ -500,9 +789,19 @@ def encoding_from_descriptor(
 
 
 def delimiter_from_descriptor(descriptor: ArtifactDescriptor, *, default: str = ",") -> str:
-    """Return a delimited-text delimiter from facets."""
+    """Return a delimited-text delimiter from stdlib facets.
+
+    Args:
+        descriptor: Descriptor whose facets should be inspected.
+        default: Delimiter returned when no stdlib delimited-text facet has
+            delimiter metadata.
+
+    Returns:
+        Delimiter declared by the stdlib ``format/delimited-text`` facet, or
+        ``default`` when absent.
+    """
     for facet in iter_facets(descriptor):
-        if facet["kind"] != "format" or facet["name"] != "delimited-text":
+        if not _is_stdlib_facet(facet, kind="format", name="delimited-text"):
             continue
         metadata = facet["metadata"]
         if not isinstance(metadata, Mapping):
@@ -520,7 +819,20 @@ def descriptor_with_claims(
     facets: Iterable[ArtifactFacet] = (),
     relationship: Mapping[str, object] | None = None,
 ) -> ArtifactDescriptor:
-    """Return a descriptor copy with merged claims, facets, and relationship metadata."""
+    """Return a descriptor copy with merged claims, facets, and relationships.
+
+    Args:
+        descriptor: Source descriptor to copy.
+        claims: Claims to merge by namespace/kind/name/version. Added claims
+            replace existing claims with the same schema envelope.
+        facets: Facets to merge by namespace/kind/name/version. Added facets
+            replace existing facets with the same schema envelope.
+        relationship: Optional relationship metadata to merge over existing
+            descriptor relationship metadata.
+
+    Returns:
+        New descriptor preserving locator and state with merged schema facts.
+    """
     return ArtifactDescriptor(
         id=descriptor.id,
         role=descriptor.role,
@@ -569,6 +881,16 @@ def _descriptor_path(descriptor: ArtifactDescriptor) -> Path:
             f"artifact descriptor {descriptor.id!r} is not path-backed: {descriptor.locator.kind!r}"
         )
     return path
+
+
+def _is_stdlib_facet(facet: Mapping[str, object], *, kind: str, name: str) -> bool:
+    """Return whether a normalized facet belongs to this stdlib schema item."""
+    return (
+        facet.get("namespace") == PLUGIN_NAMESPACE
+        and facet.get("version") == SCHEMA_VERSION
+        and facet.get("kind") == kind
+        and facet.get("name") == name
+    )
 
 
 def _fieldnames_from_rows(rows: Sequence[Mapping[str, object]]) -> list[str]:
