@@ -55,6 +55,7 @@ searching records.
    design-note-artifact-locators
    design-note-artifact-descriptors
    design-note-artifact-claims-and-facets
+   design-note-capability-registry
    design-note-hooks-plugins
    design-note-virtual-artifact-filesystem-research
    ogcat_long_term_plan

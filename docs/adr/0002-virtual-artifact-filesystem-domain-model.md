@@ -239,6 +239,18 @@ Plugin or optional-extra responsibilities:
   external storage integrations.
 - Domain validation and source-specific versioning rules.
 
+Implementation clarification for #119: the first capability registry slice is a
+registration and lookup layer only. Selection starts from explicit caller
+requests for input and output claims or interfaces and matches those requests
+against `ArtifactDescriptor` claims and facets. It must not dispatch from
+`record_type`. If one artifact advertises several interfaces, such as bytes,
+text, table, and JSON, selection should report ambiguity until the caller asks
+for a specific enough interface. Public read-handle lifecycle APIs remain #118,
+and catalog merge of writer-produced artifact claims/facets remains #117.
+Bundled examples such as bytes, text-with-encoding, CSV/table, JSON, and an
+emoticon-to-emoji converter should register through the same plugin-style route
+as external capabilities.
+
 ## Handle Lifetime
 
 Operations should own cleanup for handles they open. Internally, this should

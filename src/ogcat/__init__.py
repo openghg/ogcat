@@ -2,6 +2,17 @@
 
 from ogcat.artifact_claims import claim_key, facet_key, has_claim, has_facet, iter_claims, iter_facets
 from ogcat.audit import AuditEvent, AuditSink, JsonlAuditSink, read_audit_events
+from ogcat.capabilities import (
+    AmbiguousCapabilityError,
+    ArtifactCapability,
+    CapabilityError,
+    CapabilityKind,
+    CapabilityLookupError,
+    CapabilityRegistrationError,
+    CapabilityRegistry,
+    MissingCapabilityError,
+    UnsupportedInterfaceError,
+)
 from ogcat.catalog import Catalog
 from ogcat.classification import classify_artifact, collection_classification_metadata
 from ogcat.hooks import ArtifactWriter, HookManager, HookWarning, OperationContext, OperationSource
@@ -66,6 +77,8 @@ from ogcat.writers import (
 )
 
 __all__ = [
+    "AmbiguousCapabilityError",
+    "ArtifactCapability",
     "ArtifactLocator",
     "ArtifactClaim",
     "ArtifactDescriptor",
@@ -73,6 +86,11 @@ __all__ = [
     "ArtifactWriter",
     "AuditEvent",
     "AuditSink",
+    "CapabilityError",
+    "CapabilityKind",
+    "CapabilityLookupError",
+    "CapabilityRegistrationError",
+    "CapabilityRegistry",
     "Catalog",
     "CatalogRecord",
     "CatalogRecordSet",
@@ -96,6 +114,7 @@ __all__ = [
     "JsonlAuditSink",
     "LocalStorageAdapter",
     "MetadataFieldDescription",
+    "MissingCapabilityError",
     "MoveArtifactWriter",
     "OperationState",
     "OperationContext",
@@ -119,6 +138,7 @@ __all__ = [
     "UnitOfWork",
     "UnzipArtifactWriter",
     "UnzipSingleFileArtifactWriter",
+    "UnsupportedInterfaceError",
     "ValidationIssue",
     "ValidationReport",
     "validate_metadata",
