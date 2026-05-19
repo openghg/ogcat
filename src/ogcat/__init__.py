@@ -1,5 +1,6 @@
 """Public package interface for ogcat."""
 
+from ogcat.artifact_claims import claim_key, facet_key, has_claim, has_facet, iter_claims, iter_facets
 from ogcat.audit import AuditEvent, AuditSink, JsonlAuditSink, read_audit_events
 from ogcat.catalog import Catalog
 from ogcat.classification import classify_artifact, collection_classification_metadata
@@ -77,15 +78,21 @@ __all__ = [
     "CatalogRecordSet",
     "CatalogSpec",
     "classify_artifact",
+    "claim_key",
     "collection_classification_metadata",
     "CopyArtifactWriter",
     "DataTypeClaim",
     "Facet",
+    "facet_key",
     "FsspecStorageAdapter",
     "FunctionArtifactWriter",
+    "has_claim",
+    "has_facet",
     "HookManager",
     "HookWarning",
     "InterfaceClaim",
+    "iter_claims",
+    "iter_facets",
     "JsonlAuditSink",
     "LocalStorageAdapter",
     "MetadataFieldDescription",

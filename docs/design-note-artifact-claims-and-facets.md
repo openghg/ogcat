@@ -133,6 +133,154 @@ This slice provides the schema and constructors. It does not automatically
 generate these claims and facets during ingest, and it does not use them for
 reader dispatch yet.
 
+Small query helpers in ``ogcat.artifact_claims`` support the next registry
+slice without duplicating normalization logic: ``iter_claims()``,
+``has_claim()``, ``claim_key()``, ``iter_facets()``, ``has_facet()``, and
+``facet_key()``.
+
+## Worked Examples
+
+These examples are design targets for writers, inspectors, and future readers.
+They are not automatic output in this schema slice.
+
+### Zarr Directory Store
+
+Issue #121 and PR #122 made ``add_file()`` intentionally support managed
+directory artifacts such as ``example.zarr``. A Zarr store is a directory-shaped
+artifact, but it is one dataset artifact, not a collection. The useful claims
+separate storage shape, data type, and optional interfaces:
+
+```json
+{
+  "claims": [
+    {"kind": "representation", "name": "directory", "namespace": "ogcat.core"},
+    {"kind": "data_type", "name": "zarr", "namespace": "zarr.dev"},
+    {"kind": "interface", "name": "directory-listing", "namespace": "ogcat.core"},
+    {"kind": "interface", "name": "zarr-group", "namespace": "zarr.dev"},
+    {"kind": "interface", "name": "xarray-dataset", "namespace": "pydata.xarray"}
+  ],
+  "facets": [
+    {"kind": "suffix", "name": "suffixes", "metadata": {"suffixes": [".zarr"]}}
+  ]
+}
+```
+
+The Zarr and xarray claims do not mean core imports those libraries. They are
+capability claims that a plugin or optional reader can satisfy later.
+
+### NetCDF Member Collection
+
+A directory of NetCDF files opened with a glob is different from a Zarr store.
+It is a directory representation with explicit collection semantics:
+
+```json
+{
+  "claims": [
+    {"kind": "representation", "name": "directory", "namespace": "ogcat.core"},
+    {"kind": "interface", "name": "collection", "namespace": "ogcat.core"},
+    {"kind": "interface", "name": "xarray-dataset", "namespace": "pydata.xarray"}
+  ],
+  "facets": [
+    {
+      "kind": "collection",
+      "name": "members",
+      "metadata": {
+        "pattern": "*.nc",
+        "member_format": "netcdf",
+        "member_suffixes": [".nc"],
+        "reader_hint": "xarray.open_mfdataset"
+      }
+    }
+  ]
+}
+```
+
+This is the claim/facet shape that issue #109 can use for managed collection
+writes. A reader can dispatch on the ``collection`` or ``xarray-dataset``
+interface and then use the member facet to decide how to open the directory.
+
+### CSV-Like Table
+
+CSV-like data can stay dependency-light in core by recording text and table
+interfaces without importing pandas:
+
+```json
+{
+  "claims": [
+    {"kind": "representation", "name": "text", "namespace": "ogcat.core"},
+    {"kind": "data_type", "name": "csv", "namespace": "iana.media-types"},
+    {"kind": "interface", "name": "text", "namespace": "ogcat.core"},
+    {"kind": "interface", "name": "table", "namespace": "ogcat.core"}
+  ]
+}
+```
+
+### Single NetCDF File
+
+A single NetCDF-like artifact has file representation and can advertise both
+cheap byte access and optional scientific interfaces:
+
+```json
+{
+  "claims": [
+    {"kind": "representation", "name": "file", "namespace": "ogcat.core"},
+    {"kind": "data_type", "name": "netcdf", "namespace": "org.unidata"},
+    {"kind": "interface", "name": "bytes", "namespace": "ogcat.core"},
+    {"kind": "interface", "name": "xarray-dataset", "namespace": "pydata.xarray"}
+  ]
+}
+```
+
+### Grouped NetCDF/HDF5 File
+
+Groups are structured facts or interfaces, not a reason for a core NetCDF
+dependency:
+
+```json
+{
+  "claims": [
+    {"kind": "data_type", "name": "netcdf", "namespace": "org.unidata"},
+    {"kind": "interface", "name": "netcdf-groups", "namespace": "org.unidata"}
+  ],
+  "facets": [
+    {
+      "kind": "netcdf",
+      "name": "groups",
+      "namespace": "org.unidata",
+      "metadata": {"groups": ["/", "/observations", "/metadata"]}
+    }
+  ]
+}
+```
+
+## Directory Stores Versus Collections
+
+PR #122 clarified an important ADR distinction. Directory-backed artifacts are
+not automatically collections. A managed ``.zarr`` directory added with
+``add_file()`` is one dataset artifact whose representation is ``directory``.
+A managed directory of monthly ``.nc`` files is a collection only when a caller,
+writer, or plugin explicitly adds collection claims/facets such as member
+pattern, member format, and member suffixes.
+
+This keeps storage shape separate from logical dataset shape:
+
+- ``representation=directory`` says how bytes are stored.
+- ``data_type=zarr`` or ``data_type=netcdf`` says what external format or data
+  type is claimed.
+- ``interface=collection`` says member traversal is part of the artifact
+  contract.
+- collection facets say which members participate and how a reader should
+  combine them.
+
+## Writer Result Open Loop
+
+Writers are the natural source of produced artifact claims/facets because they
+know what they materialized. This branch defines the schema, but it does not
+define the merge path from writer output into descriptors. Issue #117 should
+define that path, preserve existing ``None``-returning writers, and decide how
+writer results interact with ``OperationContext``, rollback, storage plans,
+audit metadata, and derived classification metadata.
+
 ## Relationship To Classification Metadata
 
 ``derived_metadata.classification`` remains the current home for cheap inferred

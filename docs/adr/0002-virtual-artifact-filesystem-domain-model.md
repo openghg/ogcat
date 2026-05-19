@@ -187,6 +187,14 @@ directory, prefix, archive, or manifest-shaped artifacts with collection claims,
 interfaces, and facets. A plain directory is not a collection unless explicitly
 claimed as one.
 
+Issue #121 and PR #122 clarified this boundary for managed directory artifacts:
+a `.zarr` directory ingested through `add_file()` is one directory-backed data
+artifact, not a collection. A directory of NetCDF members opened with a glob is
+a collection only when the artifact carries explicit collection claims/facets
+such as member pattern, member format, member suffixes, and reader hint. Storage
+shape (`directory`) must remain separate from data type (`zarr`, `netcdf`) and
+access interface (`collection`, `zarr-group`, `xarray-dataset`).
+
 Managed collection writes should be supported by the general artifact operation
 model. Issue #109 should be the first concrete pressure test: archive members
 can be extracted into managed directory or prefix storage and recorded as one

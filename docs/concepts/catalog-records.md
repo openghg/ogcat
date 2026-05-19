@@ -157,6 +157,15 @@ repository load.
 Claims and facets are not dispatch keys in this slice. Reader/open behavior and
 reader/writer/converter registries are deferred.
 
+A directory-backed artifact is not automatically a collection. For example, a
+managed ``.zarr`` directory added with ``add_file()`` is one data artifact with
+a directory representation and Zarr data type. A directory of ``.nc`` files is a
+collection only when collection claims/facets such as member pattern, member
+format, and member suffixes are explicitly attached. See
+[Artifact Claims And Facets](../design-note-artifact-claims-and-facets.md) for
+worked examples covering Zarr stores, NetCDF collections, CSV-like tables,
+single NetCDF files, and grouped NetCDF/HDF5 files.
+
 ## Searching across namespaces
 
 When you search with an unqualified field name such as ``species``, ogcat
