@@ -264,9 +264,12 @@ interfaces they produce, and any plugin-owned option metadata.
 Bundled capabilities and external capabilities should register the same way.
 For example, dependency-light bundled examples for bytes, text with encoding
 facets, CSV/table access, JSON access, and an emoticon-to-emoji converter can
-ship as plugin-style modules. Scientific readers such as xarray, pandas, Zarr,
-NetCDF, HDF5, Intake, or OpenGHG-specific integrations stay optional and should
-not become core imports merely because the registry can describe them.
+ship as plugin-style modules. A playful text-to-text converter such as Pig
+Latin can also exercise the boundary: a CSV-like artifact may be selected as
+text input, but that converter still cannot advertise CSV/table output.
+Scientific readers such as xarray, pandas, Zarr, NetCDF, HDF5, Intake, or
+OpenGHG-specific integrations stay optional and should not become core imports
+merely because the registry can describe them.
 
 Capability lookup dispatches by `ArtifactDescriptor` claims and facets, not by
 `record_type`. It also requires explicit selection: if an artifact can be read

@@ -15,7 +15,8 @@ from ogcat.bundled_plugins.stdlib_io import (
     temporary_text_artifact_descriptor,
     text_artifact_descriptor,
 )
-from ogcat.models import ArtifactDescriptor, ArtifactLocator, InterfaceClaim
+from ogcat.capabilities import MissingCapabilityError
+from ogcat.models import ArtifactDescriptor, ArtifactLocator, DataTypeClaim, InterfaceClaim
 from ogcat.plugins import PluginRegistry
 
 
@@ -98,7 +99,15 @@ def test_emoticon_to_emoji_converter_writes_utf8_selectable_text(tmp_path: Path)
     source_path.write_text("done :)", encoding="ascii")
     output = temporary_text_artifact_descriptor(tmp_path / "output.txt")
 
-    converter = _implementation(_select(registry, source, operation="convert", interface="text"))
+    converter = _implementation(
+        _select(
+            registry,
+            source,
+            operation="convert",
+            interface="text",
+            name="emoticon-to-emoji-text-converter",
+        )
+    )
     result = converter.convert(source, output)
     reader = _implementation(_select(registry, result, operation="read", interface="text"))
 
@@ -108,6 +117,69 @@ def test_emoticon_to_emoji_converter_writes_utf8_selectable_text(tmp_path: Path)
     assert result.relationship["generated_by"] == "ogcat.stdlib.emoticon_to_emoji"
     assert has_claim(result, kind="interface", name="text")
     assert has_facet(result, kind="encoding", name="charset", namespace="ogcat.stdlib")
+
+
+def test_pig_latin_converter_writes_utf8_selectable_text(tmp_path: Path) -> None:
+    """The Pig Latin converter should produce normal selectable text output."""
+    registry = _registry()
+    source = text_artifact_descriptor(tmp_path / "plain.txt", encoding="utf-8")
+    source_path = source.locator.as_path() if source.locator is not None else None
+    assert source_path is not None
+    source_path.write_text("hello apple sky", encoding="utf-8")
+    output = temporary_text_artifact_descriptor(tmp_path / "pig.txt")
+
+    converter = _implementation(
+        _select(
+            registry,
+            source,
+            operation="convert",
+            interface="text",
+            name="pig-latin-text-converter",
+        )
+    )
+    result = converter.convert(source, output)
+    reader = _implementation(_select(registry, result, operation="read", interface="text"))
+
+    assert reader.read(result) == "ellohay appleway skyay"
+    assert result.relationship["generated_by"] == "ogcat.stdlib.pig_latin"
+    assert has_claim(result, kind="interface", name="text")
+    assert has_facet(result, kind="encoding", name="charset", namespace="ogcat.stdlib")
+
+
+def test_pig_latin_can_filter_csv_text_but_not_claim_table_output(tmp_path: Path) -> None:
+    """CSV can be treated as text, but Pig Latin does not produce CSV/table output."""
+    registry = _registry()
+    source = delimited_table_artifact_descriptor(tmp_path / "input.csv")
+    source_path = source.locator.as_path() if source.locator is not None else None
+    assert source_path is not None
+    source_path.write_text("name,value\nhello,world\n", encoding="utf-8")
+    output = temporary_text_artifact_descriptor(tmp_path / "pig.csv.txt")
+
+    converter = _implementation(
+        _select(
+            registry,
+            source,
+            operation="convert",
+            interface="text",
+            name="pig-latin-text-converter",
+        )
+    )
+    result = converter.convert(source, output)
+    reader = _implementation(_select(registry, result, operation="read", interface="text"))
+
+    assert reader.read(result) == "amenay,aluevay\nellohay,orldway\n"
+    for unsupported_output in (
+        InterfaceClaim("table"),
+        DataTypeClaim("csv", namespace="iana.media-types"),
+    ):
+        with pytest.raises(MissingCapabilityError):
+            registry.select(
+                kind="converter",
+                name="pig-latin-text-converter",
+                descriptor=source,
+                input_claims=[InterfaceClaim("text")],
+                output_claims=[unsupported_output],
+            )
 
 
 def test_csv_artifact_can_be_selected_as_bytes_text_or_table(tmp_path: Path) -> None:

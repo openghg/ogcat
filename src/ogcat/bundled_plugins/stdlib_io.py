@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import inspect
 import json
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -31,6 +32,8 @@ DEFAULT_TEXT_ENCODING = "utf-8"
 
 JsonDocument: TypeAlias = JsonValue
 TableRows: TypeAlias = list[dict[str, str]]
+_WORD_RE = re.compile(r"[A-Za-z]+")
+_VOWELS = frozenset("aeiouAEIOU")
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,6 +274,28 @@ class EmoticonEmojiTextConverter:
         return TextWriter().write(output, converted, encoding=DEFAULT_TEXT_ENCODING)
 
 
+class PigLatinTextConverter:
+    """Convert text artifacts to Pig Latin text."""
+
+    def convert(
+        self,
+        source_descriptor: ArtifactDescriptor,
+        output_descriptor: ArtifactDescriptor,
+    ) -> ArtifactDescriptor:
+        """Read text and write UTF-8 Pig Latin text output."""
+        converted = _pig_latin_text(TextReader().read(source_descriptor))
+        output = descriptor_with_claims(
+            output_descriptor,
+            claims=(RepresentationClaim("text"), InterfaceClaim("text")),
+            facets=(encoding_facet(DEFAULT_TEXT_ENCODING),),
+            relationship={
+                "generated_by": "ogcat.stdlib.pig_latin",
+                "source_artifact_id": source_descriptor.id,
+            },
+        )
+        return TextWriter().write(output, converted, encoding=DEFAULT_TEXT_ENCODING)
+
+
 def stdlib_capabilities() -> tuple[object, ...]:
     """Create bundled stdlib capability examples."""
     return (
@@ -353,6 +378,15 @@ def stdlib_capabilities() -> tuple[object, ...]:
             output_claims=(RepresentationClaim("text"), InterfaceClaim("text")),
             required_facets=(encoding_facet(DEFAULT_TEXT_ENCODING),),
             description="Convert ASCII emoticons in text artifacts to Unicode emoji text.",
+        ),
+        _capability(
+            name="pig-latin-text-converter",
+            operation="converter",
+            implementation=PigLatinTextConverter(),
+            required_claims=(InterfaceClaim("text"),),
+            output_claims=(RepresentationClaim("text"), InterfaceClaim("text")),
+            required_facets=(encoding_facet(DEFAULT_TEXT_ENCODING),),
+            description="Convert text artifacts to Pig Latin text.",
         ),
     )
 
@@ -640,6 +674,21 @@ def _fieldnames_from_rows(rows: Sequence[Mapping[str, object]]) -> list[str]:
             if key not in fieldnames:
                 fieldnames.append(str(key))
     return fieldnames
+
+
+def _pig_latin_text(text: str) -> str:
+    """Return text with ASCII words converted to Pig Latin."""
+    return _WORD_RE.sub(lambda match: _pig_latin_word(match.group(0)), text)
+
+
+def _pig_latin_word(word: str) -> str:
+    """Return one ASCII word converted to Pig Latin."""
+    first_vowel = next((index for index, char in enumerate(word) if char in _VOWELS), -1)
+    if first_vowel == 0:
+        return f"{word}way"
+    if first_vowel > 0:
+        return f"{word[first_vowel:]}{word[:first_vowel]}ay"
+    return f"{word}ay"
 
 
 def _merge_claim_items(

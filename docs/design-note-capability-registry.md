@@ -194,12 +194,19 @@ Useful examples:
   table interfaces advertised separately;
 - JSON reader/writer declarations using `json`, with `interface=json`;
 - an emoticon-to-emoji text converter that maps ASCII emoticons such as `:)` to
-  Unicode emoji.
+  Unicode emoji;
+- a Pig Latin text converter that shows CSV-like descriptors can be routed as
+  text when text input and text output are requested, but the same converter
+  must not be selected when the requested output is CSV or a table.
 
 These examples are meant to exercise the registry design. They must not bend
 core matching rules to make toy examples pass, and they must not introduce
 optional scientific dependencies. NetCDF, HDF5, Zarr, xarray, pandas, Intake,
 and OpenGHG-specific behavior remain optional plugin territory.
+The bundled converter implementations call the bundled text reader and writer
+directly only to keep this slice executable without the future handle API. That
+is useful as a plugin-style pressure test, but it is not the intended long-term
+pipeline executor.
 
 ## Preserved Testing Request
 
@@ -233,3 +240,6 @@ This note intentionally leaves several choices to implementation:
 - the read-handle API that consumes selected reader implementations;
 - the writer-result model that persists produced claims/facets;
 - optional integration with Intake pipelines or other external registries.
+- a converter orchestration layer that passes opened handles or runtime values
+  between readers, filters, and writers so chained conversions do not repeat
+  reader/writer boilerplate.
