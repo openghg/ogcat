@@ -117,8 +117,8 @@ once. For example, a CSV artifact may advertise:
 - `interface=table`;
 - `data_type=csv`;
 - `representation=text`;
-- `encoding/charset=utf-8`;
-- `delimiter/value=,`.
+- `encoding/charset` with metadata `{"encoding": "utf-8"}`;
+- `format/delimited-text` with metadata `{"delimiter": ","}`.
 
 That descriptor is intentionally ambiguous if the caller asks only to "read"
 it. The caller must request a specific input interface such as
