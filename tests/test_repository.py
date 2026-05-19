@@ -5,10 +5,20 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from pathlib import Path
+from typing import get_args, get_type_hints
 
 import pytest
 
-from ogcat.models import ArtifactDescriptor, ArtifactLocator, CatalogRecord
+from ogcat.models import (
+    ArtifactClaim,
+    ArtifactDescriptor,
+    ArtifactFacet,
+    ArtifactLocator,
+    CatalogRecord,
+    DataTypeClaim,
+    InterfaceClaim,
+    RepresentationClaim,
+)
 from ogcat.tinydb_repository import TinyDbCatalogRepository
 
 
@@ -216,6 +226,239 @@ def test_record_round_trips_with_data_and_preview_artifacts() -> None:
     assert isinstance(artifacts_payload[1], dict)
     assert artifacts_payload[1]["role"] == "preview"
     assert reloaded == record
+
+
+def test_artifact_descriptor_round_trips_claim_and_facet_objects() -> None:
+    """Claim and facet helper objects should persist as JSON-compatible dictionaries."""
+    record = CatalogRecord(
+        id="rec_000105",
+        catalog="fluxes",
+        time_added="2026-04-23T12:00:00Z",
+        locator=ArtifactLocator.path("/tmp/catalog/files/example.nc"),
+        artifacts=[
+            ArtifactDescriptor(
+                id="data",
+                role="data_artifact",
+                locator=ArtifactLocator.path("/tmp/catalog/files/example.nc"),
+                claims=[
+                    InterfaceClaim(
+                        "bytes",
+                        evidence="validated",
+                        metadata={"media_type": "application/octet-stream"},
+                    ),
+                    DataTypeClaim(
+                        "netcdf",
+                        namespace="org.unidata",
+                        evidence="declared",
+                        metadata={"source": "writer"},
+                    ),
+                ],
+                facets=[
+                    ArtifactFacet(
+                        kind="stat",
+                        name="size",
+                        evidence="probed",
+                        confidence="validated",
+                        metadata={"bytes": 128},
+                    )
+                ],
+            )
+        ],
+    )
+
+    payload = record.to_dict()
+    reloaded = CatalogRecord.from_dict(payload)
+
+    artifacts = payload["artifacts"]
+    assert isinstance(artifacts, list)
+    assert isinstance(artifacts[0], dict)
+    assert artifacts[0]["claims"] == [
+        {
+            "kind": "interface",
+            "name": "bytes",
+            "namespace": "ogcat.core",
+            "version": "1",
+            "evidence": "validated",
+            "confidence": "validated",
+            "metadata": {"media_type": "application/octet-stream"},
+        },
+        {
+            "kind": "data_type",
+            "name": "netcdf",
+            "namespace": "org.unidata",
+            "version": "1",
+            "evidence": "declared",
+            "confidence": "declared",
+            "metadata": {"source": "writer"},
+        },
+    ]
+    assert artifacts[0]["facets"] == [
+        {
+            "kind": "stat",
+            "name": "size",
+            "namespace": "ogcat.core",
+            "version": "1",
+            "evidence": "probed",
+            "confidence": "validated",
+            "metadata": {"bytes": 128},
+        }
+    ]
+    assert reloaded.to_dict() == payload
+
+
+def test_raw_claim_and_facet_dicts_are_normalized_for_compatibility() -> None:
+    """Existing raw dict claim and facet payloads should remain readable."""
+    descriptor = ArtifactDescriptor(
+        id="preview",
+        role="preview",
+        claims=[{"kind": "representation", "name": "png"}],
+        facets=[{"kind": "image", "format": "png"}],
+    )
+
+    assert descriptor.claims == [
+        {
+            "kind": "representation",
+            "name": "png",
+            "namespace": "ogcat.core",
+            "version": "1",
+            "evidence": "declared",
+            "confidence": "declared",
+            "metadata": {},
+        }
+    ]
+    assert descriptor.facets == [
+        {
+            "kind": "image",
+            "name": "image",
+            "namespace": "ogcat.core",
+            "version": "1",
+            "evidence": "declared",
+            "confidence": "declared",
+            "metadata": {"format": "png"},
+        }
+    ]
+
+
+def test_artifact_descriptor_claim_facet_type_hints_resolve_runtime_aliases() -> None:
+    """Runtime type-hint consumers should see concrete claim and facet input aliases."""
+    hints = get_type_hints(ArtifactDescriptor)
+    claim_input = get_args(hints["claims"])[0]
+    facet_input = get_args(hints["facets"])[0]
+
+    assert ArtifactClaim in get_args(claim_input)
+    assert ArtifactFacet in get_args(facet_input)
+
+
+def test_suffix_only_detection_can_be_represented_as_inferred_evidence() -> None:
+    """Suffix-based artifact facts should be expressible without claiming validation."""
+    descriptor = ArtifactDescriptor(
+        id="data",
+        role="data_artifact",
+        claims=[
+            RepresentationClaim(
+                "netcdf",
+                evidence="inferred",
+                confidence="inferred",
+                metadata={"source": "suffix", "suffixes": [".nc"]},
+            )
+        ],
+        facets=[
+            ArtifactFacet(
+                kind="suffix",
+                name="suffixes",
+                evidence="inferred",
+                confidence="inferred",
+                metadata={"suffixes": [".nc"]},
+            )
+        ],
+    )
+
+    payload = descriptor.to_dict()
+    claims = payload["claims"]
+    facets = payload["facets"]
+    assert isinstance(claims, list)
+    assert isinstance(claims[0], dict)
+    assert isinstance(facets, list)
+    assert isinstance(facets[0], dict)
+    assert claims[0]["evidence"] == "inferred"
+    assert claims[0]["confidence"] == "inferred"
+    assert claims[0]["metadata"] == {"source": "suffix", "suffixes": [".nc"]}
+    assert facets[0]["evidence"] == "inferred"
+
+
+def test_artifact_descriptor_accepts_multiple_interfaces_without_optional_imports() -> None:
+    """One artifact can carry multiple capability claims without importing readers."""
+    descriptor = ArtifactDescriptor(
+        id="data",
+        role="data_artifact",
+        claims=[
+            InterfaceClaim("bytes"),
+            DataTypeClaim("netcdf", namespace="org.unidata", evidence="inferred"),
+            InterfaceClaim("xarray-dataset", namespace="pydata.xarray", evidence="declared"),
+        ],
+    )
+
+    claims = descriptor.to_dict()["claims"]
+    assert isinstance(claims, list)
+    claim_keys = [
+        (claim["kind"], claim["namespace"], claim["name"]) for claim in claims if isinstance(claim, dict)
+    ]
+    assert claim_keys == [
+        ("interface", "ogcat.core", "bytes"),
+        ("data_type", "org.unidata", "netcdf"),
+        ("interface", "pydata.xarray", "xarray-dataset"),
+    ]
+
+
+def test_invalid_artifact_claim_shapes_raise_helpful_errors() -> None:
+    """Invalid claim and facet shapes should fail during descriptor construction."""
+    with pytest.raises(ValueError, match="claims\\[0\\] is missing required key: name"):
+        ArtifactDescriptor(id="data", role="data_artifact", claims=[{"kind": "representation"}])
+
+    with pytest.raises(ValueError, match="claims\\[0\\]\\.kind cannot be None"):
+        ArtifactDescriptor(id="data", role="data_artifact", claims=[{"kind": None, "name": "netcdf"}])
+
+    with pytest.raises(TypeError, match="claims\\[0\\]\\.name must be a string"):
+        ArtifactDescriptor(id="data", role="data_artifact", claims=[{"kind": "representation", "name": 123}])
+
+    with pytest.raises(TypeError, match="facets\\[0\\]\\.kind must be a string"):
+        ArtifactDescriptor(id="data", role="data_artifact", facets=[{"kind": 123, "name": "size"}])
+
+    with pytest.raises(ValueError, match="evidence must be one of"):
+        ArtifactDescriptor(
+            id="data",
+            role="data_artifact",
+            claims=[{"kind": "representation", "name": "netcdf", "evidence": "guessed"}],
+        )
+
+    with pytest.raises(TypeError, match="facets\\[0\\]\\.metadata must be a dictionary"):
+        ArtifactDescriptor(
+            id="data",
+            role="data_artifact",
+            facets=[{"kind": "stat", "name": "size", "metadata": ["not", "a", "dict"]}],
+        )
+
+
+def test_repository_load_rejects_invalid_artifact_claim_shape(tmp_path: Path) -> None:
+    """Repository reads should surface invalid persisted claim shapes."""
+    repository = TinyDbCatalogRepository(tmp_path / "db.json")
+    repository._db.insert(
+        {
+            "catalog": "fluxes",
+            "time_added": "2026-04-23T12:00:00Z",
+            "artifacts": [
+                {
+                    "id": "data",
+                    "role": "data_artifact",
+                    "claims": [{"kind": "representation", "name": "netcdf", "confidence": "guessed"}],
+                    "facets": [],
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(ValueError, match="confidence must be one of"):
+        repository.get("1")
 
 
 def test_data_artifact_locator_refreshes_compatibility_path_fields() -> None:

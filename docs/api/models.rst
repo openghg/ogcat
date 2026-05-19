@@ -19,6 +19,40 @@ Models and specifications
    :exclude-members: id, role, locator, state, relationship, claims, facets
    :member-order: bysource
 
+.. autoclass:: ogcat.ArtifactClaim
+   :members:
+   :exclude-members: kind, name, namespace, version, evidence, confidence, metadata
+   :member-order: bysource
+
+.. autoclass:: ogcat.DataTypeClaim
+   :members:
+   :member-order: bysource
+
+.. autoclass:: ogcat.RepresentationClaim
+   :members:
+   :member-order: bysource
+
+.. autoclass:: ogcat.InterfaceClaim
+   :members:
+   :member-order: bysource
+
+.. autoclass:: ogcat.ArtifactFacet
+   :members:
+   :exclude-members: kind, name, namespace, version, evidence, confidence, metadata
+   :member-order: bysource
+
+.. autofunction:: ogcat.iter_claims
+
+.. autofunction:: ogcat.has_claim
+
+.. autofunction:: ogcat.claim_key
+
+.. autofunction:: ogcat.iter_facets
+
+.. autofunction:: ogcat.has_facet
+
+.. autofunction:: ogcat.facet_key
+
 .. autoclass:: ogcat.ArtifactLocator
    :members:
    :exclude-members: kind, value, relative_path

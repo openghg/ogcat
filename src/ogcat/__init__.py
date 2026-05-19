@@ -1,10 +1,23 @@
 """Public package interface for ogcat."""
 
+from ogcat.artifact_claims import claim_key, facet_key, has_claim, has_facet, iter_claims, iter_facets
 from ogcat.audit import AuditEvent, AuditSink, JsonlAuditSink, read_audit_events
 from ogcat.catalog import Catalog
 from ogcat.classification import classify_artifact, collection_classification_metadata
 from ogcat.hooks import ArtifactWriter, HookManager, HookWarning, OperationContext, OperationSource
-from ogcat.models import ArtifactDescriptor, ArtifactLocator, CatalogRecord, MetadataFieldDescription
+from ogcat.models import (
+    ArtifactClaim,
+    ArtifactDescriptor,
+    ArtifactFacet,
+    ArtifactLocator,
+    CatalogRecord,
+    DataTypeClaim,
+    Facet,
+    InterfaceClaim,
+    MetadataFieldDescription,
+    Representation,
+    RepresentationClaim,
+)
 from ogcat.plugins import PluginRegistry
 from ogcat.record_set import CatalogRecordSet
 from ogcat.replicas import (
@@ -54,7 +67,9 @@ from ogcat.writers import (
 
 __all__ = [
     "ArtifactLocator",
+    "ArtifactClaim",
     "ArtifactDescriptor",
+    "ArtifactFacet",
     "ArtifactWriter",
     "AuditEvent",
     "AuditSink",
@@ -63,12 +78,21 @@ __all__ = [
     "CatalogRecordSet",
     "CatalogSpec",
     "classify_artifact",
+    "claim_key",
     "collection_classification_metadata",
     "CopyArtifactWriter",
+    "DataTypeClaim",
+    "Facet",
+    "facet_key",
     "FsspecStorageAdapter",
     "FunctionArtifactWriter",
+    "has_claim",
+    "has_facet",
     "HookManager",
     "HookWarning",
+    "InterfaceClaim",
+    "iter_claims",
+    "iter_facets",
     "JsonlAuditSink",
     "LocalStorageAdapter",
     "MetadataFieldDescription",
@@ -85,6 +109,8 @@ __all__ = [
     "ReplicaViewPlan",
     "RollbackFailure",
     "RecordSchema",
+    "Representation",
+    "RepresentationClaim",
     "FieldPath",
     "SearchOp",
     "SearchQuery",

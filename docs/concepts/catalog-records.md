@@ -71,6 +71,11 @@ subtype vocabulary. Use the classification ``suffixes`` field or the record's
 top-level ``suffixes`` field when you need to search or display the literal
 suffix list.
 
+Classification metadata remains in ``derived_metadata`` for now. It is not
+automatically mirrored into artifact facets in the first claim/facet schema
+slice, so existing classification search behavior and catalog compatibility are
+preserved.
+
 ``naming_metadata``
 :   Internal metadata used to evaluate directory and filename templates.  You
     do not normally need to read or set this directly. Fields such as
@@ -94,17 +99,72 @@ The first descriptor shape is deliberately small:
   "locator": {"kind": "path", "value": "/abs/path/data.nc", "relative_path": "data/objects/ab/data.nc"},
   "state": "available",
   "relationship": {},
-  "claims": [],
-  "facets": []
+  "claims": [
+    {
+      "kind": "interface",
+      "name": "bytes",
+      "namespace": "ogcat.core",
+      "version": "1",
+      "evidence": "validated",
+      "confidence": "validated",
+      "metadata": {}
+    }
+  ],
+  "facets": [
+    {
+      "kind": "suffix",
+      "name": "suffixes",
+      "namespace": "ogcat.core",
+      "version": "1",
+      "evidence": "inferred",
+      "confidence": "inferred",
+      "metadata": {"suffixes": [".nc"]}
+    }
+  ]
 }
 ```
 
 Current first-slice roles are ``data_artifact``, ``auxiliary_artifact``,
 ``view_link``, ``manifest``, ``preview``, ``log``, and ``derived_artifact``.
 Descriptor roles are stored as strings so future ADR or plugin-owned roles can
-be persisted before their lifecycle behavior exists. Claims and facets are
-placeholders for future typed reader, writer, and converter work; they are not
-dispatch keys in this slice.
+be persisted before their lifecycle behavior exists.
+
+``claims`` describe artifact facts that future readers, writers, and converters
+can use for dispatch. Core recognizes the claim kinds ``data_type``,
+``representation``, and ``interface``. The vocabulary of claim names remains
+open and namespaced. For example, one artifact can carry an ``interface`` claim
+named ``bytes`` in the ``ogcat.core`` namespace, a ``data_type`` claim named
+``netcdf`` in the ``org.unidata`` namespace, and an ``interface`` claim named
+``xarray-dataset`` in the ``pydata.xarray`` namespace without importing any of
+those optional reader libraries.
+
+``facets`` describe structured facts such as suffixes, size, modification time,
+checksums, archive member summaries, manifests, validation results, or
+plugin-specific details. Claims and facets always normalize to this envelope:
+``kind``, ``name``, ``namespace``, ``version``, ``evidence``, ``confidence``,
+and ``metadata``. ``metadata`` is a JSON-compatible dictionary for the
+structured payload.
+
+The first evidence and confidence vocabulary is ``declared``, ``inferred``,
+``probed``, ``validated``, ``stale``, and ``failed``. Suffix-only detection
+should be recorded as inferred, for example with
+``metadata={"source": "suffix", "suffixes": [".nc"]}``, not as validated
+truth. Missing namespace, version, evidence, confidence, and metadata fields in
+older raw dict payloads are filled with defaults when records are read. Invalid
+claim and facet shapes fail during descriptor or record construction, including
+repository load.
+
+Claims and facets are not dispatch keys in this slice. Reader/open behavior and
+reader/writer/converter registries are deferred.
+
+A directory-backed artifact is not automatically a collection. For example, a
+managed ``.zarr`` directory added with ``add_file()`` is one data artifact with
+a directory representation and Zarr data type. A directory of ``.nc`` files is a
+collection only when collection claims/facets such as member pattern, member
+format, and member suffixes are explicitly attached. See
+[Artifact Claims And Facets](../design-note-artifact-claims-and-facets.md) for
+worked examples covering Zarr stores, NetCDF collections, CSV-like tables,
+single NetCDF files, and grouped NetCDF/HDF5 files.
 
 ## Searching across namespaces
 
