@@ -767,6 +767,9 @@ class RecordLifecycleOperationRunner(OperationRunner):
 
     def _purge_artifact(self, context: OperationContext, artifact: ArtifactDescriptor) -> None:
         """Purge one managed artifact or audit why it was skipped."""
+        if self.request.record.storage_mode == "reference":
+            self._emit_artifact_skip(context, artifact, reason="record storage mode is reference")
+            return
         locator = artifact.locator
         if locator is None:
             self._emit_artifact_skip(context, artifact, reason="missing locator")

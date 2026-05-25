@@ -179,6 +179,28 @@ def test_purge_skips_external_path_artifacts(tmp_path: Path) -> None:
     assert any(event.details["purge_action"] == "skipped" for event in skip_events)
 
 
+def test_purge_skips_reference_paths_under_managed_roots(tmp_path: Path) -> None:
+    """Reference-only records must not delete user-owned paths under catalog roots."""
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+    referenced = catalog.root / catalog.spec.files_root / "user-owned.nc"
+    referenced.write_text("user data", encoding="utf-8")
+    record = catalog.add_reference(referenced, metadata={"species": "CO2"})
+    record_id = _record_id(record)
+    catalog.delete(record_id)
+
+    catalog.purge(record_id)
+
+    assert referenced.exists()
+    assert referenced.read_text(encoding="utf-8") == "user data"
+    assert catalog.get(record_id) is None
+    skip_events = catalog.audit_events(event_type="purge_artifact")
+    assert any(
+        event.details["reason"] == "record storage mode is reference"
+        and event.details["purge_action"] == "skipped"
+        for event in skip_events
+    )
+
+
 def test_purge_requires_deleted_record_unless_forced(tmp_path: Path) -> None:
     """Active records should not be purged unless force is explicit."""
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
