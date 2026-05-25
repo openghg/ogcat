@@ -99,6 +99,23 @@ version, evidence, confidence, and metadata are filled with defaults when the
 shape is otherwise clear. Older facet payloads with extra top-level fields have
 those fields folded into ``metadata``.
 
+## Writer Result Merge
+
+Writer capabilities produce descriptor facts through ``ArtifactWriteResult``.
+Operation materializers are operation-scoped wrappers that prepare a planned
+``data`` descriptor with the target locator, invoke a writer capability or
+one-off function, register rollback, and return the result to the add-operation
+runner. The runner owns the single merge path and stages the merged descriptor
+list with the record.
+
+Returned data descriptors enrich the planned data descriptor. They may omit the
+locator; if present, it must match the planned locator. Returned claims and
+facets are keyed by ``(namespace, kind, name, version)`` and later returned
+facts replace earlier facts with the same key. Relationship metadata is merged
+shallowly with result keys winning. Auxiliary descriptors append, but duplicate
+artifact ids and non-``data`` descriptors with role ``data_artifact`` fail
+before commit.
+
 ## Current Limits
 
 `record_type` remains schema and search metadata. It is not an I/O dispatch key.
@@ -108,9 +125,10 @@ leadership remains deferred to later `leader` or `write_leader` fields instead
 of overloading `primary`.
 
 `claims` and `facets` are schema and validation metadata only in this slice.
-This change does not implement reader/open behavior, the reader/writer/converter
-registry, replicas, cache/archive policy, mount resolution, permissions, locks,
-or Intake integration.
+This change does not implement reader/open behavior, full pipeline execution,
+replicas, cache/archive policy, mount resolution, permissions, locks, or Intake
+integration. ``ArtifactWriteResult`` diagnostics and provenance are audit-only
+operation details, not durable/queryable provenance.
 
 `derived_metadata.classification` remains the current home for cheap inferred
 classification fields such as `artifact_kind`, `format`, `archive_format`,

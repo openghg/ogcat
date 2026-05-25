@@ -22,6 +22,16 @@ registration, and source information.
    :member-order: bysource
    :exclude-members: kind, path, descriptor, metadata, payload
 
+.. autoclass:: ogcat.ArtifactWriteRequest
+   :members:
+   :member-order: bysource
+   :exclude-members: context, source, target, storage_plan
+
+.. autoclass:: ogcat.ArtifactMaterializer
+   :members:
+   :member-order: bysource
+   :no-index:
+
 .. autoclass:: ogcat.HookWarning
    :members:
    :member-order: bysource

@@ -1,4 +1,4 @@
-"""Lifecycle hooks, writer protocols, and operation context objects.
+"""Lifecycle hooks, materializer protocols, and operation context objects.
 
 Hooks are structural protocols: a plugin object participates in a lifecycle
 phase by implementing the corresponding method, such as
@@ -21,9 +21,11 @@ public mapping used during dispatch and validation. ``HOOK_METHOD_NAMES`` is
 derived from that source of truth for compatibility with existing validation
 callers.
 
-Artifact writers use the same context model. Any object satisfying
-:class:`ArtifactWriter` can materialise an :class:`ogcat.models.ArtifactLocator`
-from an :class:`OperationSource` before the catalog record is committed.
+Artifact materializers use the same context model. Any object satisfying
+:class:`ArtifactMaterializer` can materialise a planned
+:class:`ogcat.models.ArtifactDescriptor` from an :class:`OperationSource`
+before the catalog record is committed. This operation-scoped materializer
+boundary is distinct from registry writer capabilities.
 """
 
 from __future__ import annotations
@@ -35,7 +37,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Literal, Protocol, cast, runtime_checkable
 
-from ogcat.models import ArtifactLocator, MetadataDict
+from ogcat.models import ArtifactDescriptor, ArtifactLocator, ArtifactWriteResult, MetadataDict
 from ogcat.storage import StoragePlan
 from ogcat.transactions import RollbackAction
 from ogcat.validation import ValidationReport
@@ -198,14 +200,23 @@ class RollbackRegistrar(Protocol):
 
 @dataclass(slots=True)
 class OperationSource:
-    """Description of the artifact source for a catalog operation.
+    """Description of the source envelope for a catalog operation.
+
+    ``OperationSource`` is a compatibility and provenance container for current
+    operation helpers. Its modern replacement is a source
+    ``ArtifactDescriptor`` plus a selected reader and converter plan. New
+    dispatch should prefer descriptor claims and facets on ``artifact`` over
+    the ``kind`` string whenever a descriptor is available.
 
     Args:
-        kind: Short source kind, such as ``"local_file"`` or ``"external"``.
+        kind: Compatibility source label, such as ``"local_file"`` or
+            ``"external"``.
         path: Optional local source path.
         descriptor: Optional non-path source description or URI.
         metadata: Source-specific JSON-compatible metadata.
         payload: Optional in-memory Python object for writer helpers.
+        artifact: Optional source artifact descriptor for claim/facet-based
+            reader, converter, or writer capability selection.
     """
 
     kind: str
@@ -213,19 +224,24 @@ class OperationSource:
     descriptor: str | None = None
     metadata: MetadataDict = field(default_factory=dict)
     payload: object | None = None
+    artifact: ArtifactDescriptor | None = None
 
 
-class ArtifactWriter(Protocol):
-    """Plugin-facing writer that materialises artifact data before record write."""
+class ArtifactMaterializer(Protocol):
+    """Operation-scoped adapter that materialises artifact data before record write."""
 
-    def write(
-        self,
-        context: OperationContext,
-        source: OperationSource,
-        target: ArtifactLocator,
-    ) -> None:
-        """Write artifact data from source to target."""
+    def write(self, request: ArtifactWriteRequest) -> ArtifactWriteResult:
+        """Write artifact data from the request and return produced artifact facts."""
         ...
+
+
+class ArtifactWriter(ArtifactMaterializer, Protocol):
+    """Deprecated alias for :class:`ArtifactMaterializer`.
+
+    Registry writer capabilities are represented by
+    :class:`ogcat.capabilities.ArtifactCapability` with ``kind="writer"``. This
+    protocol names the older operation-scoped materializer surface.
+    """
 
 
 @dataclass(slots=True)
@@ -311,6 +327,31 @@ class OperationContext:
         if self.register_rollback is None:
             raise RuntimeError("No active rollback registration is available.")
         return self.register_rollback(action, description=description)
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactWriteRequest:
+    """Operation input passed to an operation materializer.
+
+    Args:
+        context: Mutable operation context shared with hooks.
+        source: Source description supplied for this operation.
+        target: Planned data artifact descriptor for the materializer to
+            materialise or enrich.
+        storage_plan: Planned storage decision for the target.
+    """
+
+    context: OperationContext
+    source: OperationSource
+    target: ArtifactDescriptor
+    storage_plan: StoragePlan
+
+    @property
+    def locator(self) -> ArtifactLocator:
+        """Return the planned target locator for path-oriented writers."""
+        if self.target.locator is None:
+            raise ValueError(f"artifact write target {self.target.id!r} has no locator")
+        return self.target.locator
 
 
 @runtime_checkable
@@ -642,7 +683,9 @@ __all__ = [
     "AfterCommitHook",
     "AfterValidateMetadataHook",
     "AfterRecordWriteHook",
+    "ArtifactMaterializer",
     "ArtifactWriter",
+    "ArtifactWriteRequest",
     "BeforeCommitHook",
     "BeforeValidateMetadataHook",
     "BeforeRecordWriteHook",

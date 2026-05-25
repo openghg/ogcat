@@ -285,8 +285,8 @@ PR #122 clarified an important ADR distinction. Directory-backed artifacts are
 not automatically collections. A managed ``.zarr`` directory added with
 ``add_file()`` is one dataset artifact whose representation is ``directory``.
 A managed directory of monthly ``.nc`` files is a collection only when a caller,
-writer, or plugin explicitly adds collection claims/facets such as member
-pattern, member format, and member suffixes.
+operation materializer, or plugin explicitly adds collection claims/facets such
+as member pattern, member format, and member suffixes.
 
 This keeps storage shape separate from logical dataset shape:
 
@@ -298,14 +298,49 @@ This keeps storage shape separate from logical dataset shape:
 - collection facets say which members participate and how a reader should
   combine them.
 
-## Writer Result Open Loop
+## Writer-Produced Facts
 
-Writers are the natural source of produced artifact claims/facets because they
-know what they materialized. This branch defines the schema, but it does not
-define the merge path from writer output into descriptors. Issue #117 should
-define that path, preserve existing ``None``-returning writers, and decide how
-writer results interact with ``OperationContext``, rollback, storage plans,
-audit metadata, and derived classification metadata.
+Writer capabilities are the natural source of produced artifact claims/facets
+because they know what they materialized. Issue #117 adds the merge path:
+writer capabilities return an ``ArtifactWriteResult`` and operation
+materializers wrap those capabilities or one-off functions inside the catalog
+operation lifecycle. The operation runner builds a planned ``data`` descriptor
+first, calls the materializer, and merges returned descriptor facts before
+staging the catalog record.
+
+The planned data descriptor has id ``data``, role ``data_artifact``, the planned
+locator, and state ``available``. A returned data descriptor may omit the
+locator; if it supplies one, it must equal the planned locator. A materializer
+result may also return auxiliary descriptors such as previews, manifests, or
+logs. If the result has only auxiliary descriptors, the planned data descriptor
+is kept. Duplicate artifact ids fail before commit, and only the ``data``
+descriptor may use role ``data_artifact``.
+
+Claims and facets merge by their envelope key:
+``(namespace, kind, name, version)``. Later writer-produced facts replace
+earlier facts with the same envelope deterministically. Relationship metadata
+merges shallowly with result keys winning. Result diagnostics and provenance are
+normalized to JSON-compatible metadata and copied only into the artifact-write
+audit event; durable/queryable provenance remains out of scope.
+
+This result model describes persisted artifact facts and catalog merge behavior.
+It does not define read handles, ``open_artifact()``, managed collection
+ergonomics, runtime pipe types such as ``str`` or ``xarray.Dataset``, or a
+pipeline value-adapter layer.
+
+Current ``source_kind`` and ``target_kind`` values are operation helper
+shortcuts, not the future dispatch vocabulary. Follow-up issue
+[#127](https://github.com/openghg/ogcat/issues/127) tracks replacing them with
+descriptor-based source/sink declarations. Source identity should migrate toward
+descriptors with claims/facets: for example, ``zip_file`` maps to
+``data_type=zip`` plus archive-member interface/facets, text input maps to
+``interface=text`` plus encoding facets, and local-file input maps to a path
+locator facet plus an appropriate representation claim. In-memory sources need
+runtime value/interface declarations so a future pipe/read-plan helper can
+adapt values between converters. ``target_kind`` only describes storage shape:
+``file`` maps to ``representation=file`` and ``directory`` maps to
+``representation=directory``. Collection-ness belongs in
+``interface=collection`` and collection facets, not in ``target_kind``.
 
 ## Relationship To Classification Metadata
 

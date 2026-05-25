@@ -4,7 +4,7 @@ The TinyDB-backed implementation uses compensating rollback actions. This is a
 unit-of-work helper, not a true database transaction or ACID boundary.
 
 ``UnitOfWork`` coordinates record writes with cleanup callbacks registered by
-artifact writers and hooks. Staged work starts in ``PLANNED`` state, moves to
+artifact materializers and hooks. Staged work starts in ``PLANNED`` state, moves to
 ``STAGED`` when a record or rollback action is registered, and becomes
 ``COMMITTED`` only after all catalog and artifact work has succeeded. If the
 operation exits early, rollback actions run in reverse order and failures are

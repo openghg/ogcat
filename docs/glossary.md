@@ -28,12 +28,12 @@ Managed file
 
 Reference record
 : A record added with `Catalog.add_artifact` whose artifact may be external,
-  already materialised, written by an artifact writer, or represented by an
-  opaque locator.
+  already materialised, written by an operation materializer, or represented by
+  an opaque locator.
 
 Metadata
 : JSON-compatible descriptive data attached to records. `user_metadata` comes
-  from callers, `derived_metadata` comes from hooks or writers, and
+  from callers, `derived_metadata` comes from hooks or materializers, and
   `naming_metadata` is used for storage template rendering.
 
 Schema
@@ -50,17 +50,27 @@ Plugin
   usually through `PluginRegistry`.
 
 Operation context
-: The mutable `OperationContext` object passed to hooks and artifact writers.
-  It carries source information, planned locators, metadata, warnings, and the
-  rollback registrar for the active operation.
+: The mutable `OperationContext` object passed to hooks and embedded in
+  `ArtifactWriteRequest` for operation materializers. It carries source
+  information, planned locators, metadata, warnings, and the rollback registrar
+  for the active operation.
 
-Artifact writer
-: Any object satisfying the `ArtifactWriter` protocol. Writers materialise
-  artifact data from an `OperationSource` into a target `ArtifactLocator`.
+Operation materializer
+: Any object satisfying the `ArtifactMaterializer` protocol. Materializers
+  prepare operation targets, register rollback, and wrap writer capabilities or
+  one-off functions from an `ArtifactWriteRequest`.
+
+Writer capability
+: A registered `ArtifactCapability` with kind `writer`. Writer capabilities
+  declare typed output behavior and return `ArtifactWriteResult` values with
+  produced descriptor facts; operation materializers wrap them when catalog
+  rollback, audit, and descriptor merge are needed.
 
 Operation source
-: The `OperationSource` description passed to artifact writers. It can carry a
-  local path, non-path descriptor, source metadata, or in-memory payload.
+: The `OperationSource` description passed to operation materializers. It can
+  carry a local path, non-path descriptor, source metadata, or in-memory
+  payload. New capability dispatch should prefer source artifact descriptor
+  claims/facets when available.
 
 Unit of work
 : The current best-effort transaction helper. It stages catalog changes,

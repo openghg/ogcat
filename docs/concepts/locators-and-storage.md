@@ -47,9 +47,9 @@ Use the three catalog add methods for different storage responsibilities:
   live under one collection root, such as a directory of monthly NetCDF files or
   a remote prefix. It records one artifact with collection classification
   metadata and does not scan, copy, move, or open member files.
-- ``Catalog.add_artifact(...)`` with a ``StoragePlan`` and an artifact writer is
-  for workflow outputs. ogcat plans and records the artifact, while the writer
-  performs the actual filesystem or storage operation.
+- ``Catalog.add_artifact(...)`` with a ``StoragePlan`` and an operation
+  materializer is for workflow outputs. ogcat plans and records the artifact,
+  while the materializer performs the actual filesystem or storage operation.
 
 ## Managed files
 
@@ -223,10 +223,10 @@ receives neither ``context.planned_locators`` nor ``context.storage_plan``.
 ``resolve_artifact_locator`` receives proposed locators in
 ``context.planned_locators`` and can return the locator that should be used for
 the artifact being added.  After that hook returns, ogcat builds the final
-``StoragePlan`` and exposes it to later hooks and artifact writers as
+``StoragePlan`` and exposes it to later hooks and operation materializers as
 ``context.storage_plan``.  The plan lets domain code materialise a generic
 artifact such as a directory of NetCDF files or a ``.zarr`` store while ogcat
-core only records the locator.  Artifact writers remain responsible for
+core only records the locator.  Operation materializers remain responsible for
 filesystem side effects and rollback registration.
 
 ## External references

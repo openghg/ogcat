@@ -9,6 +9,7 @@ import pytest
 
 from ogcat.artifact_claims import has_claim, has_facet
 from ogcat.bundled_plugins.stdlib_io import (
+    DEFAULT_TEXT_ENCODING,
     bytes_artifact_descriptor,
     delimited_table_artifact_descriptor,
     delimiter_from_descriptor,
@@ -21,7 +22,14 @@ from ogcat.bundled_plugins.stdlib_io import (
     text_artifact_descriptor,
 )
 from ogcat.capabilities import ArtifactCapability, CapabilityKind, CapabilityRegistry, MissingCapabilityError
-from ogcat.models import ArtifactDescriptor, ArtifactFacet, ArtifactLocator, DataTypeClaim, InterfaceClaim
+from ogcat.models import (
+    ArtifactDescriptor,
+    ArtifactFacet,
+    ArtifactLocator,
+    ArtifactWriteResult,
+    DataTypeClaim,
+    InterfaceClaim,
+)
 from ogcat.plugins import PluginRegistry
 
 
@@ -32,9 +40,11 @@ def test_bytes_reader_and_writer_examples_round_trip_bytes(tmp_path: Path) -> No
     registry = _registry()
 
     writer = _implementation(_select(registry, descriptor, operation="write", interface="bytes"))
-    result = writer.write(descriptor, b"abc\x00def")
+    write_result = writer.write(descriptor, b"abc\x00def")
+    result = write_result.artifact
     reader = _implementation(_select(registry, result, operation="read", interface="bytes"))
 
+    assert isinstance(write_result, ArtifactWriteResult)
     assert path.read_bytes() == b"abc\x00def"
     assert reader.read(result) == b"abc\x00def"
     assert has_facet(result, kind="locator", name="path", namespace="ogcat.stdlib")
@@ -48,9 +58,9 @@ def test_text_reader_and_writer_examples_use_encoding_facets(tmp_path: Path) -> 
     override_descriptor = text_artifact_descriptor(tmp_path / "override.txt", encoding="ascii")
 
     writer = _implementation(_select(registry, ascii_descriptor, operation="write", interface="text"))
-    ascii_result = writer.write(ascii_descriptor, "plain ascii")
-    utf8_result = writer.write(utf8_descriptor, "hello 🙂")
-    override_result = writer.write(override_descriptor, "hello 🙂", encoding="utf-8")
+    ascii_result = writer.write(ascii_descriptor, "plain ascii").artifact
+    utf8_result = writer.write(utf8_descriptor, "hello 🙂").artifact
+    override_result = writer.write(override_descriptor, "hello 🙂", encoding="utf-8").artifact
     reader = _implementation(_select(registry, utf8_result, operation="read", interface="text"))
 
     assert (tmp_path / "ascii.txt").read_bytes() == b"plain ascii"
@@ -74,9 +84,9 @@ def test_delimited_table_reader_and_writer_examples_support_csv_and_options(
     rows = [{"station": "mhd", "value": "410.2"}, {"station": "tac", "value": "419.5"}]
 
     writer = _implementation(_select(registry, csv_descriptor, operation="write", interface="table"))
-    csv_result = writer.write(csv_descriptor, rows)
-    pipe_result = writer.write(pipe_descriptor, rows, delimiter="|")
-    override_result = writer.write(override_descriptor, rows, delimiter="|")
+    csv_result = writer.write(csv_descriptor, rows).artifact
+    pipe_result = writer.write(pipe_descriptor, rows, delimiter="|").artifact
+    override_result = writer.write(override_descriptor, rows, delimiter="|").artifact
     reader = _implementation(_select(registry, csv_result, operation="read", interface="table"))
     pipe_reader = _implementation(_select(registry, pipe_result, operation="read", interface="table"))
     override_reader = _implementation(_select(registry, override_result, operation="read", interface="table"))
@@ -124,11 +134,50 @@ def test_json_reader_and_writer_examples_round_trip_documents(tmp_path: Path) ->
     document = {"name": "example", "values": [1, 2, 3], "unicode": "🙂"}
 
     writer = _implementation(_select(registry, descriptor, operation="write", interface="json"))
-    result = writer.write(descriptor, document)
+    result = writer.write(descriptor, document).artifact
     reader = _implementation(_select(registry, result, operation="read", interface="json"))
 
     assert reader.read(result) == document
     assert has_claim(result, kind="data_type", name="json", namespace="iana.media-types")
+
+
+def test_delimited_table_to_json_converter_composes_reader_and_writer(tmp_path: Path) -> None:
+    """A CSV table can be read through table claims and written as JSON."""
+    registry = _registry()
+    source = delimited_table_artifact_descriptor(tmp_path / "input.csv")
+    source_path = source.locator.as_path() if source.locator is not None else None
+    assert source_path is not None
+    source_path.write_text("station,value\nmhd,410.2\ntac,419.5\n", encoding="utf-8")
+    output = json_artifact_descriptor(tmp_path / "output.json", id="json-output")
+
+    converter = _implementation(
+        registry.select(
+            kind=CapabilityKind.CONVERTER,
+            name="delimited-table-to-json-converter",
+            descriptor=source,
+            input_claims=[InterfaceClaim("table")],
+            output_claims=[InterfaceClaim("json")],
+        )
+    )
+    source_reader = _implementation(_select(registry, source, operation="read", interface="table"))
+    json_writer = _implementation(_select(registry, output, operation="write", interface="json"))
+    json_document = converter.convert(source_reader.read(source))
+    write_result = json_writer.write(
+        output,
+        json_document,
+        encoding=encoding_from_descriptor(output),
+    )
+    result = write_result.artifact
+    reader = _implementation(_select(registry, result, operation="read", interface="json"))
+
+    assert isinstance(write_result, ArtifactWriteResult)
+    assert reader.read(result) == [
+        {"station": "mhd", "value": "410.2"},
+        {"station": "tac", "value": "419.5"},
+    ]
+    assert has_claim(result, kind="data_type", name="json", namespace="iana.media-types")
+    assert has_claim(result, kind="interface", name="json")
+    assert has_facet(result, kind="locator", name="path", namespace="ogcat.stdlib")
 
 
 def test_emoticon_to_emoji_converter_writes_utf8_selectable_text(tmp_path: Path) -> None:
@@ -149,13 +198,15 @@ def test_emoticon_to_emoji_converter_writes_utf8_selectable_text(tmp_path: Path)
             name="emoticon-to-emoji-text-converter",
         )
     )
-    result = converter.convert(source, output)
+    source_reader = _implementation(_select(registry, source, operation="read", interface="text"))
+    writer = _implementation(_select(registry, output, operation="write", interface="text"))
+    converted = converter.convert(source_reader.read(source))
+    result = writer.write(output, converted, encoding=DEFAULT_TEXT_ENCODING).artifact
     reader = _implementation(_select(registry, result, operation="read", interface="text"))
 
     assert (tmp_path / "output.txt").read_text(encoding="utf-8") == "done 🙂"
     assert reader.read(result) == "done 🙂"
     assert result.relationship["catalogued"] is False
-    assert result.relationship["generated_by"] == "ogcat.stdlib.emoticon_to_emoji"
     assert has_claim(result, kind="interface", name="text")
     assert has_facet(result, kind="encoding", name="charset", namespace="ogcat.stdlib")
 
@@ -178,13 +229,40 @@ def test_pig_latin_converter_writes_utf8_selectable_text(tmp_path: Path) -> None
             name="pig-latin-text-converter",
         )
     )
-    result = converter.convert(source, output)
+    source_reader = _implementation(_select(registry, source, operation="read", interface="text"))
+    writer = _implementation(_select(registry, output, operation="write", interface="text"))
+    converted = converter.convert(source_reader.read(source))
+    result = writer.write(output, converted, encoding=DEFAULT_TEXT_ENCODING).artifact
     reader = _implementation(_select(registry, result, operation="read", interface="text"))
 
     assert reader.read(result) == "ellohay appleway skyay"
-    assert result.relationship["generated_by"] == "ogcat.stdlib.pig_latin"
     assert has_claim(result, kind="interface", name="text")
     assert has_facet(result, kind="encoding", name="charset", namespace="ogcat.stdlib")
+
+
+def test_text_converters_return_composable_runtime_values() -> None:
+    """Text converters should compose before a writer sinks the final value."""
+    registry = _registry()
+    emoji_converter = _implementation(
+        registry.select(
+            kind=CapabilityKind.CONVERTER,
+            name="emoticon-to-emoji-text-converter",
+            input_claims=[InterfaceClaim("text")],
+            output_claims=[InterfaceClaim("text")],
+        )
+    )
+    pig_latin_converter = _implementation(
+        registry.select(
+            kind=CapabilityKind.CONVERTER,
+            name="pig-latin-text-converter",
+            input_claims=[InterfaceClaim("text")],
+            output_claims=[InterfaceClaim("text")],
+        )
+    )
+
+    converted = pig_latin_converter.convert(emoji_converter.convert("hello :)"))
+
+    assert converted == "ellohay 🙂"
 
 
 def test_pig_latin_can_filter_csv_text_but_not_claim_table_output(tmp_path: Path) -> None:
@@ -205,7 +283,10 @@ def test_pig_latin_can_filter_csv_text_but_not_claim_table_output(tmp_path: Path
             name="pig-latin-text-converter",
         )
     )
-    result = converter.convert(source, output)
+    source_reader = _implementation(_select(registry, source, operation="read", interface="text"))
+    writer = _implementation(_select(registry, output, operation="write", interface="text"))
+    converted = converter.convert(source_reader.read(source))
+    result = writer.write(output, converted, encoding=DEFAULT_TEXT_ENCODING).artifact
     reader = _implementation(_select(registry, result, operation="read", interface="text"))
 
     assert reader.read(result) == "amenay,aluevay\nellohay,orldway\n"
@@ -320,7 +401,7 @@ def test_temporary_artifact_descriptor_can_be_used_for_selection(tmp_path: Path)
 
     selected = _select(registry, descriptor, operation="write", interface="text")
     writer = _implementation(selected)
-    result = writer.write(descriptor, "scratch")
+    result = writer.write(descriptor, "scratch").artifact
 
     assert descriptor.relationship == {"catalogued": False, "temporary": True}
     result_path = result.locator.as_path() if result.locator is not None else None

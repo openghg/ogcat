@@ -1,8 +1,8 @@
 """Artifact capability registration and lookup.
 
-The capability registry is the #119 dispatch surface for readers, writers, and
-converters. It stores typed declarations and optional opaque implementation
-objects, then answers discovery and selection requests from
+The capability registry is the #119 dispatch surface for readers, writer
+capabilities, and converters. It stores typed declarations and optional opaque
+implementation objects, then answers discovery and selection requests from
 ``ArtifactDescriptor`` claims and facets. Core does not invoke implementations
 or dispatch by ``CatalogRecord.record_type``.
 

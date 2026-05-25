@@ -22,12 +22,21 @@ from ogcat.capabilities import (
 )
 from ogcat.catalog import Catalog
 from ogcat.classification import classify_artifact, collection_classification_metadata
-from ogcat.hooks import ArtifactWriter, HookManager, HookWarning, OperationContext, OperationSource
+from ogcat.hooks import (
+    ArtifactMaterializer,
+    ArtifactWriter,
+    ArtifactWriteRequest,
+    HookManager,
+    HookWarning,
+    OperationContext,
+    OperationSource,
+)
 from ogcat.models import (
     ArtifactClaim,
     ArtifactDescriptor,
     ArtifactFacet,
     ArtifactLocator,
+    ArtifactWriteResult,
     CatalogRecord,
     DataTypeClaim,
     Facet,
@@ -90,6 +99,9 @@ __all__ = [
     "ArtifactClaim",
     "ArtifactDescriptor",
     "ArtifactFacet",
+    "ArtifactMaterializer",
+    "ArtifactWriteRequest",
+    "ArtifactWriteResult",
     "ArtifactWriter",
     "AuditEvent",
     "AuditSink",

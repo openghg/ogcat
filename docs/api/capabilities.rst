@@ -3,11 +3,13 @@ Capabilities
 
 .. module:: ogcat.capabilities
 
-The capability API is the public surface for #119 reader, writer, and converter
-registration and lookup. It is a registry layer: it records typed
+The capability API is the public surface for #119 reader, writer capability,
+and converter registration and lookup. It is a registry layer: it records typed
 declarations and returns matching declarations with optional opaque
-implementation objects. Public read handles, ``open_artifact()``, and catalog
-writer-result merge are separate follow-up APIs.
+implementation objects. Public read handles, ``open_artifact()``, and a full
+pipeline executor are separate follow-up APIs. Writer capabilities return
+``ArtifactWriteResult`` values; catalog operations merge those results through
+operation materializers.
 
 Registry
 --------
