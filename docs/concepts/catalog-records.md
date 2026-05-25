@@ -20,6 +20,8 @@ continues to work for ordinary single-artifact records.
 | ``locator`` | Compatibility shortcut to the data artifact locator (see [Locators and storage](locators-and-storage.md)). |
 | ``artifacts`` | Inline descriptors for the data artifact plus optional auxiliary artifacts, view links, manifests, previews, logs, or derived artifacts. |
 | ``storage_mode`` | How the artifact was stored, e.g. ``copy``, ``move``, or ``external``. |
+| ``status`` | Record lifecycle status. ``active`` records are returned by normal search; ``deleted`` records are tombstones. |
+| ``lifecycle_metadata`` | Internal lifecycle metadata such as delete/restore operation ids and timestamps. |
 | ``original_filename`` | Source filename at ingest time. |
 | ``suffixes`` | File suffix list derived from the source path. |
 | ``time_added`` | ISO 8601 timestamp when the record was created. |
@@ -168,6 +170,13 @@ single NetCDF files, and grouped NetCDF/HDF5 files.
 
 ## Searching across namespaces
 
+Normal search returns only active records. ``Catalog.delete(id)`` tombstones a
+record by setting its status to ``deleted`` while keeping locators and artifact
+descriptors attached for audit and restore workflows. Pass
+``include_deleted=True`` to include tombstones in search results, or
+``only_deleted=True`` to inspect just tombstoned records. Direct id lookup with
+``Catalog.get(id)`` still returns tombstoned records.
+
 When you search with an unqualified field name such as ``species``, ogcat
 looks in this order:
 
@@ -199,4 +208,19 @@ print(record.record_type)          # "managed_file"
 print(record.user_metadata)        # {"species": "CO2", ...}
 print(record.path())               # stored Path
 print(record.artifacts[0].role)    # "data_artifact"
+```
+
+Trash-style lifecycle operations are available from the catalog facade:
+
+```python
+deleted = catalog.delete(record.id, reason="superseded")
+assert deleted.status == "deleted"
+assert catalog.search(where={"species": "CO2"}) == []
+assert catalog.get(record.id) is not None
+
+restored = catalog.restore(record.id)
+assert restored.status == "active"
+
+catalog.delete(record.id)
+catalog.purge(record.id)  # permanent; removes managed catalog-local artifacts first
 ```

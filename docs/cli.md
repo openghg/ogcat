@@ -74,6 +74,8 @@ ogcat search --catalog <root> [FILTER ...] [OPTIONS]
 | ``--format table\|plain\|csv\|tsv\|pipe`` | Table format |
 | ``--limit N`` | Cap on displayed results |
 | ``--all`` | Show every match (no cap) |
+| ``--include-deleted`` | Include tombstoned records |
+| ``--only-deleted`` | Show only tombstoned records |
 
 **Compatibility flags** (also available):
 ``--where``, ``--contains``, ``--match``, ``--regex``, ``--exists``, ``--missing``, ``--ignore-case``
@@ -94,12 +96,42 @@ Print a single record.
 ogcat show <id> --catalog <root>
 ```
 
+``show`` resolves records by id and can inspect tombstoned records.
+
 ### ``ogcat path``
 
 Print the stored path of a record.
 
 ```
 ogcat path <id> --catalog <root>
+```
+
+### ``ogcat delete``
+
+Tombstone a record. Tombstoned records are hidden from normal search but remain
+inspectable by id and can be restored or purged.
+
+```
+ogcat delete <id> --catalog <root> [--reason TEXT] [--json]
+```
+
+### ``ogcat restore``
+
+Restore a tombstoned record to normal search visibility.
+
+```
+ogcat restore <id> --catalog <root> [--reason TEXT] [--json]
+```
+
+### ``ogcat purge``
+
+Permanently remove a tombstoned record and any managed catalog-local
+path-backed artifacts. External references and user-owned paths are skipped and
+audited. Purging an active record requires ``--force``. The command always
+requires ``--yes`` because the operation is irreversible.
+
+```
+ogcat purge <id> --catalog <root> --yes [--force] [--json]
 ```
 
 ### ``ogcat info``

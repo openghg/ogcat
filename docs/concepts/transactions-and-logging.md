@@ -25,9 +25,12 @@ operation ran, which user ran it, which record was touched, and where a failure
 occurred.
 
 Add operations emit lifecycle events for operation start, validation, storage
-or record writes, commit, failure, and rollback. Events include an
-``operation_id``; CLI add failures include that id in the user-facing error
-message when available:
+or record writes, commit, failure, and rollback. Delete and restore operations
+emit the same operation-start, lifecycle, commit, failure, and rollback events.
+Purge operations additionally emit one ``purge_artifact`` event for each
+managed artifact removed or skipped, then hard-delete the record after artifact
+cleanup succeeds. Events include an ``operation_id``; CLI operation failures
+include that id in the user-facing error message when available:
 
 ```bash
 ogcat logs --catalog ./catalog --operation OPERATION_ID --json
@@ -44,6 +47,13 @@ redacted when values are included in audit details.
 
 Rollback is best-effort.  Each rollback action is tried in turn; if one
 fails, the remaining actions still run and the original error is preserved.
+
+``Catalog.delete()`` and ``Catalog.restore()`` update record lifecycle state
+through the same unit-of-work rollback model used by metadata updates, so an
+uncommitted caller-owned transaction restores the previous record state.
+``Catalog.purge()`` is permanent and best-effort: it removes only managed
+catalog-local path-backed artifacts through storage adapters, audits skipped
+external or user-owned locators, and hard-deletes the repository record last.
 
 You can register rollback actions from within a hook:
 

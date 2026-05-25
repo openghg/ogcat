@@ -464,6 +464,14 @@ def search(
         bool,
         typer.Option("--ignore-case", help="Case-insensitive matching."),
     ] = False,
+    include_deleted: Annotated[
+        bool,
+        typer.Option("--include-deleted", help="Include tombstoned records in results."),
+    ] = False,
+    only_deleted: Annotated[
+        bool,
+        typer.Option("--only-deleted", help="Show only tombstoned records."),
+    ] = False,
     json_mode: Annotated[
         bool,
         typer.Option(
@@ -529,6 +537,8 @@ def search(
     results = active_catalog.search(
         query=query,
         ignore_case=ignore_case,
+        include_deleted=include_deleted,
+        only_deleted=only_deleted,
         as_record_set=False,
     )
 
@@ -616,6 +626,8 @@ def show(
     table.add_row("stored path", str(record.stored_abspath or ""))
     table.add_row("relative path", str(record.stored_relpath or ""))
     table.add_row("storage mode", str(record.storage_mode or ""))
+    table.add_row("status", record.status)
+    table.add_row("lifecycle metadata", json.dumps(record.lifecycle_metadata, sort_keys=True))
     table.add_row("time added", record.time_added)
     table.add_row("original path", str(record.original_path or ""))
     table.add_row("original filename", str(record.original_filename or ""))
@@ -624,6 +636,85 @@ def show(
     table.add_row("derived metadata", json.dumps(record.derived_metadata, sort_keys=True))
     table.add_row("naming metadata", json.dumps(record.naming_metadata, sort_keys=True))
     console.print(table)
+
+
+@app.command("delete")
+def delete_record(
+    record_id: Annotated[str, typer.Argument(help="Record id.")],
+    catalog: Annotated[Path | None, typer.Option("--catalog", help="Catalog root.")] = None,
+    reason: Annotated[str | None, typer.Option("--reason", help="Reason to store in audit metadata.")] = None,
+    json_mode: Annotated[
+        bool,
+        typer.Option("--json", help="Print the tombstoned record as JSON."),
+    ] = False,
+) -> None:
+    """Tombstone a record so default search hides it."""
+    active_catalog = _open_catalog_or_fail(catalog)
+    try:
+        record = active_catalog.delete(record_id, reason=reason)
+    except (KeyError, ValueError) as exc:
+        _fail(_format_exception_message(exc))
+
+    if json_mode:
+        _print_json(record.to_dict())
+        return
+    console.print(f"Deleted {record.id}: tombstoned")
+
+
+@app.command("restore")
+def restore_record(
+    record_id: Annotated[str, typer.Argument(help="Record id.")],
+    catalog: Annotated[Path | None, typer.Option("--catalog", help="Catalog root.")] = None,
+    reason: Annotated[str | None, typer.Option("--reason", help="Reason to store in audit metadata.")] = None,
+    json_mode: Annotated[
+        bool,
+        typer.Option("--json", help="Print the restored record as JSON."),
+    ] = False,
+) -> None:
+    """Restore a tombstoned record to default search visibility."""
+    active_catalog = _open_catalog_or_fail(catalog)
+    try:
+        record = active_catalog.restore(record_id, reason=reason)
+    except (KeyError, ValueError) as exc:
+        _fail(_format_exception_message(exc))
+
+    if json_mode:
+        _print_json(record.to_dict())
+        return
+    console.print(f"Restored {record.id}: active")
+
+
+@app.command("purge")
+def purge_record(
+    record_id: Annotated[str, typer.Argument(help="Record id.")],
+    catalog: Annotated[Path | None, typer.Option("--catalog", help="Catalog root.")] = None,
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", help="Confirm permanent purge without an interactive prompt."),
+    ] = False,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Allow purging an active record."),
+    ] = False,
+    json_mode: Annotated[
+        bool,
+        typer.Option("--json", help="Print a JSON purge summary."),
+    ] = False,
+) -> None:
+    """Permanently remove a record and managed catalog-local artifacts."""
+    if not yes:
+        _fail("Purge is permanent. Pass --yes to confirm.", code=2)
+    active_catalog = _open_catalog_or_fail(catalog)
+    try:
+        active_catalog.purge(record_id, force=force)
+    except (KeyError, ValueError) as exc:
+        _fail(_format_exception_message(exc))
+
+    payload = {"id": record_id, "purged": True}
+    if json_mode:
+        _print_json(payload)
+        return
+    console.print(f"Purged {record_id}")
 
 
 @app.command()

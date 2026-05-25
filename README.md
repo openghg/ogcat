@@ -251,6 +251,18 @@ uv run ogcat search --catalog ./example-catalog --where species=CO2 --fields id,
 uv run ogcat search --catalog ./example-catalog --where species=CO2 --all
 ```
 
+Delete records with trash-style semantics. ``delete`` tombstones a record and
+hides it from normal search; ``restore`` makes it active again; ``purge``
+permanently removes a tombstoned record after removing managed catalog-local
+artifacts.
+
+```bash
+uv run ogcat delete 1 --catalog ./example-catalog --reason superseded
+uv run ogcat search --catalog ./example-catalog --only-deleted --ids
+uv run ogcat restore 1 --catalog ./example-catalog
+uv run ogcat purge 1 --catalog ./example-catalog --yes
+```
+
 Show a record or print its stored path:
 
 ```bash

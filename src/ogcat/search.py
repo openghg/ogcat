@@ -21,6 +21,8 @@ _RESERVED_FIELDS = {
     "stored_abspath",
     "stored_relpath",
     "storage_mode",
+    "status",
+    "lifecycle_metadata",
     "time_added",
     "original_path",
     "original_filename",

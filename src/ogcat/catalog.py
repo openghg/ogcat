@@ -40,6 +40,8 @@ from ogcat.operation_runner import (
     AddOperationRunner,
     OperationRunner,
     OperationServices,
+    RecordLifecycleOperationRequest,
+    RecordLifecycleOperationRunner,
 )
 from ogcat.plugins import PluginRegistry
 from ogcat.record_set import CatalogRecordSet
@@ -837,6 +839,8 @@ class Catalog:
         exists: Sequence[str] | None = None,
         missing: Sequence[str] | None = None,
         ignore_case: bool = False,
+        include_deleted: bool = False,
+        only_deleted: bool = False,
         as_record_set: Literal[True] = True,
     ) -> CatalogRecordSet: ...
 
@@ -852,6 +856,8 @@ class Catalog:
         exists: Sequence[str] | None = None,
         missing: Sequence[str] | None = None,
         ignore_case: bool = False,
+        include_deleted: bool = False,
+        only_deleted: bool = False,
         as_record_set: Literal[False],
     ) -> list[CatalogRecord]: ...
 
@@ -866,6 +872,8 @@ class Catalog:
         exists: Sequence[str] | None = None,
         missing: Sequence[str] | None = None,
         ignore_case: bool = False,
+        include_deleted: bool = False,
+        only_deleted: bool = False,
         as_record_set: bool = True,
     ) -> list[CatalogRecord] | CatalogRecordSet:
         """Search catalog records using backend-neutral query semantics.
@@ -879,6 +887,8 @@ class Catalog:
             exists: Fields that must be present.
             missing: Fields that must be absent.
             ignore_case: Whether string comparisons should be case-insensitive.
+            include_deleted: Include tombstoned records alongside active records.
+            only_deleted: Return only tombstoned records.
             as_record_set: Return a ``CatalogRecordSet``. Pass ``False`` for a list.
 
         Returns:
@@ -895,6 +905,11 @@ class Catalog:
             ignore_case=ignore_case,
             resolution_order=self.spec.field_resolution_order,
         )
+        results = _filter_records_by_status(
+            results,
+            include_deleted=include_deleted,
+            only_deleted=only_deleted,
+        )
         if as_record_set:
             return self.record_set(results)
         return results
@@ -910,6 +925,8 @@ class Catalog:
         exists: Sequence[str] | None = None,
         missing: Sequence[str] | None = None,
         ignore_case: bool = False,
+        include_deleted: bool = False,
+        only_deleted: bool = False,
         allow_many: bool = False,
     ) -> CatalogRecord:
         """Return one matching record, raising clear errors for ambiguous searches."""
@@ -922,6 +939,8 @@ class Catalog:
             exists=exists,
             missing=missing,
             ignore_case=ignore_case,
+            include_deleted=include_deleted,
+            only_deleted=only_deleted,
         )
         if not records:
             raise ValueError("get_one found no records matching the search filters.")
@@ -952,12 +971,19 @@ class Catalog:
             default_display_fields=self.spec.get_schema().display_fields,
         )
 
-    def describe(self) -> dict[str, object]:
+    def describe(self, *, include_deleted: bool = False) -> dict[str, object]:
         """Return a serialisable summary of catalog configuration and contents."""
         db_path = self.root / self.spec.db_path
         files_root = self.root / self.spec.files_root
         objects_root = self.root / self.spec.objects_root
         default_schema = self.spec.get_schema()
+        all_records = self.repository.all()
+        visible_records = _filter_records_by_status(
+            all_records,
+            include_deleted=include_deleted,
+            only_deleted=False,
+        )
+        deleted_count = sum(1 for record in all_records if _record_is_deleted(record))
         return {
             "catalog_name": self.spec.catalog_name,
             "root_path": str(self.root),
@@ -969,7 +995,8 @@ class Catalog:
             "directory_template": default_schema.directory_template,
             "filename_template": default_schema.filename_template,
             "field_resolution_order": list(self.spec.field_resolution_order),
-            "record_count": len(self.repository.all()),
+            "record_count": len(visible_records),
+            "deleted_record_count": deleted_count,
             "has_metadata_fields": self._has_metadata_fields(),
             "record_schemas": self.list_record_schemas(),
         }
@@ -979,13 +1006,25 @@ class Catalog:
         schema = self._select_schema(record_type, require_known=record_type is not None)
         return [field_description.to_dict() for field_description in schema.metadata_fields]
 
-    def list_record_fields(self) -> list[str]:
+    def list_record_fields(self, *, include_deleted: bool = False) -> list[str]:
         """Return discoverable field paths present in stored records."""
-        return self.record_set(self.repository.all()).field_paths()
+        return self.record_set(
+            _filter_records_by_status(
+                self.repository.all(),
+                include_deleted=include_deleted,
+                only_deleted=False,
+            )
+        ).field_paths()
 
-    def unique_values(self, field: str) -> list[JsonValue]:
+    def unique_values(self, field: str, *, include_deleted: bool = False) -> list[JsonValue]:
         """Return unique scalar values present for a field across stored records."""
-        return self.record_set(self.repository.all()).unique_values(field)
+        return self.record_set(
+            _filter_records_by_status(
+                self.repository.all(),
+                include_deleted=include_deleted,
+                only_deleted=False,
+            )
+        ).unique_values(field)
 
     def get_schema(self, record_type: str | None = None) -> dict[str, object]:
         """Return a serialisable schema description."""
@@ -1005,6 +1044,110 @@ class Catalog:
         if record is None:
             return None
         return record.path()
+
+    def delete(
+        self,
+        record_id: object,
+        *,
+        reason: str | None = None,
+        transaction: UnitOfWork | None = None,
+    ) -> CatalogRecord:
+        """Tombstone a record so it is hidden from normal search results.
+
+        The record, artifact descriptors, and locators remain stored so the
+        deletion can be audited, inspected, restored, or purged later.
+
+        Args:
+            record_id: Existing record id.
+            reason: Optional human-readable deletion reason.
+            transaction: Optional caller-owned transaction. When supplied, the
+                previous record version is restored if the transaction rolls
+                back.
+
+        Returns:
+            Tombstoned catalog record.
+
+        Raises:
+            KeyError: If the record id does not exist.
+            ValueError: If the record is already deleted or the transaction
+                belongs to another repository.
+        """
+        application = self._application()
+        if transaction is not None:
+            self._validate_transaction(transaction)
+            return application.delete(
+                record_id=record_id,
+                reason=reason,
+                transaction=transaction,
+                commit=False,
+            )
+        with self.transaction() as unit_of_work:
+            return application.delete(
+                record_id=record_id,
+                reason=reason,
+                transaction=unit_of_work,
+                commit=True,
+            )
+
+    def restore(
+        self,
+        record_id: object,
+        *,
+        reason: str | None = None,
+        transaction: UnitOfWork | None = None,
+    ) -> CatalogRecord:
+        """Restore a tombstoned record to normal search visibility.
+
+        Args:
+            record_id: Existing record id.
+            reason: Optional human-readable restore reason.
+            transaction: Optional caller-owned transaction. When supplied, the
+                previous record version is restored if the transaction rolls
+                back.
+
+        Returns:
+            Restored catalog record.
+        """
+        application = self._application()
+        if transaction is not None:
+            self._validate_transaction(transaction)
+            return application.restore(
+                record_id=record_id,
+                reason=reason,
+                transaction=transaction,
+                commit=False,
+            )
+        with self.transaction() as unit_of_work:
+            return application.restore(
+                record_id=record_id,
+                reason=reason,
+                transaction=unit_of_work,
+                commit=True,
+            )
+
+    def purge(self, record_id: object, *, force: bool = False) -> None:
+        """Permanently remove a record and its managed catalog-local artifacts.
+
+        Purge is irreversible. It only removes path-backed artifacts under this
+        catalog's managed files or objects roots; external or user-owned
+        locators are skipped and audited.
+
+        Args:
+            record_id: Existing record id.
+            force: Allow purging an active record. By default, records must be
+                tombstoned with :meth:`delete` first.
+
+        Raises:
+            KeyError: If the record id does not exist.
+            ValueError: If the record is active and ``force`` is false.
+        """
+        with self.transaction() as unit_of_work:
+            self._application().purge(
+                record_id=record_id,
+                force=force,
+                transaction=unit_of_work,
+                commit=True,
+            )
 
     def update_metadata(
         self,
@@ -1358,6 +1501,16 @@ class Catalog:
         """Build the runner used for one internal add operation."""
         return AddOperationRunner(dependencies=self._operation_runner_dependencies(), request=request)
 
+    def _build_record_lifecycle_operation_runner(
+        self,
+        request: RecordLifecycleOperationRequest,
+    ) -> OperationRunner:
+        """Build the runner used for one record lifecycle operation."""
+        return RecordLifecycleOperationRunner(
+            dependencies=self._operation_runner_dependencies(),
+            request=request,
+        )
+
     def _operation_runner_dependencies(self) -> OperationServices:
         """Build catalog-owned dependencies for an internal operation runner."""
         return OperationServices(
@@ -1449,6 +1602,11 @@ class Catalog:
             raise KeyError(f"Record not found: {resolved_record_id}")
         return record
 
+    def _validate_transaction(self, transaction: UnitOfWork) -> None:
+        """Raise when a caller-owned transaction is for another repository."""
+        if transaction.repository is not self.repository:
+            raise ValueError("Transaction is bound to a different catalog repository.")
+
     def _stage_or_commit_record_update(
         self,
         record: CatalogRecord,
@@ -1512,6 +1670,25 @@ def _utc_timestamp() -> str:
     """Return a stable UTC timestamp string for record creation."""
     timestamp = datetime.now(tz=UTC).replace(microsecond=0).isoformat()
     return timestamp.replace("+00:00", "Z")
+
+
+def _record_is_deleted(record: CatalogRecord) -> bool:
+    """Return whether a record is tombstoned."""
+    return record.status == "deleted"
+
+
+def _filter_records_by_status(
+    records: Sequence[CatalogRecord],
+    *,
+    include_deleted: bool,
+    only_deleted: bool,
+) -> list[CatalogRecord]:
+    """Return records after applying catalog-level lifecycle visibility rules."""
+    if only_deleted:
+        return [record for record in records if _record_is_deleted(record)]
+    if include_deleted:
+        return list(records)
+    return [record for record in records if not _record_is_deleted(record)]
 
 
 def _coerce_primary_location(value: object) -> PrimaryLocation:
