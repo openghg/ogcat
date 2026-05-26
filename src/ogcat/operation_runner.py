@@ -16,14 +16,15 @@ separately testable and replaceable by future sibling runners.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from ogcat.audit import add_operation_note
 from ogcat.classification import CLASSIFICATION_METADATA_KEY, classify_artifact
+from ogcat.exceptions import PurgeIncompleteError
 from ogcat.hooks import (
     HOOK_PHASES,
     HookDispatcher,
@@ -60,6 +61,7 @@ ArtifactLocatorFactory = Callable[[OperationContext], ArtifactLocator]
 StoragePlanFactory = Callable[[OperationContext, ArtifactLocator], StoragePlan | None]
 DerivedMetadataCollector = Callable[[OperationContext, ArtifactLocator], None]
 _PhaseSetter = Callable[[str], None]
+_PurgeArtifactAction = Literal["removed", "skipped", "failed"]
 
 
 class OperationAuditEmitter(Protocol):
@@ -166,6 +168,25 @@ class RecordLifecycleOperationRequest:
     reason: str | None = None
     force: bool = False
     managed_roots: tuple[Path, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _PurgeArtifactResult:
+    """Outcome of one artifact purge attempt."""
+
+    artifact_id: str
+    artifact_role: str
+    action: _PurgeArtifactAction
+    target_kind: TargetKind | None = None
+    reason: str | None = None
+    exception: Exception | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _PurgeOutcome:
+    """Aggregate purge outcome returned before commit/raise handling."""
+
+    incomplete_error: PurgeIncompleteError | None = None
 
 
 @dataclass(slots=True)
@@ -639,6 +660,8 @@ class RecordLifecycleOperationRunner(OperationRunner):
             },
             locator=self.request.record.locator,
         )
+        result: CatalogRecord | None = None
+        incomplete_purge_error: PurgeIncompleteError | None = None
         current_phase = "operation-started"
         try:
             if self.request.operation_type == "delete":
@@ -649,16 +672,19 @@ class RecordLifecycleOperationRunner(OperationRunner):
                 result = self._restore(context)
             elif self.request.operation_type == "purge":
                 current_phase = "purge"
-                self._purge(context)
-                result = None
+                purge_outcome = self._purge(context)
+                incomplete_purge_error = purge_outcome.incomplete_error
             else:
                 raise ValueError(f"Unsupported record lifecycle operation: {self.request.operation_type}")
             current_phase = "commit"
             self._commit_if_owned(context)
-            return result
         except Exception as exc:
             self._handle_error(error=exc, context=context, current_phase=current_phase)
             raise
+        if incomplete_purge_error is not None:
+            add_operation_note(incomplete_purge_error, context.operation_id)
+            raise incomplete_purge_error
+        return result
 
     def _build_context(self) -> OperationContext:
         """Build the mutable context used for lifecycle audit events."""
@@ -742,16 +768,41 @@ class RecordLifecycleOperationRunner(OperationRunner):
         )
         return persisted
 
-    def _purge(self, context: OperationContext) -> None:
-        """Remove managed artifacts, then hard-delete the record."""
+    def _purge(self, context: OperationContext) -> _PurgeOutcome:
+        """Remove managed artifacts, then hard-delete the record on full success."""
         record = self.request.record
         if record.status != "deleted" and not self.request.force:
             raise ValueError(f"Record must be deleted before purge: {record.id}")
-        for artifact in record.artifacts:
-            self._purge_artifact(context, artifact)
         if record.id is None:
             raise ValueError("Cannot purge a record without an id.")
-        self.request.transaction.repository.delete(record.id)
+        results: list[_PurgeArtifactResult] = []
+        for artifact in record.artifacts:
+            try:
+                results.append(self._purge_artifact(context, artifact))
+            except Exception as exc:
+                results.append(self._emit_artifact_failure(context, artifact, exception=exc))
+
+        failed_results = _failed_purge_artifact_results(results)
+        if failed_results:
+            return _PurgeOutcome(
+                incomplete_error=self._retain_incomplete_purge(
+                    context,
+                    results=results,
+                    repository_error=None,
+                )
+            )
+
+        try:
+            self.request.transaction.repository.delete(record.id)
+        except Exception as exc:
+            return _PurgeOutcome(
+                incomplete_error=self._retain_incomplete_purge(
+                    context,
+                    results=results,
+                    repository_error=exc,
+                )
+            )
+
         self.dependencies.emit_operation_audit(
             context,
             event_type="purge",
@@ -760,30 +811,48 @@ class RecordLifecycleOperationRunner(OperationRunner):
                 "record_id": record.id,
                 "force": self.request.force,
                 "artifact_count": len(record.artifacts),
+                "purge_counts": _purge_counts(results),
                 "artifact_summaries": _artifact_audit_summaries(record),
             },
             locator=record.locator,
         )
+        return _PurgeOutcome()
 
-    def _purge_artifact(self, context: OperationContext, artifact: ArtifactDescriptor) -> None:
+    def _purge_artifact(
+        self,
+        context: OperationContext,
+        artifact: ArtifactDescriptor,
+    ) -> _PurgeArtifactResult:
         """Purge one managed artifact or audit why it was skipped."""
         if self.request.record.storage_mode == "reference":
-            self._emit_artifact_skip(context, artifact, reason="record storage mode is reference")
-            return
+            return self._emit_artifact_skip(context, artifact, reason="record storage mode is reference")
         locator = artifact.locator
         if locator is None:
-            self._emit_artifact_skip(context, artifact, reason="missing locator")
-            return
+            return self._emit_artifact_skip(context, artifact, reason="missing locator")
         target_path = locator.as_path()
         if target_path is None:
-            self._emit_artifact_skip(context, artifact, reason=f"unsupported locator kind: {locator.kind}")
-            return
+            return self._emit_artifact_skip(
+                context,
+                artifact,
+                reason=f"unsupported locator kind: {locator.kind}",
+            )
         if not _is_managed_path(target_path, managed_roots=self.request.managed_roots):
-            self._emit_artifact_skip(context, artifact, reason="locator is outside managed catalog roots")
-            return
+            return self._emit_artifact_skip(
+                context,
+                artifact,
+                reason="locator is outside managed catalog roots",
+            )
 
         target_kind = _target_kind_for_existing_path(target_path)
-        remove_target(locator, target_kind=target_kind)
+        try:
+            remove_target(locator, target_kind=target_kind)
+        except Exception as exc:
+            return self._emit_artifact_failure(
+                context,
+                artifact,
+                exception=exc,
+                target_kind=target_kind,
+            )
         self.dependencies.emit_operation_audit(
             context,
             event_type="purge_artifact",
@@ -796,6 +865,12 @@ class RecordLifecycleOperationRunner(OperationRunner):
             },
             locator=locator,
         )
+        return _PurgeArtifactResult(
+            artifact_id=artifact.id,
+            artifact_role=artifact.role,
+            action="removed",
+            target_kind=target_kind,
+        )
 
     def _emit_artifact_skip(
         self,
@@ -803,7 +878,7 @@ class RecordLifecycleOperationRunner(OperationRunner):
         artifact: ArtifactDescriptor,
         *,
         reason: str,
-    ) -> None:
+    ) -> _PurgeArtifactResult:
         """Audit that one artifact was intentionally not purged."""
         self.dependencies.emit_operation_audit(
             context,
@@ -817,6 +892,89 @@ class RecordLifecycleOperationRunner(OperationRunner):
             },
             locator=artifact.locator,
         )
+        return _PurgeArtifactResult(
+            artifact_id=artifact.id,
+            artifact_role=artifact.role,
+            action="skipped",
+            reason=reason,
+        )
+
+    def _emit_artifact_failure(
+        self,
+        context: OperationContext,
+        artifact: ArtifactDescriptor,
+        *,
+        exception: Exception,
+        target_kind: TargetKind | None = None,
+    ) -> _PurgeArtifactResult:
+        """Audit that one managed artifact could not be purged."""
+        self.dependencies.emit_operation_audit(
+            context,
+            event_type="purge_artifact",
+            level="error",
+            message="Managed artifact purge failed.",
+            details={
+                "artifact_id": artifact.id,
+                "artifact_role": artifact.role,
+                "target_kind": target_kind,
+                "purge_action": "failed",
+            },
+            exception=exception,
+            locator=artifact.locator,
+        )
+        return _PurgeArtifactResult(
+            artifact_id=artifact.id,
+            artifact_role=artifact.role,
+            action="failed",
+            target_kind=target_kind,
+            exception=exception,
+        )
+
+    def _retain_incomplete_purge(
+        self,
+        context: OperationContext,
+        *,
+        results: Sequence[_PurgeArtifactResult],
+        repository_error: Exception | None,
+    ) -> PurgeIncompleteError:
+        """Persist an incomplete purge attempt and return the caller-facing error."""
+        record = self.request.record
+        updated = replace(
+            record,
+            artifacts=_artifacts_with_purge_states(record.artifacts, results),
+            lifecycle_metadata=_incomplete_purge_lifecycle_metadata(
+                record,
+                operation_id=context.operation_id,
+                results=results,
+                repository_error=repository_error,
+            ),
+        )
+        persisted = self.request.transaction.update_staged_record(updated)
+        incomplete_error = PurgeIncompleteError(
+            record_id=record.id,
+            operation_id=context.operation_id,
+            failed_artifact_ids=[result.artifact_id for result in _failed_purge_artifact_results(results)],
+            repository_error=repository_error,
+        )
+        self.dependencies.emit_operation_audit(
+            context,
+            event_type="purge",
+            level="error",
+            message="Record purge incomplete; record retained.",
+            details={
+                "record_id": record.id,
+                "force": self.request.force,
+                "artifact_count": len(record.artifacts),
+                "purge_counts": _purge_counts(results),
+                "purge_status": "incomplete",
+                "repository_delete_failed": repository_error is not None,
+                "artifact_summaries": _artifact_audit_summaries(persisted),
+                "purge_result_summaries": _purge_result_summaries(results),
+            },
+            exception=repository_error,
+            locator=record.locator,
+        )
+        return incomplete_error
 
     def _commit_if_owned(self, context: OperationContext) -> None:
         """Commit internal lifecycle transactions."""
@@ -999,7 +1157,7 @@ def _updated_lifecycle_metadata(
     operation_id: str,
     reason: str | None,
 ) -> MetadataDict:
-    """Return lifecycle metadata with one lifecycle transition appended."""
+    """Return lifecycle metadata with latest transition fields recorded."""
     timestamp = _utc_timestamp()
     metadata: dict[str, object] = dict(record.lifecycle_metadata)
     metadata[f"{operation_type}_operation_id"] = operation_id
@@ -1007,6 +1165,32 @@ def _updated_lifecycle_metadata(
     metadata[timestamp_key] = timestamp
     if reason is not None:
         metadata[f"{operation_type}_reason"] = reason
+    return normalize_metadata(metadata, field_name="lifecycle_metadata")
+
+
+def _incomplete_purge_lifecycle_metadata(
+    record: CatalogRecord,
+    *,
+    operation_id: str,
+    results: Sequence[_PurgeArtifactResult],
+    repository_error: Exception | None,
+) -> MetadataDict:
+    """Return lifecycle metadata describing the latest incomplete purge attempt."""
+    counts = _purge_counts(results)
+    metadata: dict[str, object] = dict(record.lifecycle_metadata)
+    metadata["purge_operation_id"] = operation_id
+    metadata["purge_attempted_at"] = _utc_timestamp()
+    metadata["purge_status"] = "incomplete"
+    metadata["purge_removed_count"] = counts["removed_count"]
+    metadata["purge_skipped_count"] = counts["skipped_count"]
+    metadata["purge_failure_count"] = counts["failed_count"]
+    metadata["purge_repository_delete_failed"] = repository_error is not None
+    metadata["purge_failures"] = _purge_result_summaries(
+        _failed_purge_artifact_results(results),
+        include_exception_details=False,
+    )
+    if repository_error is not None:
+        metadata["purge_repository_error_type"] = type(repository_error).__name__
     return normalize_metadata(metadata, field_name="lifecycle_metadata")
 
 
@@ -1040,6 +1224,69 @@ def _artifact_audit_summaries(record: CatalogRecord) -> list[dict[str, object]]:
         }
         for artifact in record.artifacts
     ]
+
+
+def _failed_purge_artifact_results(
+    results: Sequence[_PurgeArtifactResult],
+) -> list[_PurgeArtifactResult]:
+    """Return failed artifact purge outcomes."""
+    return [result for result in results if result.action == "failed"]
+
+
+def _purge_counts(results: Sequence[_PurgeArtifactResult]) -> dict[str, int]:
+    """Return artifact purge outcome counts."""
+    return {
+        "removed_count": sum(1 for result in results if result.action == "removed"),
+        "skipped_count": sum(1 for result in results if result.action == "skipped"),
+        "failed_count": sum(1 for result in results if result.action == "failed"),
+    }
+
+
+def _purge_result_summaries(
+    results: Sequence[_PurgeArtifactResult],
+    *,
+    include_exception_details: bool = True,
+) -> list[dict[str, object]]:
+    """Return compact purge outcome summaries for audit and lifecycle metadata."""
+    summaries: list[dict[str, object]] = []
+    for result in results:
+        summary: dict[str, object] = {
+            "artifact_id": result.artifact_id,
+            "artifact_role": result.artifact_role,
+            "purge_action": result.action,
+            "target_kind": result.target_kind,
+            "reason": result.reason,
+        }
+        if include_exception_details and result.exception is not None:
+            summary["exception_type"] = type(result.exception).__name__
+            summary["exception_message"] = str(result.exception)
+        summaries.append(summary)
+    return summaries
+
+
+def _artifacts_with_purge_states(
+    artifacts: Sequence[ArtifactDescriptor],
+    results: Sequence[_PurgeArtifactResult],
+) -> list[ArtifactDescriptor]:
+    """Return artifact descriptors marked with retained purge outcome states."""
+    states_by_artifact_id = {
+        result.artifact_id: _artifact_state_for_purge_result(result)
+        for result in results
+        if result.action in {"removed", "failed"}
+    }
+    return [
+        replace(artifact, state=states_by_artifact_id.get(artifact.id, artifact.state))
+        for artifact in artifacts
+    ]
+
+
+def _artifact_state_for_purge_result(result: _PurgeArtifactResult) -> str:
+    """Return the retained descriptor state for a purge outcome."""
+    if result.action == "removed":
+        return "purged"
+    if result.action == "failed":
+        return "purge_failed"
+    return "available"
 
 
 def _is_managed_path(path: Path, *, managed_roots: tuple[Path, ...]) -> bool:

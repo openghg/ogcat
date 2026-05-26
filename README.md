@@ -254,7 +254,10 @@ uv run ogcat search --catalog ./example-catalog --where species=CO2 --all
 Delete records with trash-style semantics. ``delete`` tombstones a record and
 hides it from normal search; ``restore`` makes it active again; ``purge``
 permanently removes a tombstoned record after removing managed catalog-local
-artifacts.
+artifacts. Purge is best-effort across artifacts: if cleanup is incomplete,
+the tombstone is retained with purge metadata instead of reporting success.
+``--include-deleted`` and ``--only-deleted`` are mutually exclusive search
+options.
 
 ```bash
 uv run ogcat delete 1 --catalog ./example-catalog --reason superseded
@@ -262,6 +265,10 @@ uv run ogcat search --catalog ./example-catalog --only-deleted --ids
 uv run ogcat restore 1 --catalog ./example-catalog
 uv run ogcat purge 1 --catalog ./example-catalog --yes
 ```
+
+``status`` and ``lifecycle_metadata`` are reserved top-level lifecycle fields in
+search. If your domain metadata uses the same names, query it explicitly with a
+path such as ``user_metadata.status``.
 
 Show a record or print its stored path:
 

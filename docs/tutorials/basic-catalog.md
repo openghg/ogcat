@@ -173,3 +173,41 @@ uv run ogcat search --catalog /tmp/tutorial-catalog species=CH4 --ids
 uv run ogcat fields --catalog /tmp/tutorial-catalog --stored
 uv run ogcat fields --catalog /tmp/tutorial-catalog --values species
 ```
+
+## Delete records and managed artifacts
+
+Use `Catalog.delete()` when you want trash-style deletion. It marks the record
+as deleted, hides it from normal search, and keeps the record, locators, and
+artifact descriptors available for direct inspection or restore.
+
+```python
+    deleted = catalog.delete(measurement.id, reason="superseded by corrected data")
+    assert deleted.status == "deleted"
+    assert catalog.search(where={"species": "CH4"}) == []
+    assert catalog.get(measurement.id) is not None
+    assert catalog.search(where={"species": "CH4"}, include_deleted=True).ids == [measurement.id]
+
+    restored = catalog.restore(measurement.id, reason="keep original for comparison")
+    assert restored.status == "active"
+    assert catalog.search(where={"species": "CH4"}).ids == [measurement.id]
+```
+
+Use `Catalog.purge()` only when the tombstoned record and any managed
+catalog-local path-backed artifacts should be removed permanently. Purge skips
+external references and user-owned paths, and it raises an error while retaining
+the tombstone if managed cleanup is incomplete.
+
+```python
+    catalog.delete(measurement.id, reason="remove demo record")
+    catalog.purge(measurement.id)
+    assert catalog.get(measurement.id) is None
+```
+
+The CLI exposes the same lifecycle:
+
+```bash
+uv run ogcat delete <id> --catalog /tmp/tutorial-catalog --reason superseded
+uv run ogcat search --catalog /tmp/tutorial-catalog --only-deleted --ids
+uv run ogcat restore <id> --catalog /tmp/tutorial-catalog
+uv run ogcat purge <id> --catalog /tmp/tutorial-catalog --yes
+```

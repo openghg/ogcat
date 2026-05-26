@@ -8,6 +8,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+import ogcat.operation_runner as operation_runner
 from ogcat import Catalog, CatalogSpec, MetadataFieldDescription, RecordSchema
 from ogcat.cli import app
 from ogcat.models import ArtifactLocator, CatalogRecord
@@ -123,6 +124,25 @@ def test_delete_restore_and_deleted_search_flags(tmp_path: Path) -> None:
     assert json.loads(strip_ansi(restore_result.stdout))["status"] == "active"
 
 
+def test_search_rejects_conflicting_deleted_flags(tmp_path: Path) -> None:
+    """CLI search should reject mutually exclusive deleted-record flags."""
+    catalog = _create_catalog(tmp_path)
+
+    result = runner.invoke(
+        app,
+        [
+            "search",
+            "--catalog",
+            str(catalog.root),
+            "--include-deleted",
+            "--only-deleted",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Use either --include-deleted or --only-deleted" in strip_ansi(result.output)
+
+
 def test_purge_cli_requires_confirmation_and_removes_deleted_record(tmp_path: Path) -> None:
     """CLI purge should require --yes and then permanently remove a tombstone."""
     catalog = _create_catalog(tmp_path)
@@ -143,6 +163,40 @@ def test_purge_cli_requires_confirmation_and_removes_deleted_record(tmp_path: Pa
     assert json.loads(strip_ansi(purged.stdout)) == {"id": record_id, "purged": True}
     assert show_result.exit_code != 0
     assert not path.exists()
+
+
+def test_purge_cli_reports_incomplete_purge_without_success_json(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """CLI purge should not print a success payload when cleanup is incomplete."""
+    catalog = _create_catalog(tmp_path)
+    record = catalog.search()[0]
+    record_id = _record_id(record)
+    path = record.path()
+    assert path is not None
+    original_remove_target = operation_runner.remove_target
+
+    def fail_remove_target(
+        locator: ArtifactLocator,
+        *,
+        target_kind: operation_runner.TargetKind = "file",
+    ) -> None:
+        """Fail the managed file removal used by CLI purge."""
+        if locator.as_path() == path:
+            raise PermissionError("locked managed artifact")
+        original_remove_target(locator, target_kind=target_kind)
+
+    delete_result = runner.invoke(app, ["delete", record_id, "--catalog", str(catalog.root)])
+    monkeypatch.setattr(operation_runner, "remove_target", fail_remove_target)
+
+    result = runner.invoke(app, ["purge", record_id, "--catalog", str(catalog.root), "--yes", "--json"])
+
+    assert delete_result.exit_code == 0
+    assert result.exit_code != 0
+    output = strip_ansi(result.output)
+    assert "Purge incomplete" in output
+    assert '"purged": true' not in output
 
 
 def test_root_help_uses_plain_click_formatting() -> None:

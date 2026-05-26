@@ -87,6 +87,12 @@ def _validate_output_flags(*, json_mode: bool, ids_only: bool = False, paths_onl
         raise typer.BadParameter("Choose only one of --json, --ids, or --paths.")
 
 
+def _validate_deleted_search_flags(*, include_deleted: bool, only_deleted: bool) -> None:
+    """Reject incompatible deleted-record visibility flags."""
+    if include_deleted and only_deleted:
+        raise typer.BadParameter("Use either --include-deleted or --only-deleted, not both.")
+
+
 def _parse_meta_item(item: str) -> dict[str, Any]:
     """Parse one metadata item from KEY=VALUE or a JSON object."""
     stripped = item.strip()
@@ -517,6 +523,7 @@ def search(
 ) -> None:
     """Search records in a catalog."""
     _validate_output_flags(json_mode=json_mode, ids_only=ids_only, paths_only=paths_only)
+    _validate_deleted_search_flags(include_deleted=include_deleted, only_deleted=only_deleted)
     if all_results and limit is not None:
         raise typer.BadParameter("Use either --all or --limit, not both.")
     display_limit = limit if limit is not None else DEFAULT_SEARCH_LIMIT

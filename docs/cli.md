@@ -77,6 +77,11 @@ ogcat search --catalog <root> [FILTER ...] [OPTIONS]
 | ``--include-deleted`` | Include tombstoned records |
 | ``--only-deleted`` | Show only tombstoned records |
 
+``--include-deleted`` and ``--only-deleted`` are mutually exclusive. Lifecycle
+fields such as ``status`` and ``lifecycle_metadata`` are reserved top-level
+search fields; use ``user_metadata.status`` for a domain metadata key named
+``status``.
+
 **Compatibility flags** (also available):
 ``--where``, ``--contains``, ``--match``, ``--regex``, ``--exists``, ``--missing``, ``--ignore-case``
 
@@ -129,6 +134,8 @@ Permanently remove a tombstoned record and any managed catalog-local
 path-backed artifacts. External references and user-owned paths are skipped and
 audited. Purging an active record requires ``--force``. The command always
 requires ``--yes`` because the operation is irreversible.
+If cleanup is incomplete, the command exits non-zero and leaves the tombstoned
+record with purge outcome metadata.
 
 ```
 ogcat purge <id> --catalog <root> --yes [--force] [--json]

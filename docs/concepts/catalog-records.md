@@ -20,8 +20,8 @@ continues to work for ordinary single-artifact records.
 | ``locator`` | Compatibility shortcut to the data artifact locator (see [Locators and storage](locators-and-storage.md)). |
 | ``artifacts`` | Inline descriptors for the data artifact plus optional auxiliary artifacts, view links, manifests, previews, logs, or derived artifacts. |
 | ``storage_mode`` | How the artifact was stored, e.g. ``copy``, ``move``, or ``external``. |
-| ``status`` | Record lifecycle status. ``active`` records are returned by normal search; ``deleted`` records are tombstones. |
-| ``lifecycle_metadata`` | Internal lifecycle metadata such as delete/restore operation ids and timestamps. |
+| ``status`` | Reserved record lifecycle status. ``active`` records are returned by normal search; ``deleted`` records are tombstones. |
+| ``lifecycle_metadata`` | Reserved lifecycle metadata such as delete/restore operation ids, timestamps, and incomplete purge attempt details. |
 | ``original_filename`` | Source filename at ingest time. |
 | ``suffixes`` | File suffix list derived from the source path. |
 | ``time_added`` | ISO 8601 timestamp when the record was created. |
@@ -174,8 +174,9 @@ Normal search returns only active records. ``Catalog.delete(id)`` tombstones a
 record by setting its status to ``deleted`` while keeping locators and artifact
 descriptors attached for audit and restore workflows. Pass
 ``include_deleted=True`` to include tombstones in search results, or
-``only_deleted=True`` to inspect just tombstoned records. Direct id lookup with
-``Catalog.get(id)`` still returns tombstoned records.
+``only_deleted=True`` to inspect just tombstoned records. These two flags are
+mutually exclusive. Direct id lookup with ``Catalog.get(id)`` still returns
+tombstoned records.
 
 When you search with an unqualified field name such as ``species``, ogcat
 looks in this order:
@@ -187,6 +188,9 @@ looks in this order:
 Use an explicit dotted path to target a specific namespace:
 ``user_metadata.species``, ``derived_metadata.netcdf.dims.time``, or the
 short aliases ``user.species`` and ``derived.netcdf.dims.time``.
+``status`` and ``lifecycle_metadata`` are reserved top-level lifecycle fields;
+use ``user_metadata.status`` when you need a domain metadata key named
+``status``.
 
 Selected classification fields also have a flattened fallback after ordinary
 ``derived_metadata`` lookup, so searches such as ``where={"format": "zip"}``,
@@ -222,5 +226,5 @@ restored = catalog.restore(record.id)
 assert restored.status == "active"
 
 catalog.delete(record.id)
-catalog.purge(record.id)  # permanent; removes managed catalog-local artifacts first
+catalog.purge(record.id)  # permanent; best-effort managed artifact cleanup
 ```

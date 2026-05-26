@@ -702,10 +702,10 @@ class CatalogRecord:
         stored_relpath: Backwards-compatible catalog-relative path.
         storage_mode: Storage mode such as ``"copy"``, ``"move"``, or
             ``"external"``.
-        status: Record lifecycle status. ``"active"`` records are visible in
-            normal searches; ``"deleted"`` records are tombstones.
-        lifecycle_metadata: Internal JSON-compatible lifecycle details such as
-            delete and restore operation ids.
+        status: Reserved record lifecycle status. ``"active"`` records are
+            visible in normal searches; ``"deleted"`` records are tombstones.
+        lifecycle_metadata: Reserved JSON-compatible lifecycle details such as
+            delete/restore operation ids and incomplete purge attempt metadata.
         original_path: Original source path or URI.
         original_filename: Original source filename.
         suffixes: Source suffixes.

@@ -74,6 +74,24 @@ def test_search_prefers_top_level_fields_when_names_are_ambiguous(tmp_path: Path
     assert catalog.search(where={"time_added": "user-time"}) == []
 
 
+def test_search_status_prefers_lifecycle_field_over_user_metadata(tmp_path: Path) -> None:
+    """Unqualified status should resolve to the reserved lifecycle field."""
+    source = tmp_path / "status.202401.nc"
+    source.write_text("dummy", encoding="utf-8")
+
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
+    record = catalog.add_file(source, metadata={"status": "domain-ready"})
+    record_id = record.id
+    assert record_id is not None
+    catalog.delete(record_id)
+
+    assert catalog.search(where={"status": "domain-ready"}, include_deleted=True) == []
+    assert catalog.search(where={"status": "deleted"}, include_deleted=True).ids == [record_id]
+    assert catalog.search(where={"user_metadata.status": "domain-ready"}, include_deleted=True).ids == [
+        record_id
+    ]
+
+
 def test_search_prefers_user_metadata_before_derived_metadata(tmp_path: Path) -> None:
     source = tmp_path / "precedence.202401.nc"
     source.write_text("dummy", encoding="utf-8")

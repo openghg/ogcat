@@ -893,7 +893,14 @@ class Catalog:
 
         Returns:
             Matching records, as a record-set view by default or a list when requested.
+
+        Raises:
+            ValueError: If ``include_deleted`` and ``only_deleted`` are both true.
         """
+        _validate_deleted_visibility_flags(
+            include_deleted=include_deleted,
+            only_deleted=only_deleted,
+        )
         results = self.repository.search(
             query=query,
             where=where,
@@ -1128,9 +1135,11 @@ class Catalog:
     def purge(self, record_id: object, *, force: bool = False) -> None:
         """Permanently remove a record and its managed catalog-local artifacts.
 
-        Purge is irreversible. It only removes path-backed artifacts under this
-        catalog's managed files or objects roots; external or user-owned
-        locators are skipped and audited.
+        Purge is irreversible and best-effort across artifacts. It only removes
+        path-backed artifacts under this catalog's managed files or objects
+        roots; external or user-owned locators are skipped and audited. If
+        cleanup is incomplete, the tombstoned record is retained with purge
+        outcome metadata and the method raises ``PurgeIncompleteError``.
 
         Args:
             record_id: Existing record id.
@@ -1140,6 +1149,8 @@ class Catalog:
         Raises:
             KeyError: If the record id does not exist.
             ValueError: If the record is active and ``force`` is false.
+            PurgeIncompleteError: If managed cleanup is incomplete and the
+                tombstone is retained.
         """
         with self.transaction() as unit_of_work:
             self._application().purge(
@@ -1684,11 +1695,21 @@ def _filter_records_by_status(
     only_deleted: bool,
 ) -> list[CatalogRecord]:
     """Return records after applying catalog-level lifecycle visibility rules."""
+    _validate_deleted_visibility_flags(
+        include_deleted=include_deleted,
+        only_deleted=only_deleted,
+    )
     if only_deleted:
         return [record for record in records if _record_is_deleted(record)]
     if include_deleted:
         return list(records)
     return [record for record in records if not _record_is_deleted(record)]
+
+
+def _validate_deleted_visibility_flags(*, include_deleted: bool, only_deleted: bool) -> None:
+    """Reject mutually exclusive deleted-record visibility flags."""
+    if include_deleted and only_deleted:
+        raise ValueError("include_deleted and only_deleted cannot both be true.")
 
 
 def _coerce_primary_location(value: object) -> PrimaryLocation:

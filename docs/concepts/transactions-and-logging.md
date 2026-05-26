@@ -29,7 +29,10 @@ or record writes, commit, failure, and rollback. Delete and restore operations
 emit the same operation-start, lifecycle, commit, failure, and rollback events.
 Purge operations additionally emit one ``purge_artifact`` event for each
 managed artifact removed or skipped, then hard-delete the record after artifact
-cleanup succeeds. Events include an ``operation_id``; CLI operation failures
+cleanup succeeds. If one artifact removal fails, purge continues with later
+artifacts, audits the failures, retains the tombstoned record with incomplete
+purge metadata, and reports failure to the caller. Events include an
+``operation_id``; CLI operation failures
 include that id in the user-facing error message when available:
 
 ```bash
@@ -53,7 +56,10 @@ through the same unit-of-work rollback model used by metadata updates, so an
 uncommitted caller-owned transaction restores the previous record state.
 ``Catalog.purge()`` is permanent and best-effort: it removes only managed
 catalog-local path-backed artifacts through storage adapters, audits skipped
-external or user-owned locators, and hard-deletes the repository record last.
+external or user-owned locators, and hard-deletes the repository record last
+only when cleanup succeeds. Partial purge failures cannot restore artifacts
+that were already removed, so ogcat commits an updated tombstone describing the
+incomplete attempt before raising the error.
 
 You can register rollback actions from within a hook:
 

@@ -6,7 +6,15 @@ from pathlib import Path
 
 import pytest
 
-from ogcat import ArtifactLocator, Catalog, CatalogRecord, CatalogSpec
+import ogcat.operation_runner as operation_runner
+from ogcat import (
+    ArtifactDescriptor,
+    ArtifactLocator,
+    Catalog,
+    CatalogRecord,
+    CatalogSpec,
+    PurgeIncompleteError,
+)
 
 
 def _source_file(tmp_path: Path, name: str = "source.nc") -> Path:
@@ -20,6 +28,24 @@ def _record_id(record: CatalogRecord) -> str:
     """Return a persisted test record id."""
     assert record.id is not None
     return record.id
+
+
+def _add_managed_secondary_artifact(catalog: Catalog, record_id: str, name: str) -> Path:
+    """Attach an extra managed artifact descriptor to a stored record."""
+    secondary_path = catalog.root / catalog.spec.objects_root / name
+    secondary_path.parent.mkdir(parents=True, exist_ok=True)
+    secondary_path.write_text("secondary", encoding="utf-8")
+    record = catalog.get(record_id)
+    assert record is not None
+    record.artifacts.append(
+        ArtifactDescriptor(
+            id="secondary",
+            role="manifest",
+            locator=ArtifactLocator.path(secondary_path),
+        )
+    )
+    catalog.repository.update(record)
+    return secondary_path
 
 
 def test_delete_tombstones_record_and_hides_default_search(tmp_path: Path) -> None:
@@ -163,6 +189,89 @@ def test_purge_removes_managed_artifacts_and_hard_deletes_record(tmp_path: Path)
         assert not path.is_symlink()
 
 
+def test_purge_continues_after_artifact_failure_and_retains_tombstone(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A partial artifact purge should keep an accurate tombstone record."""
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+    record = catalog.add_file(_source_file(tmp_path, "managed.nc"), metadata={"species": "CO2"})
+    record_id = _record_id(record)
+    failed_path = record.path()
+    assert failed_path is not None
+    removed_path = _add_managed_secondary_artifact(catalog, record_id, "secondary.txt")
+    catalog.delete(record_id)
+    original_remove_target = operation_runner.remove_target
+
+    def flaky_remove_target(
+        locator: ArtifactLocator,
+        *,
+        target_kind: operation_runner.TargetKind = "file",
+    ) -> None:
+        """Fail the primary artifact removal but allow later removals."""
+        if locator.as_path() == failed_path:
+            raise PermissionError("locked managed artifact")
+        original_remove_target(locator, target_kind=target_kind)
+
+    monkeypatch.setattr(operation_runner, "remove_target", flaky_remove_target)
+
+    with pytest.raises(PurgeIncompleteError, match="Purge incomplete"):
+        catalog.purge(record_id)
+
+    retained = catalog.get(record_id)
+    assert retained is not None
+    assert retained.status == "deleted"
+    assert failed_path.exists()
+    assert not removed_path.exists()
+    states = {artifact.id: artifact.state for artifact in retained.artifacts}
+    assert states["data"] == "purge_failed"
+    assert states["secondary"] == "purged"
+    assert any(state == "purged" for artifact_id, state in states.items() if artifact_id != "secondary")
+    assert retained.lifecycle_metadata["purge_status"] == "incomplete"
+    assert retained.lifecycle_metadata["purge_failure_count"] == 1
+    removed_count = retained.lifecycle_metadata["purge_removed_count"]
+    assert isinstance(removed_count, int)
+    assert removed_count >= 1
+    artifact_events = catalog.audit_events(record_id=record_id, event_type="purge_artifact")
+    assert any(event.details["purge_action"] == "failed" for event in artifact_events)
+    assert any(event.details["purge_action"] == "removed" for event in artifact_events)
+    purge_events = catalog.audit_events(record_id=record_id, event_type="purge")
+    assert purge_events[-1].level == "error"
+    assert purge_events[-1].details["purge_status"] == "incomplete"
+
+
+def test_purge_retains_tombstone_when_repository_delete_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A repository hard-delete failure should retain purge outcome metadata."""
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+    record = catalog.add_file(_source_file(tmp_path, "managed.nc"), metadata={"species": "CO2"})
+    record_id = _record_id(record)
+    artifact_path = record.path()
+    assert artifact_path is not None
+    catalog.delete(record_id)
+
+    def fail_delete(record_id: str) -> None:
+        """Simulate a repository failure after artifact cleanup."""
+        raise RuntimeError(f"repository unavailable for {record_id}")
+
+    monkeypatch.setattr(catalog.repository, "delete", fail_delete)
+
+    with pytest.raises(PurgeIncompleteError, match="repository delete failed"):
+        catalog.purge(record_id)
+
+    retained = catalog.get(record_id)
+    assert retained is not None
+    assert retained.status == "deleted"
+    assert not artifact_path.exists()
+    assert retained.artifacts[0].state == "purged"
+    assert retained.lifecycle_metadata["purge_status"] == "incomplete"
+    assert retained.lifecycle_metadata["purge_repository_delete_failed"] is True
+    purge_events = catalog.audit_events(record_id=record_id, event_type="purge")
+    assert purge_events[-1].exception_type == "RuntimeError"
+
+
 def test_purge_skips_external_path_artifacts(tmp_path: Path) -> None:
     """Purge should skip user-owned paths outside managed catalog roots."""
     external = _source_file(tmp_path, "external.nc")
@@ -211,6 +320,14 @@ def test_purge_requires_deleted_record_unless_forced(tmp_path: Path) -> None:
         catalog.purge(record_id)
 
     assert catalog.get(record_id) is not None
+
+
+def test_search_rejects_conflicting_deleted_visibility_flags(tmp_path: Path) -> None:
+    """Deleted-record search flags should be mutually exclusive."""
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+
+    with pytest.raises(ValueError, match="include_deleted and only_deleted"):
+        catalog.search(include_deleted=True, only_deleted=True)
 
 
 def test_delete_restore_and_purge_emit_audit_events(tmp_path: Path) -> None:
