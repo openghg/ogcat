@@ -107,6 +107,18 @@ def test_old_records_load_as_active() -> None:
     assert record.to_dict()["status"] == "active"
 
 
+def test_purge_incomplete_error_is_not_a_value_error() -> None:
+    """Incomplete purge failures should not be mistaken for validation errors."""
+    error = PurgeIncompleteError(
+        record_id="1",
+        operation_id="operation",
+        failed_artifact_ids=["data"],
+    )
+
+    assert isinstance(error, RuntimeError)
+    assert not isinstance(error, ValueError)
+
+
 def test_active_summaries_exclude_deleted_records_by_default(tmp_path: Path) -> None:
     """Catalog summaries and field helpers should use active records by default."""
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))

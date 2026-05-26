@@ -16,6 +16,7 @@ from rich.table import Table
 
 from ogcat.audit import exception_operation_id
 from ogcat.catalog import Catalog
+from ogcat.exceptions import PurgeIncompleteError
 from ogcat.models import CatalogRecord
 from ogcat.record_set import CatalogRecordSet
 from ogcat.search import SearchQuery
@@ -714,6 +715,8 @@ def purge_record(
     active_catalog = _open_catalog_or_fail(catalog)
     try:
         active_catalog.purge(record_id, force=force)
+    except PurgeIncompleteError as exc:
+        _fail(_format_exception_message(exc))
     except (KeyError, ValueError) as exc:
         _fail(_format_exception_message(exc))
 

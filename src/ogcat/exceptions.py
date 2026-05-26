@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 
-class PurgeIncompleteError(ValueError):
+class PurgeIncompleteError(RuntimeError):
     """Raised when purge cleanup is incomplete and the tombstone is retained.
 
     Args:
