@@ -22,6 +22,7 @@ from ogcat.capabilities import (
 )
 from ogcat.catalog import Catalog
 from ogcat.classification import classify_artifact, collection_classification_metadata
+from ogcat.exceptions import PurgeIncompleteError
 from ogcat.hooks import ArtifactWriter, HookManager, HookWarning, OperationContext, OperationSource
 from ogcat.models import (
     ArtifactClaim,
@@ -128,6 +129,7 @@ __all__ = [
     "OperationContext",
     "OperationSource",
     "PluginRegistry",
+    "PurgeIncompleteError",
     "ReplicaApplyResult",
     "ReplicaMode",
     "ReplicaPlanItem",

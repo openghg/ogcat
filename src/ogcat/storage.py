@@ -141,7 +141,8 @@ class LocalStorageAdapter:
         """Remove a local file or directory target."""
         path = require_local_path(locator)
         if target_kind == "directory":
-            shutil.rmtree(path, ignore_errors=True)
+            if path.exists():
+                shutil.rmtree(path)
             return
         path.unlink(missing_ok=True)
 

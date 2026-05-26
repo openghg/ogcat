@@ -702,6 +702,10 @@ class CatalogRecord:
         stored_relpath: Backwards-compatible catalog-relative path.
         storage_mode: Storage mode such as ``"copy"``, ``"move"``, or
             ``"external"``.
+        status: Reserved record lifecycle status. ``"active"`` records are
+            visible in normal searches; ``"deleted"`` records are tombstones.
+        lifecycle_metadata: Reserved JSON-compatible lifecycle details such as
+            delete/restore operation ids and incomplete purge attempt metadata.
         original_path: Original source path or URI.
         original_filename: Original source filename.
         suffixes: Source suffixes.
@@ -719,6 +723,8 @@ class CatalogRecord:
     stored_abspath: str | None = None
     stored_relpath: str | None = None
     storage_mode: str | None = None
+    status: str = "active"
+    lifecycle_metadata: MetadataDict = field(default_factory=dict)
     original_path: str | None = None
     original_filename: str | None = None
     suffixes: list[str] = field(default_factory=list)
@@ -736,6 +742,11 @@ class CatalogRecord:
         self.naming_metadata = normalize_metadata(
             self.naming_metadata,
             field_name="naming_metadata",
+        )
+        self.status = str(self.status or "active")
+        self.lifecycle_metadata = normalize_metadata(
+            self.lifecycle_metadata,
+            field_name="lifecycle_metadata",
         )
         if not self.locator.value and self.stored_abspath is not None:
             self.locator = ArtifactLocator.path(
@@ -773,6 +784,11 @@ class CatalogRecord:
                 "stored_abspath": self.stored_abspath,
                 "stored_relpath": self.stored_relpath,
                 "storage_mode": self.storage_mode,
+                "status": self.status,
+                "lifecycle_metadata": normalize_metadata(
+                    self.lifecycle_metadata,
+                    field_name="lifecycle_metadata",
+                ),
                 "time_added": self.time_added,
                 "original_path": self.original_path,
                 "original_filename": self.original_filename,
@@ -804,6 +820,8 @@ class CatalogRecord:
             stored_abspath=(None if data.get("stored_abspath") is None else str(data["stored_abspath"])),
             stored_relpath=(None if data.get("stored_relpath") is None else str(data["stored_relpath"])),
             storage_mode=(None if data.get("storage_mode") is None else str(data["storage_mode"])),
+            status="active" if data.get("status") is None else str(data["status"]),
+            lifecycle_metadata=_coerce_metadata_dict(data.get("lifecycle_metadata", {})),
             original_path=(None if data.get("original_path") is None else str(data["original_path"])),
             original_filename=(
                 None if data.get("original_filename") is None else str(data["original_filename"])

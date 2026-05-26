@@ -21,6 +21,7 @@ from ogcat.operation_runner import (
     AddOperationRequest,
     ArtifactLocatorFactory,
     DerivedMetadataCollector,
+    RecordLifecycleOperationRequest,
     StoragePlanFactory,
 )
 from ogcat.secondary_artifacts import SecondaryArtifactOperation, TemplateLinkSecondaryArtifact
@@ -266,7 +267,77 @@ class CatalogApplication:
             derived_metadata_collector=derived_metadata_collector,
             secondary_artifact_operations=secondary_artifact_operations,
         )
-        return self.catalog._build_add_operation_runner(request).run()
+        result = self.catalog._build_add_operation_runner(request).run()
+        if result is None:
+            raise RuntimeError("add operation did not return a record.")
+        return result
+
+    def delete(
+        self,
+        *,
+        record_id: object,
+        reason: str | None,
+        transaction: UnitOfWork,
+        commit: bool,
+    ) -> CatalogRecord:
+        """Run the record tombstone operation."""
+        record = self.catalog._require_record(record_id)
+        request = RecordLifecycleOperationRequest(
+            transaction=transaction,
+            commit=commit,
+            operation_type="delete",
+            record=record,
+            reason=reason,
+        )
+        result = self.catalog._build_record_lifecycle_operation_runner(request).run()
+        if result is None:
+            raise RuntimeError("delete operation did not return a record.")
+        return result
+
+    def restore(
+        self,
+        *,
+        record_id: object,
+        reason: str | None,
+        transaction: UnitOfWork,
+        commit: bool,
+    ) -> CatalogRecord:
+        """Run the record restore operation."""
+        record = self.catalog._require_record(record_id)
+        request = RecordLifecycleOperationRequest(
+            transaction=transaction,
+            commit=commit,
+            operation_type="restore",
+            record=record,
+            reason=reason,
+        )
+        result = self.catalog._build_record_lifecycle_operation_runner(request).run()
+        if result is None:
+            raise RuntimeError("restore operation did not return a record.")
+        return result
+
+    def purge(
+        self,
+        *,
+        record_id: object,
+        force: bool,
+        transaction: UnitOfWork,
+        commit: bool,
+    ) -> None:
+        """Run the permanent record purge operation."""
+        record = self.catalog._require_record(record_id)
+        request = RecordLifecycleOperationRequest(
+            transaction=transaction,
+            commit=commit,
+            operation_type="purge",
+            record=record,
+            force=force,
+            managed_roots=(
+                self.catalog.root / self.catalog.spec.files_root,
+                self.catalog.root / self.catalog.spec.objects_root,
+            ),
+        )
+        self.catalog._build_record_lifecycle_operation_runner(request).run()
 
     def _template_link_secondary_artifacts(
         self,
