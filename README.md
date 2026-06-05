@@ -64,6 +64,20 @@ Each catalog root is self-describing:
 
 ## Installation
 
+From PyPI, once the first release is published:
+
+```bash
+uv add ogcat
+```
+
+For one-off CLI use:
+
+```bash
+uvx ogcat --help
+```
+
+For local development from this repository:
+
 ```bash
 uv sync
 ```
@@ -71,12 +85,20 @@ uv sync
 Optional netCDF metadata extraction:
 
 ```bash
+# In a consuming project:
+uv add "ogcat[netcdf]"
+
+# In a source checkout:
 uv sync --extra netcdf
 ```
 
 Optional fsspec-backed storage URLs:
 
 ```bash
+# In a consuming project:
+uv add "ogcat[fsspec]"
+
+# In a source checkout:
 uv sync --extra fsspec
 ```
 
