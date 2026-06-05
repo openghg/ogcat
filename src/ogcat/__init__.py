@@ -6,6 +6,8 @@ writers, validation, search, replicas, and the capability registry models used
 for reader, writer, and converter discovery.
 """
 
+from importlib.metadata import PackageNotFoundError, version
+
 from ogcat.artifact_claims import claim_key, facet_key, has_claim, has_facet, iter_claims, iter_facets
 from ogcat.audit import AuditEvent, AuditSink, JsonlAuditSink, read_audit_events
 from ogcat.capabilities import (
@@ -84,7 +86,13 @@ from ogcat.writers import (
     source_writer,
 )
 
+try:
+    __version__ = version("ogcat")
+except PackageNotFoundError:
+    __version__ = "0.0.0"
+
 __all__ = [
+    "__version__",
     "AmbiguousCapabilityError",
     "ArtifactCapability",
     "ArtifactLocator",

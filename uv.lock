@@ -492,6 +492,14 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+fsspec = [
+    { name = "fsspec" },
+]
+netcdf = [
+    { name = "xarray" },
+]
+
+[package.dev-dependencies]
 dev = [
     { name = "pyright" },
     { name = "pytest" },
@@ -505,30 +513,30 @@ docs = [
     { name = "sphinx-autodoc-typehints", version = "3.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "sphinx-autodoc-typehints", version = "3.10.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
-fsspec = [
-    { name = "fsspec" },
-]
-netcdf = [
-    { name = "xarray" },
-]
 
 [package.metadata]
 requires-dist = [
     { name = "fsspec", marker = "extra == 'fsspec'", specifier = ">=2024.0" },
-    { name = "furo", marker = "extra == 'docs'", specifier = ">=2024.0" },
-    { name = "myst-parser", marker = "extra == 'docs'", specifier = ">=2.0" },
     { name = "pydantic", specifier = ">=2" },
-    { name = "pyright", marker = "extra == 'dev'", specifier = ">=1.1" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "rich", specifier = ">=13.7" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
-    { name = "sphinx", marker = "extra == 'docs'", specifier = ">=7.0" },
-    { name = "sphinx-autodoc-typehints", marker = "extra == 'docs'", specifier = ">=1.25" },
     { name = "tinydb", specifier = ">=4.8" },
     { name = "typer", specifier = ">=0.12" },
     { name = "xarray", marker = "extra == 'netcdf'", specifier = ">=2024.0" },
 ]
-provides-extras = ["fsspec", "netcdf", "dev", "docs"]
+provides-extras = ["fsspec", "netcdf"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pyright", specifier = ">=1.1" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "ruff", specifier = ">=0.6" },
+]
+docs = [
+    { name = "furo", specifier = ">=2024.0" },
+    { name = "myst-parser", specifier = ">=2.0" },
+    { name = "sphinx", specifier = ">=7.0" },
+    { name = "sphinx-autodoc-typehints", specifier = ">=1.25" },
+]
 
 [[package]]
 name = "packaging"

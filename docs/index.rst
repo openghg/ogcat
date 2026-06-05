@@ -48,6 +48,7 @@ searching records.
    :caption: Development notes
 
    architecture
+   releasing
    roadmap
    ideas
    adr/index
