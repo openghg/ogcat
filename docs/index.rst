@@ -26,7 +26,7 @@ searching records.
 
 .. toctree::
    :maxdepth: 1
-   :caption: Tutorials
+   :caption: Tutorials and examples
 
    tutorials/basic-catalog
    tutorials/verification-games-recipes

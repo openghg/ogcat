@@ -11,10 +11,12 @@ The typical lifecycle is:
 1. Hooks fire in order (``before_validate_metadata``, ``resolve_artifact_locator``, …).
 2. Any file write happens.
 3. The record is written to the database.
-4. Post-write hooks fire (``after_record_write``, ``before_commit``, ``after_commit``).
+4. ``after_record_write`` and ``before_commit`` hooks fire.
+5. The unit of work commits; ``after_commit`` hooks then fire.
 
-If any step raises an exception, registered rollback actions run in reverse
-order to undo any partial writes.
+If a step before commit raises an exception, registered rollback actions run
+in reverse order to undo partial writes. ``after_commit`` hook failures are
+reported as warnings and cannot roll back a committed operation.
 
 ## Audit events
 

@@ -15,16 +15,16 @@ Record
 
 Artifact
 : The file, directory, URI, or opaque external reference being catalogued. The
-  current data model stores one primary locator per record; the long-term plan
-  discusses multiple artifact descriptors per record.
+  current data model can store a primary locator and artifact descriptors per
+  record. Each record has at most one data-artifact descriptor.
 
 Locator
 : A serialisable description of where an artifact lives. Current locator kinds
-  include path-backed, URI-backed, and opaque references.
+  include local paths, fsspec URL paths, URIs, and opaque references.
 
 Managed file
-: A local artifact copied or moved into the catalog-managed files area by
-  `Catalog.add_file`.
+: A local artifact copied or moved into catalog-managed storage by
+  `Catalog.add_file`, under ``data/objects/`` by default.
 
 Reference record
 : A record added with `Catalog.add_artifact` whose artifact may be external,
@@ -39,7 +39,9 @@ Metadata
 Schema
 : A `RecordSchema` describing expected metadata fields and optional storage
   naming templates for a record type. Schema validation is intentionally
-  permissive unless fields are marked required or strict validation is used.
+  permissive about unknown fields during ingest. Required fields and supported
+  value types are enforced; unknown fields can be checked with explicit strict
+  validation.
 
 Hook
 : A structural protocol method implemented by a plugin object and dispatched by
@@ -72,9 +74,9 @@ Journal
   implementation has rollback actions, but not yet a durable operation journal.
 
 Event log
-: A planned catalog-level structured log for operation debugging and audit
-  trails. This is distinct from the future journal, which tracks recoverable
-  operation state.
+: The current catalog-local JSON Lines audit log at
+  ``.ogcat/logs/events.jsonl``. It records operation activity for debugging
+  and audit, but does not provide a durable recovery journal.
 
 Storage profile
 : A planned named configuration for resolving non-local storage adapters and

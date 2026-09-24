@@ -163,15 +163,20 @@ Derived metadata can be repaired separately with
 mode names. Prefer these public methods over mutating a `CatalogRecord` and
 calling `catalog.repository.update(...)` directly.
 
-## CLI equivalents
+## CLI workflow
+
+The CLI example uses a separate catalog with its default schema. Run these
+commands in the same shell from the repository root:
 
 ```bash
-uv run ogcat init /tmp/tutorial-catalog --name tutorial
-uv run ogcat add ./mhd_ch4_2024.txt --catalog /tmp/tutorial-catalog --meta title="MHD methane observations" site=MHD species=CH4 year=2024
-uv run ogcat search --catalog /tmp/tutorial-catalog species=CH4 --fields id,title,species,path
-uv run ogcat search --catalog /tmp/tutorial-catalog species=CH4 --ids
-uv run ogcat fields --catalog /tmp/tutorial-catalog --stored
-uv run ogcat fields --catalog /tmp/tutorial-catalog --values species
+tutorial_dir="$(mktemp -d)"
+printf 'demo methane data\n' > "$tutorial_dir/mhd_ch4_2024.txt"
+uv run ogcat init "$tutorial_dir/catalog" --name tutorial
+uv run ogcat add "$tutorial_dir/mhd_ch4_2024.txt" --catalog "$tutorial_dir/catalog" --meta title="MHD methane observations" site=MHD species=CH4 year=2024
+uv run ogcat search --catalog "$tutorial_dir/catalog" species=CH4 --fields id,title,species,path
+uv run ogcat search --catalog "$tutorial_dir/catalog" species=CH4 --ids
+uv run ogcat fields --catalog "$tutorial_dir/catalog" --stored
+uv run ogcat fields --catalog "$tutorial_dir/catalog" --values species
 ```
 
 ## Delete records and managed artifacts
@@ -206,8 +211,10 @@ the tombstone if managed cleanup is incomplete.
 The CLI exposes the same lifecycle:
 
 ```bash
-uv run ogcat delete <id> --catalog /tmp/tutorial-catalog --reason superseded
-uv run ogcat search --catalog /tmp/tutorial-catalog --only-deleted --ids
-uv run ogcat restore <id> --catalog /tmp/tutorial-catalog
-uv run ogcat purge <id> --catalog /tmp/tutorial-catalog --yes
+record_id="$(uv run ogcat search --catalog "$tutorial_dir/catalog" species=CH4 --ids --limit 1)"
+uv run ogcat delete "$record_id" --catalog "$tutorial_dir/catalog" --reason superseded
+uv run ogcat search --catalog "$tutorial_dir/catalog" --only-deleted --ids
+uv run ogcat restore "$record_id" --catalog "$tutorial_dir/catalog"
+uv run ogcat delete "$record_id" --catalog "$tutorial_dir/catalog"
+uv run ogcat purge "$record_id" --catalog "$tutorial_dir/catalog" --yes
 ```

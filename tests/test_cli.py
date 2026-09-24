@@ -71,6 +71,22 @@ def _create_catalog(tmp_path: Path, *, with_fields: bool = True) -> Catalog:
     return catalog
 
 
+def test_init_preserves_existing_catalog(tmp_path: Path) -> None:
+    """Repeated CLI init must fail without replacing the catalog spec."""
+    root = tmp_path / "catalog"
+    created = runner.invoke(app, ["init", str(root), "--name", "first"])
+    original_spec = (root / "catalog.json").read_bytes()
+
+    repeated = runner.invoke(app, ["init", str(root), "--name", "second"])
+
+    assert created.exit_code == 0
+    assert repeated.exit_code == 1
+    assert "Catalog already exists" in strip_ansi(repeated.output)
+    assert "Created catalog" not in strip_ansi(repeated.output)
+    assert (root / "catalog.json").read_bytes() == original_spec
+    assert Catalog.open(root).spec.catalog_name == "first"
+
+
 def test_search_json_output(tmp_path: Path) -> None:
     catalog = _create_catalog(tmp_path)
     record = catalog.search()[0]

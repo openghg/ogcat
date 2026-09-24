@@ -196,7 +196,6 @@ class _AddOperationPlan:
     context: OperationContext
     locator: ArtifactLocator
     storage_plan: StoragePlan
-    validation_report: ValidationReport
 
 
 class OperationRunner(ABC):
@@ -235,7 +234,7 @@ class AddOperationRunner(OperationRunner):
             details={"caller_owned_transaction": not self.request.commit},
         )
         try:
-            validation_report = self._validate_metadata(
+            self._validate_metadata(
                 context=hook_context,
                 hook_dispatcher=hook_dispatcher,
                 set_phase=set_phase,
@@ -248,7 +247,6 @@ class AddOperationRunner(OperationRunner):
             add_plan = self._plan_storage(
                 context=hook_context,
                 locator=canonical_locator,
-                validation_report=validation_report,
                 set_phase=set_phase,
             )
             self._write_artifact(add_plan=add_plan, set_phase=set_phase)
@@ -300,8 +298,8 @@ class AddOperationRunner(OperationRunner):
         context: OperationContext,
         hook_dispatcher: HookDispatcher,
         set_phase: _PhaseSetter,
-    ) -> ValidationReport:
-        """Run validation hooks and return the add-operation validation report."""
+    ) -> None:
+        """Run validation hooks and reject invalid add-operation metadata."""
         set_phase(HOOK_PHASES["before_validate_metadata"].name)
         hook_dispatcher.before_validate_metadata(context)
         set_phase("validation")
@@ -324,7 +322,6 @@ class AddOperationRunner(OperationRunner):
             details=_validation_audit_details(validation_report),
         )
         validation_report.raise_for_errors()
-        return validation_report
 
     def _resolve_locator(
         self,
@@ -347,7 +344,6 @@ class AddOperationRunner(OperationRunner):
         *,
         context: OperationContext,
         locator: ArtifactLocator,
-        validation_report: ValidationReport,
         set_phase: _PhaseSetter,
     ) -> _AddOperationPlan:
         """Build and audit the storage plan for an add operation."""
@@ -379,7 +375,6 @@ class AddOperationRunner(OperationRunner):
             context=context,
             locator=locator,
             storage_plan=storage_plan,
-            validation_report=validation_report,
         )
 
     def _write_artifact(
@@ -460,11 +455,16 @@ class AddOperationRunner(OperationRunner):
             add_plan.context.derived_metadata,
             field_name="derived_metadata",
         )
+        storage_mode = self.request.storage_mode
+        if not add_plan.storage_plan.ogcat_owned and storage_mode in {None, "copy", "move", "write"}:
+            storage_mode = "reference"
+        elif storage_mode is None:
+            storage_mode = add_plan.storage_plan.write_mode
         record = self.dependencies.build_artifact_record(
             record_type=self.request.record_type,
             locator=add_plan.locator,
             metadata=add_plan.context.user_metadata,
-            storage_mode=self.request.storage_mode,
+            storage_mode=storage_mode,
             original_path=self.request.original_path,
             original_filename=self.request.original_filename,
             suffixes=self.request.suffixes,
@@ -824,8 +824,12 @@ class RecordLifecycleOperationRunner(OperationRunner):
         artifact: ArtifactDescriptor,
     ) -> _PurgeArtifactResult:
         """Purge one managed artifact or audit why it was skipped."""
-        if self.request.record.storage_mode == "reference":
-            return self._emit_artifact_skip(context, artifact, reason="record storage mode is reference")
+        if self.request.record.storage_mode not in {"copy", "move", "write"}:
+            return self._emit_artifact_skip(
+                context,
+                artifact,
+                reason=f"record storage mode is {self.request.record.storage_mode or 'unspecified'}",
+            )
         locator = artifact.locator
         if locator is None:
             return self._emit_artifact_skip(context, artifact, reason="missing locator")

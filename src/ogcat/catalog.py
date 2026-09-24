@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import getpass
+import json
 import os
 import warnings
 from collections.abc import Iterable, Iterator, Mapping, Sequence
@@ -122,13 +123,18 @@ class Catalog:
             Open catalog instance bound to ``root``.
 
         Raises:
+            FileExistsError: If ``catalog.json`` already exists at ``root``.
             ValueError: If the configured backend is unsupported, or both
                 ``plugins`` and ``hooks`` are supplied.
         """
         hook_manager = _coerce_hook_manager(plugins=plugins, hooks=hooks)
+        if spec.db_backend != "tinydb":
+            raise ValueError(f"Unsupported db_backend: {spec.db_backend}")
         root_path = Path(root).expanduser().resolve()
+        spec_payload = json.dumps(spec.to_dict(), indent=2, sort_keys=True) + "\n"
         root_path.mkdir(parents=True, exist_ok=True)
-        spec.write(root_path / "catalog.json")
+        with (root_path / "catalog.json").open("x", encoding="utf-8") as spec_file:
+            spec_file.write(spec_payload)
         (root_path / spec.files_root).mkdir(parents=True, exist_ok=True)
         (root_path / spec.objects_root).mkdir(parents=True, exist_ok=True)
         repository = _open_repository(root_path, spec)

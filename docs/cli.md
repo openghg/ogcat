@@ -9,16 +9,21 @@
 Create a new catalog.
 
 ```
-ogcat init <root> [--name NAME]
+ogcat init <root> --name NAME
 ```
+
+If ``catalog.json`` already exists at the root, initialization fails without
+changing the existing catalog.
 
 ### ``ogcat add``
 
 Ingest a file into a catalog.
 
 ```
-ogcat add <file> --catalog <root> [--meta KEY=VALUE ...] [--operation copy|move]
+ogcat add <file> --catalog <root> [--meta KEY=VALUE ...] [--operation copy|move] [--record-type TYPE]
 ```
+
+``--record-type`` selects a named record schema from the catalog spec.
 
 If an add operation fails after an operation id has been created, the error
 message includes ``operation_id: ...`` so it can be correlated with

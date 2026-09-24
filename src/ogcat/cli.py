@@ -320,7 +320,10 @@ def init(
 ) -> None:
     """Create a new catalog."""
     spec = CatalogSpec(catalog_name=name)
-    catalog = Catalog.create(root, spec)
+    try:
+        catalog = Catalog.create(root, spec)
+    except FileExistsError:
+        _fail(f"Catalog already exists at {root}.")
     console.print(f"Created catalog at {catalog.root}")
 
 
