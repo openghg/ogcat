@@ -7,7 +7,7 @@ import json
 import os
 import warnings
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -43,7 +43,6 @@ from ogcat.operation_helpers import (
 from ogcat.operation_runner import (
     AddOperationRequest,
     AddOperationRunner,
-    OperationRunner,
     OperationServices,
     RecordLifecycleOperationRequest,
     RecordLifecycleOperationRunner,
@@ -468,32 +467,14 @@ class Catalog:
         metadata = _coerce_metadata_input(metadata_input, schema_name=schema_name)
         validated_source = _optional_operation_source(source)
         validated_artifact_writer = _validate_artifact_writer(artifact_writer)
-        application = self._application()
-        if transaction is not None:
-            if transaction.repository is not self.repository:
-                raise ValueError("Transaction is bound to a different catalog repository.")
-            return application.add_artifact(
-                transaction=transaction,
-                commit=False,
-                record_type=record_type,
-                locator=locator,
-                metadata=metadata,
-                storage_mode=storage_mode,
-                original_path=original_path,
-                original_filename=original_filename,
-                suffixes=suffixes,
-                derived_metadata=derived_metadata,
-                naming_metadata=naming_metadata,
-                time_added=time_added,
-                source=validated_source,
-                artifact_writer=validated_artifact_writer,
-                storage_plan=storage_plan,
-                schema=schema,
-            )
-        with self.transaction() as unit_of_work:
-            return application.add_artifact(
+        if transaction is not None and transaction.repository is not self.repository:
+            raise ValueError("Transaction is bound to a different catalog repository.")
+        owns_transaction = transaction is None
+        transaction_context = self.transaction() if owns_transaction else nullcontext(transaction)
+        with transaction_context as unit_of_work:
+            return self._application().add_artifact(
                 transaction=unit_of_work,
-                commit=True,
+                commit=owns_transaction,
                 record_type=record_type,
                 locator=locator,
                 metadata=metadata,
@@ -1442,46 +1423,6 @@ class Catalog:
             naming_metadata=normalized_naming_metadata,
         )
 
-    def _add_artifact_in_transaction(
-        self,
-        *,
-        transaction: UnitOfWork,
-        commit: bool,
-        record_type: str,
-        locator: ArtifactLocator,
-        metadata: MetadataDict,
-        storage_mode: str | None,
-        original_path: str | Path | None,
-        original_filename: str | None,
-        suffixes: list[str] | None,
-        derived_metadata: MetadataDict,
-        naming_metadata: MetadataDict | None,
-        time_added: str | None,
-        source: OperationSource | None,
-        artifact_writer: ArtifactWriter | None,
-        storage_plan: StoragePlan | None,
-        schema: RecordSchema,
-    ) -> CatalogRecord:
-        """Add an artifact record within an active transaction."""
-        return self._application().add_artifact(
-            transaction=transaction,
-            commit=commit,
-            record_type=record_type,
-            locator=locator,
-            metadata=metadata,
-            storage_mode=storage_mode,
-            original_path=original_path,
-            original_filename=original_filename,
-            suffixes=suffixes,
-            derived_metadata=derived_metadata,
-            naming_metadata=naming_metadata,
-            time_added=time_added,
-            source=source,
-            artifact_writer=artifact_writer,
-            storage_plan=storage_plan,
-            schema=schema,
-        )
-
     def _emit_audit(self, event: AuditEvent) -> None:
         """Emit an audit event without failing the catalog operation."""
         if self.read_only or self.audit_sink is None:
@@ -1591,14 +1532,14 @@ class Catalog:
         if self.read_only:
             raise PermissionError(f"Catalog is read-only: {self.root}")
 
-    def _build_add_operation_runner(self, request: AddOperationRequest) -> OperationRunner:
+    def _build_add_operation_runner(self, request: AddOperationRequest) -> AddOperationRunner:
         """Build the runner used for one internal add operation."""
         return AddOperationRunner(dependencies=self._operation_runner_dependencies(), request=request)
 
     def _build_record_lifecycle_operation_runner(
         self,
         request: RecordLifecycleOperationRequest,
-    ) -> OperationRunner:
+    ) -> RecordLifecycleOperationRunner:
         """Build the runner used for one record lifecycle operation."""
         return RecordLifecycleOperationRunner(
             dependencies=self._operation_runner_dependencies(),

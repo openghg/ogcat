@@ -10,7 +10,9 @@ Application orchestration
 -------------------------
 
 ``Catalog`` delegates add-operation setup into an internal application service,
-which in turn builds operation-runner requests.
+which builds a request for the concrete add coordinator. Record lifecycle
+operations have their own concrete coordinator; there is no generic runner
+interface.
 
 .. automodule:: ogcat.catalog_application
    :members:
@@ -23,8 +25,9 @@ which in turn builds operation-runner requests.
 Materialisation and storage planning
 ------------------------------------
 
-Storage planning answers where the primary artifact belongs. Materialisation
-answers how data reaches that target, or whether the operation is record-only.
+``StoragePlan`` is the concrete decision about where the primary artifact
+belongs and how it is written. Materialisation helpers derive and validate that
+plan from locators and optional writers; they do not define another plan layer.
 
 .. automodule:: ogcat.materialization
    :members:

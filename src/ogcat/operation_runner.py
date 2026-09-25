@@ -1,10 +1,8 @@
-"""Internal operation runner interfaces and the add-operation implementation.
+"""Internal operation runners for add and record-lifecycle operations.
 
 ``Catalog`` owns public API argument handling, schema selection, and transaction
 creation. Operation runners own the operation lifecycle once those inputs are
-prepared. The module-level ``OperationRunner`` ABC is intentionally generic so
-future operation families, such as artifact updates, can implement the same
-``run()`` command interface without pretending they are add operations.
+prepared.
 
 ``AddOperationRunner`` is the concrete runner for the current add lifecycle. It
 uses a template-style flow: ``run()`` fixes the ordering of validation, locator
@@ -15,7 +13,6 @@ separately testable and replaceable by future sibling runners.
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, replace
@@ -200,17 +197,8 @@ class _AddOperationPlan:
     user_metadata_at_write: MetadataDict
 
 
-class OperationRunner(ABC):
-    """Explicit command interface for internal operation runners."""
-
-    @abstractmethod
-    def run(self) -> CatalogRecord | None:
-        """Run the operation and return the persisted or staged record."""
-        ...
-
-
 @dataclass(slots=True)
-class AddOperationRunner(OperationRunner):
+class AddOperationRunner:
     """Template-method coordinator for one internal add-operation lifecycle."""
 
     dependencies: OperationServices
@@ -674,7 +662,7 @@ class AddOperationRunner(OperationRunner):
 
 
 @dataclass(slots=True)
-class RecordLifecycleOperationRunner(OperationRunner):
+class RecordLifecycleOperationRunner:
     """Coordinator for delete, restore, and purge record lifecycle operations."""
 
     dependencies: OperationServices

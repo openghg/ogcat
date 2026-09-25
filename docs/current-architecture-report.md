@@ -1,7 +1,8 @@
 # Current Architecture Report
 
 This report describes the architecture after the #84 refactor train through
-#92. It is a snapshot, not a claim that the structure is final. The main design
+#92 and the later removal of unused orchestration abstractions. It is a snapshot,
+not a claim that the structure is final. The main design
 direction is to keep `Catalog`, `CatalogRecordSet`, and the CLI as public
 presentation surfaces while moving orchestration, domain policy, and persistence
 behind clearer internal interfaces.
@@ -18,11 +19,12 @@ flowchart TD
   Catalog["Catalog facade"]
   RecordSet["CatalogRecordSet"]
   App["CatalogApplication"]
-  Runner["AddOperationRunner"]
+  AddRunner["AddOperationRunner"]
+  LifecycleRunner["RecordLifecycleOperationRunner"]
   Hooks["HookManager / HookDispatcher"]
   UOW["UnitOfWork"]
   Planning["Storage planning / naming / classification"]
-  Materialization["Materialization targets / writers"]
+  Materialization["StoragePlan / writer helpers"]
   Secondaries["Secondary artifact operations"]
   Repository["CatalogRepository protocol"]
   TinyDB["TinyDbCatalogRepository"]
@@ -32,14 +34,19 @@ flowchart TD
   CLI --> Catalog
   Catalog --> RecordSet
   Catalog --> App
-  App --> Runner
-  Runner --> Hooks
-  Runner --> UOW
-  Runner --> Planning
-  Runner --> Materialization
-  Runner --> Secondaries
-  Runner --> Repository
-  Runner --> Audit
+  Catalog --> LifecycleRunner
+  App --> AddRunner
+  AddRunner --> Hooks
+  AddRunner --> UOW
+  AddRunner --> Planning
+  AddRunner --> Materialization
+  AddRunner --> Secondaries
+  AddRunner --> Repository
+  AddRunner --> Audit
+  LifecycleRunner --> UOW
+  LifecycleRunner --> Repository
+  LifecycleRunner --> Storage
+  LifecycleRunner --> Audit
   Materialization --> Storage
   Repository --> TinyDB
 ```
@@ -47,8 +54,8 @@ flowchart TD
 | Layer | Components | Main responsibility |
 |-------|------------|---------------------|
 | Presentation/API | `Catalog`, `CatalogRecordSet`, CLI | Public Python and command-line workflows, argument coercion, user-facing compatibility |
-| Application/orchestration | `CatalogApplication`, `AddOperationRunner`, operation requests/services, hooks, unit of work | Operation sequencing, rollback boundaries, hook dispatch, audit coordination |
-| Domain/policy | naming, storage planning, materialization intent, classification, validation, replica planning, secondary artifacts | Catalog rules that are independent of the storage backend |
+| Application/orchestration | `CatalogApplication`, concrete add and record-lifecycle coordinators, operation requests/services, hooks, unit of work | Operation sequencing, rollback boundaries, hook dispatch, audit coordination |
+| Domain/policy | naming, storage plans, writer validation, classification, validation, replica planning, secondary artifacts | Catalog rules that are independent of the storage backend |
 | Data/infrastructure | repositories, TinyDB implementation, storage adapters, writers, audit sink | Persistence and filesystem or fsspec side effects |
 
 ## Primary Add Flow
@@ -92,6 +99,7 @@ sequenceDiagram
 | `CatalogRecord` / `ArtifactLocator` | Persisted record model and locator abstraction. Keeps compatibility path fields while the locator model becomes primary. | repository, storage planning, search, record sets, validation. |
 | `CatalogApplication` | Internal application service that turns public add requests into runner requests, chooses copy/move writers, and schedules secondary artifacts. | `Catalog`, `AddOperationRunner`, storage planning, writers, `TemplateLinkSecondaryArtifact`. |
 | `AddOperationRunner` | Lifecycle coordinator for add operations: validation, hooks, storage planning, writing, record staging, secondary artifacts, commit, rollback, audit. | `AddOperationRequest`, `OperationServices`, `HookDispatcher`, `UnitOfWork`, writers, repository, audit sink. |
+| `RecordLifecycleOperationRunner` | Lifecycle coordinator for delete, restore, and purge. | `RecordLifecycleOperationRequest`, `OperationServices`, `UnitOfWork`, repository, storage removal, audit sink. |
 | `OperationServices` | Bundle of runner dependencies and callbacks. | `Catalog`, hooks, repository, validation, audit. |
 | `OperationContext` | Mutable operation-scoped context shared with hooks and writers. | hooks, writers, runner, storage plans, rollback registrar. |
 | Hook protocols / `HookDispatcher` | Structural plugin extension points for lifecycle phases. | `OperationContext`, `ValidationReport`, `HookManager`, runner. |
@@ -101,7 +109,7 @@ sequenceDiagram
 | `SearchQuery` and search helpers | Backend-neutral search terms and in-memory matching semantics. | repository, `CatalogRecordSet`, CLI. |
 | Naming module | Template rendering, generated naming context, public versus internal template-field policy. | storage planning, template replicas, replica views. |
 | Storage planning | Primary locator policy for UUID, template, and user-provided targets. | naming, locators, storage roots, `StoragePlan`. |
-| Materialization module | Internal representation of how planned targets become write targets. | operation runner, storage plans, writers. |
+| Materialization module | Small helpers that derive or validate a `StoragePlan` from a locator and optional writer. | operation coordinator, storage plans, writers. |
 | Storage adapters | Local and fsspec-like target operations. | writers, storage planning, artifact locators. |
 | Writers | Copy, move, unzip, function, and memory/path writer helpers. | `OperationContext`, `OperationSource`, `ArtifactLocator`, storage helpers. |
 | Classification | Cheap artifact and collection classification metadata. | `Catalog.add_collection`, record metadata, docs/examples. |
@@ -165,14 +173,16 @@ change:
 - search and record-set construction
 - compatibility helpers such as path resolution
 
-This is the largest single-responsibility concern. The direction is correct,
-but more extraction would make changes less risky.
+This is the largest concentration of responsibilities. Size alone does not
+justify more services; extract a cohesive responsibility only when doing so
+removes duplication or makes an observed workflow safer.
 
 ### `CatalogApplication`
 
-`CatalogApplication` is the right kind of orchestration boundary, but it still
-depends on a concrete `Catalog` object and reaches through catalog helper
-methods. A smaller services protocol would better satisfy dependency inversion.
+`CatalogApplication` depends on the concrete `Catalog` facade and reaches
+through catalog helper methods. That coupling is visible, but another services
+protocol would add indirection without a second application implementation or
+workflow that needs it.
 
 ### `OperationContext`
 
@@ -183,10 +193,10 @@ or not meaningful in the current phase.
 
 ### Storage Planning
 
-Storage planning is function-based and currently branches over UUID, template,
-URL-path, local-root, and user-provided placement. This is readable today, but
-new placement policies may make the module harder to change without strategy
-objects or a planner protocol.
+Storage planning is function-based and branches over UUID, template, URL-path,
+local-root, and user-provided placement. `StoragePlan` is the one concrete plan
+passed to writers and record construction. Keep this direct shape until an
+actual placement policy makes the branching unmanageable.
 
 ### Metadata And Naming
 
@@ -202,28 +212,27 @@ central domain rule that deserves careful tests.
 |-----------|---------------|
 | Single responsibility | Improving. `AddOperationRunner`, storage planning, secondary artifacts, and repository are now clearer. `Catalog` and `OperationContext` remain broad. |
 | Open/closed | Mixed. Hook protocols, writer protocols, repository protocol, and storage adapters support extension. Storage placement still uses branching in functions. |
-| Liskov substitution | Good where protocols are explicit: repository, hooks, writers, secondary artifact operations. Concrete code should keep depending on those protocols where possible. |
+| Liskov substitution | Good where protocols represent real substitutable implementations: repository, hooks, writers, secondary artifact operations. Operation coordinators are concrete internal classes. |
 | Interface segregation | Good for hook phase protocols and repository. Less strong for `OperationContext` and `CatalogApplication`, which expose broad collaborators. |
-| Dependency inversion | Repository is the strongest example. `CatalogApplication` depending on concrete `Catalog` is the main remaining inversion gap. |
+| Dependency inversion | Repository is the strongest example. `CatalogApplication` has one concrete caller and dependency, so adding another protocol now would be speculative. |
 
 ## Suggested Improvements
 
-1. Split `Catalog` internals into smaller services:
-   schema/spec service, metadata update service, audit adapter, and operation
-   service factory.
+1. Keep `Catalog` as the public facade. Extract one of its responsibilities
+   only when a change exposes duplicated policy or an independently testable
+   failure boundary; do not create a service per method family by default.
 
-2. Replace `CatalogApplication(catalog: Catalog)` with explicit service
-   protocols for the operations it needs. That would keep the application layer
-   from depending on facade private methods.
+2. Keep `CatalogApplication(catalog: Catalog)` direct until another caller or
+   implementation demonstrates a need for a service protocol. Reduce private
+   facade callbacks when doing so removes real duplication.
 
-3. Introduce storage planner strategies before adding more placement policies.
-   `UuidPrimaryPlanner`, `TemplatePrimaryPlanner`, and `UserProvidedPlanner`
-   could share a protocol while keeping current function wrappers for
-   compatibility.
+3. Keep storage planning function-based and use `StoragePlan` as the sole plan
+   object. Introduce planner strategies only after a concrete placement policy
+   cannot be expressed clearly in the existing functions.
 
-4. Consider phase-specific hook context views. The runtime can keep one mutable
-   `OperationContext`, but protocols could expose narrower read/write surfaces
-   for validation, locator resolution, writing, and post-write hooks.
+4. Keep one `OperationContext` for compatibility. Consider phase-specific views
+   only if real hook defects show that runtime validation cannot contain its
+   broad mutable surface.
 
 5. Keep collection semantics above storage adapters. Storage targets should
    remain file-like or directory-like; collection behavior should stay in
@@ -235,5 +244,5 @@ central domain rule that deserves careful tests.
 
 7. Keep interface tests close to the owning module. Public `Catalog` tests
    should cover behavior smoke/regression cases; lower-level behavior should be
-   asserted against storage planners, materializers, runners, repositories, and
+   asserted against storage planners, writer helpers, concrete coordinators, repositories, and
    secondary artifact interfaces.

@@ -42,8 +42,9 @@ public API specification.
    scientific caller.
 3. **Keep ownership explicit.** A reference records an external path that ogcat
    must not delete. A managed move owns the resulting object and its readable
-   view. Evaluate adoption of an already published managed path separately;
-   it requires containment and completion checks before purge can own it.
+   view. Defer adoption of an already published managed path; it requires a
+   demonstrated workflow plus containment and completion checks before purge
+   can own it.
 4. **Keep hooks compatible while reducing their role.** Direct method inputs
    and caller-side validation are the default for new workflows. The add path
    must validate again after its final mutating hook. Use one authoritative
@@ -78,10 +79,11 @@ public API specification.
   carrying caller-supplied validation metadata. Avoid requiring users to
   synthesize `StoragePlan` and naming fields for that common operation.
 - Route completed outputs to one registrar process per catalog, which opens a
-  writable catalog only while registering; define a stable run/attempt/output
-  identity and retry behavior before claiming an atomic batch. This is an
-  operating rule until a full writer boundary is implemented. Keep worker
-  computation and validation outside catalog transactions.
+  writable catalog only while registering. The workflow registrar owns its
+  run/attempt/output identity and retry behavior. Generic core idempotency and
+  adoption remain deferred. This is an operating rule until a full writer
+  boundary is implemented. Keep worker computation and validation outside
+  catalog transactions.
 
 ### Simplify and harden
 
@@ -108,6 +110,7 @@ updated as implementation lands; a proposal above is not evidence of delivery.
 | CLI parity for registration and lookup | Avoid requiring Python for common reference, collection, strict selection, locator, and readable-view operations. | CLI command tests and documented help output. |
 | Managed completed-output metadata | Preserve caller validation facts when moving a finished file without constructing a `StoragePlan`. | `add_file` regression test covers a move, normalized values, and caller precedence over generic extraction. |
 | Add-path simplification and late validation | Remove an internal intent conversion and mutable plan cache; reject hooks changing the target or invalidating schema after bytes have been written. | Lifecycle/hook/writer tests check hook order, rollback, late schema/target/template changes. Managed primary planning still runs twice to preserve hook phase order. |
+| Remove unused orchestration abstractions | The generic runner base, materialisation intent/target/plan wrappers, and duplicate application adapters added extension points without a second implementation or workflow that used them. Keep concrete add and record-lifecycle coordinators and one concrete `StoragePlan`. | Existing public API and lifecycle tests remain the compatibility boundary. Workflow registrars still own identity and retry policy; core idempotency, adoption, and public handles remain deferred. |
 | Retired plans and refreshed docs | Keep speculative filesystem/handle ideas accessible without presenting them as current scope. | Archived plans under `docs/plans/archive`, ADR status and roadmap updated; documentation build before PR. |
 
 ## Validation evidence
@@ -122,10 +125,16 @@ updated as implementation lands; a proposal above is not evidence of delivery.
 - The NAME example tests cover two 144-member MHD series with distinct met
   models, twelve selected months, missing/duplicate months, and reruns against
   mounted and listing-backed roots. No remote data were copied or changed.
+- The orchestration cleanup passed the full ogcat suite, Ruff, Pyright, and an
+  offline Sphinx build with warnings treated as errors. It changes internal
+  maintainer modules only; the documented public API and operation ordering are
+  unchanged.
 
 ## Deliberately deferred
 
-Generic read/write handles, converter pipelines, distributed leases, ACLs,
-remote member listing, a server, and a SQLite migration have no demonstrated
-need in the three inspected BP1 catalogs. Preserve the ability to add them when
-a real workflow and deployment contract require them.
+Generic idempotency, managed-path adoption, read/write handles, converter
+pipelines, distributed leases, ACLs, remote member listing, a server, and a
+SQLite migration have no demonstrated need in the three inspected BP1
+catalogs. Workflow registrars own identity and retry policy for now. Preserve
+the ability to add shared machinery when a real workflow and deployment
+contract require it.

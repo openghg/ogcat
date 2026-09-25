@@ -13,11 +13,11 @@ a formal framework:
 - **Presentation/API:** `Catalog`, `CatalogRecordSet`, and the CLI expose user
   workflows. They should keep public argument handling and user-facing
   compatibility behavior visible, while delegating operation choreography.
-- **Application/orchestration:** `CatalogApplication`, `AddOperationRunner`,
-  operation request objects, hooks, audit emission, and units of work coordinate
-  complete operations. This layer owns sequencing, rollback boundaries, and
-  runner dependencies.
-- **Domain/policy:** storage planning, materialisation targets, naming,
+- **Application/orchestration:** `CatalogApplication`, the concrete add and
+  record-lifecycle coordinators, operation request objects, hooks, audit
+  emission, and units of work coordinate complete operations. This layer owns
+  sequencing and rollback boundaries.
+- **Domain/policy:** storage planning, `StoragePlan`, writer validation, naming,
   validation, cheap classification, replica-view planning, secondary artifact
   policy, and future collection-artifact policy own catalog rules.
 - **Data/infrastructure:** `CatalogRepository`, `TinyDbCatalogRepository`,
@@ -36,8 +36,9 @@ Key concrete types are:
 - `CatalogSpec`: the serialisable catalog definition stored in `catalog.json`
 - `Catalog`: the public API facade for creating, opening, adding, searching, and resolving record paths
 - `CatalogApplication`: the internal application service that builds add-operation requests
-- `AddOperationRunner`: the current lifecycle runner for `add_file()` and `add_artifact()`
-- `StoragePlan` and materialisation targets: explicit storage/write decisions for primary artifacts
+- `AddOperationRunner`: the concrete coordinator for `add_file()` and `add_artifact()`
+- `RecordLifecycleOperationRunner`: the concrete coordinator for delete, restore, and purge
+- `StoragePlan`: the concrete storage and write decision for a primary artifact
 - `SecondaryArtifactOperation`: ordered follow-up operations such as template-link symlinks
 - `CatalogRepository`: a protocol for record storage
 - `TinyDbCatalogRepository`: the current repository implementation
@@ -118,33 +119,31 @@ writes, storage activity, cleanup, and current catalog-local audit events.
 Stronger backends could map the same conceptual API to native transactions
 later.
 
-## Operation Runners
+## Operation Coordination
 
 `Catalog` remains the public API facade: it validates user inputs, selects schemas, and delegates
 add-operation orchestration to the internal `CatalogApplication` service. The application service
 prepares operation-specific request objects, wires managed-file storage planning to copy/move
-writers, and invokes the operation runner. This keeps the public API methods focused on the API
+writers, and invokes the add coordinator. This keeps the public API methods focused on the API
 contract rather than the add lifecycle details.
 
-The current concrete runner is `AddOperationRunner`. It implements the add lifecycle for
+`AddOperationRunner` implements the add lifecycle for
 `add_file()` and `add_artifact()`: validation, hook dispatch, locator resolution, storage planning,
 artifact writing or reference skipping, derived metadata collection, record staging, required
-secondary artifact operations, commit, audit, and rollback. `OperationRunner` is the generic
-internal command interface with a single `run()` method, so future operation families can be
-represented without overloading add-specific names.
+secondary artifact operations, commit, audit, and rollback.
+`RecordLifecycleOperationRunner` coordinates delete, restore, and purge. These are ordinary
+internal classes with operation-specific requests. They do not implement a generic runner
+interface; a shared abstraction can wait until concrete operations need shared behaviour.
 
 Shared catalog services such as hook management, audit emission, validation, and record building are
 passed through `OperationServices`. Operation-specific data lives in request dataclasses such as
 `AddOperationRequest`. This keeps the public catalog surface narrow while making the internal
-contract explicit enough for future runners, such as an artifact update runner, to reuse the same
-services without sharing add-only request fields.
+contract explicit without sharing add-only request fields with record-lifecycle operations.
 
-Writer materialisation is represented explicitly by an internal materialisation intent and target.
-A primary artifact plan answers where the artifact belongs, and exposes that decision as a
-materialisation target. The materialisation intent answers how bytes or directories are produced
-there, if at all. That distinction is important for future directory-backed collection artifacts
-and `.zarr`-style outputs because `Catalog` should not branch on file versus directory versus
-collection.
+`StoragePlan` is the sole concrete internal plan for a primary artifact. It records the canonical
+locator, file-like or directory-like target kind, write mode, ownership, and placement metadata.
+Small materialisation helpers derive or validate that plan from a locator and optional writer;
+there is no separate intent/target/plan object hierarchy.
 
 Secondary artifacts, such as the optional default human-readable template symlink for UUID primary
 storage, are modeled as ordered secondary operations. Any selected secondary operations run after
@@ -160,9 +159,8 @@ semantics live in domain policy and derived classification metadata.
 
 That means the existing operation model should still apply:
 
-- the primary artifact plan chooses the canonical file or directory locator
-- the materialisation intent decides whether a writer produces that target, skips writing for a
-  record-only reference, or delegates to a future directory writer
+- `StoragePlan` chooses the canonical file or directory locator and records whether a writer
+  produces it or the operation is a record-only reference
 - collection policy records cheap metadata such as member pattern, member format, and reader hints
 - secondary artifact operations remain separate follow-up work after the primary record is staged
 
