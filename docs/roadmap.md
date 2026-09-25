@@ -1,99 +1,153 @@
 # Roadmap
 
-Planning snapshot updated from a review of `main` at `7eef31a` on 2026-09-24. This page
-distinguishes available behavior from proposed work. The [long-term plan](ogcat_long_term_plan.md)
-and [design notes](adr/index.md) record broader design history; their issue lists are not a
-current implementation checklist.
+Planning snapshot from `ogcat` at `3391150` and a read-only review of local
+Verification Games and BP1 catalogs on 2026-09-25. This page separates existing
+behavior from proposed work. The [long-term plan](ogcat_long_term_plan.md) and
+[virtual artifact filesystem ADR](adr/0002-virtual-artifact-filesystem-domain-model.md)
+preserve broader design ideas; their issue lists are not the implementation order.
+
+## Observed Workflows
+
+| Workflow | Evidence | What ogcat must make easy |
+| --- | --- | --- |
+| Find scientific inputs | Verification Games searches flux and observation metadata, then passes stored paths to xarray. Some current SLURM scripts instead pin literal UUID object paths. | Resolve a record ID or a unique metadata query to a path, then pin the choice in a run manifest. |
+| Find footprint series and months | BP1's `/group/chem/acrg/fp_name_catalog` has 229 collection references covering 14,821 existing NAME files. Its earlier backup has 14,325 individual file references. The [footprint importer](../examples/catalog_acrg_name_footprints.py) stores roots and filename patterns. Verification Games selects a series, then passes its full glob to xarray before slicing time. One MHD series has 144 monthly files but only 12 for a 2021 request. | Rerunnable import, unambiguous series selection, and selection of relevant local member files before opening them. Keep the source tree. |
+| Register finished outputs | BP1's `result_outputs_catalog` had 1,232 reference records and was updated on 2026-09-25. Verification Games creates a result bundle, runs computation outside ogcat, then registers completed files. The [verification games recipe](tutorials/verification-games-recipes.md) describes the same boundary. | A short, rerunnable registration step after validation, with one catalog writer. |
+| Manage selected files | BP1's `games_catalog` has 226 records, including UUID-primary and template-primary managed files. `Catalog.add_file()` can copy or move files and create a readable template symlink beside a UUID-primary artifact. | Keep managed ownership, delete/restore/purge, and the readable view. Show both canonical and readable paths in the CLI. |
+
+The BP1 counts are observations from those files on the review date, not tests or
+promises about future contents. BP1's `/group/chem/acrg` is GPFS; the separate
+main-server NFS concern requires its own storage tests.
 
 ## Available Today
 
-`ogcat` has managed file ingest, local and URI references, collection reference
-records, named record schemas, lightweight metadata validation, search, generated
-views, audit events, and record delete/restore/purge operations. Records can hold
-artifact descriptors with claims and facets. A capability registry and small
-standard-library reader, writer, and converter examples exist, but `Catalog`
-does not yet provide an integrated artifact read API.
+`ogcat` provides managed file and directory-store ingest, local and URI
+references, collection reference records, record schemas, metadata validation,
+search, generated views, audit events, and delete/restore/purge. Records can hold
+artifact descriptors with claims and facets. A capability registry and bundled
+reader/writer examples exist, but `Catalog` does not dispatch reads through them.
 
-`Catalog.add_artifacts()` processes items one at a time and keeps earlier
-commits if a later item fails. `Catalog.add_collection()` records an existing
-collection locator and classification metadata; it does not append members to
-a managed collection or attach collection capability claims automatically.
+`Catalog.add_artifacts()` commits items one by one. `Catalog.add_collection()`
+records a collection root and classification metadata; it does not enumerate or
+append members. The importer calculates member counts and first/last months,
+but does not persist its parsed member list. Those summaries do not guarantee
+continuous coverage. `Catalog.add_reference()` does not verify that a local
+target exists. Applications must validate completed output before registration.
 
-## Recent Correctness Fixes
+The CLI exposes managed `add`, search, record inspection, path output, and
+delete/restore/purge. It does not expose `add_reference()` or
+`add_collection()`. `ogcat add` prints the primary path but not the readable
+template link.
 
-The review led to three safeguards for existing catalogs and files:
+## Next Work, In Order
 
-1. Rendered storage paths reject `.` and `..` segments and paths that resolve
-   outside the selected managed root. Tests cover primary storage and template
-   replicas. Concurrent filesystem changes after planning still need separate
-   write-time protection if catalogs must resist hostile local processes.
-2. Purge removes artifacts only when the record has a known managed write mode.
-   Record-only references, including older records without a storage mode, do
-   not grant ogcat ownership of a pre-existing file.
-3. `Catalog.create()` and `ogcat init` reject an existing `catalog.json`,
-   preserving its specification and records. Spec migration remains separate.
+### 1. State And Enforce The Single-Writer Contract
 
-## Near-Term Feature Slices
+Treat one process at a time as the catalog mutation contract. HPC workers write
+outputs and completion manifests; one registrar validates and registers them.
+The current result-output scripts can each open the same TinyDB catalog, so
+sequential timestamps are not evidence of serialization. Add a regression test
+that makes simultaneous mutation fail clearly or route through one writer.
 
-### Persist Writer Results (#117)
+Keep TinyDB for zero-setup single-user use while evaluating storage robustness.
+Its JSON storage writes in place, and the current `UnitOfWork` holds in-memory
+compensating actions rather than a durable transaction. Define recovery for an
+interrupted write, a managed object without a record, and a record without its
+readable link. Protect `catalog.json` updates with replacement and recovery.
+Do not select SQLite from the assumption that local-disk guarantees carry over
+to NFS or GPFS; test the actual deployment filesystem first.
 
-Writers can materialize data, but the current writer protocol returns `None`;
-produced claims and facets have no standard merge path into the persisted
-artifact descriptor. Define a small structured result while preserving
-existing `None`-returning writers. Specify how returned locators, claims,
-facets, and derived metadata combine with a storage plan and hook changes.
-Reject conflicting or invalid results before commit, and test rollback and
-audit behavior after a writer failure.
+Add a genuinely read-only `Catalog.open()` mode: TinyDB supports read access,
+but the current repository opens it for writing and creates directories. An
+existing Verification Games audit hit `EROFS` while trying to inspect a shared
+catalog. Read-only opening must not create an audit log or permit writes.
 
-### Open Artifacts Through a Requested Interface (#118)
+### 2. Make Finished-Output Registration A Short Operation
 
-Use the existing capability registry for an explicit, narrow catalog read
-operation. First decide how `Catalog.create()` and `Catalog.open()` retain or
-receive plugin capabilities; today they retain hooks but not the supplied
-registry's capabilities. Select a data artifact and a caller-requested
-interface, report missing or ambiguous matches clearly, and define
-context-managed lifetime and cleanup for opened handles. Start with local
-path-backed readers. Keep URI and unsupported locator behavior explicit.
+Support the two existing ownership choices directly:
 
-Existing `add_collection()` records have classification metadata but no
-collection claims/facets. Either add a documented compatibility bridge or
-leave them outside collection-reader dispatch until those facts are persisted.
-An end-to-end managed write/read example also depends on the writer-result
-slice above. The [Unix-inspired model](adr/0002-virtual-artifact-filesystem-domain-model.md)
-keeps opened handles runtime-only and gives them an explicit owner. Writes can
-continue through `ArtifactWriter` and structured results; a public write
-handle needs staging, replacement, and lease semantics before it is specified.
+- `add_reference(path)` records a completed external path without taking
+  ownership. The caller verifies existence, completeness, and readability.
+- `add_file(path, operation="move")` moves a completed file or directory store
+  into managed storage. Allow caller-supplied derived metadata so callers do
+  not construct a `StoragePlan` merely to preserve validation results.
 
-### Import Existing Data In Batches
+Evaluate one narrow adoption operation for a completed path already published
+under the catalog's managed root. It would assert containment and completion,
+take explicit ownership without moving bytes, and register the record in a
+short operation. This is distinct from `add_reference()`: purge may remove an
+adopted object. Current Verification Games Zarr helpers move a directory
+first, then synthesize a `StoragePlan` and naming metadata to register it;
+failure between those steps leaves an unregistered object.
 
-A scan/import workflow would help users catalog existing directories without
-copying each file manually. Start with sequential reference creation through
-the existing add API. Before adding a CLI command, define source identity and
-duplicate policy, deterministic dry-run output, and what happens when one item
-fails or a run resumes. Do not describe the current `add_artifacts()` method
-as atomic batch ingest.
+Use a stable run/attempt/output identity for rerunnable registration. Specify
+`skip`, `update`, and `error` behavior for an existing identity and a way to
+reconcile partial multi-output runs. Leave checksum policy to the caller or a
+small optional helper; checksumming a large directory store should not be
+mandatory. Do not call the current `add_artifacts()` atomic batch ingest.
 
-### Update Managed Collections
+### 3. Complete The Common CLI And Lookup API
 
-Appending members to one managed collection needs more than the current
-create-only writer contract. After writer results are defined, choose one
-authoritative home for the member manifest: a bounded descriptor facet or a
-separate manifest artifact. Define member identity, metadata recomputation,
-rollback of newly written members, and a concurrency contract spanning the
-read, write, and record update. A lock around individual TinyDB calls does not
-cover that whole operation. See the [collection update ideas](ideas.md).
+Expose proposed `add-reference` and `add-collection` commands corresponding to
+the existing Python methods. Support metadata, record type, and JSON output.
+Keep local-path verification and explicit URI/urlpath behavior distinct. Show
+the readable template link in human `add` and `show` output; preserve
+`record.path()` as the canonical path. Provide raw locator output for URI
+records, which `search --paths` currently skips.
 
-## Later Or Optional
+Promote the existing strict `Catalog.get_one()` lookup and expose its
+zero-or-multiple-match errors in a CLI lookup. Do not make a job silently choose
+`results.ids[0]` or a moving `latest` record. On BP1, an MHD/EUROPE/co2 search
+can return both UKV and UMG footprint collections; a notebook selects the first
+result. A reproducible run should resolve and record an exact record ID,
+locator, and relevant input version before launch. For local
+collection references, add a small member-path operation that expands the
+stored relative pattern and returns sorted current paths. A NAME-specific
+adapter can parse the existing `YYYYMM` filename suffix and select months
+overlapping a requested range **before** xarray opens files. Report no matching
+collection, ambiguous collections, missing roots, absent requested months, and
+duplicate month files explicitly. Include boundary months and leave exact
+within-file time slicing to xarray or OpenGHG. A stored `month_start`/`month_end`
+range alone cannot prove which months exist. URI-only collections need a
+reachable mount or a separate listing adapter; local selection must not pretend
+to enumerate them. Make the footprint importer rerunnable instead of appending
+duplicate series on every run. A proposed `Catalog.member_paths(record_id)` and
+`ogcat members ID` should return paths, leaving NAME month parsing in its
+small domain adapter. Use the collection classification pattern as the single
+source: the current importer also copies it into user metadata, and different
+consumers read different copies.
 
-Review add-operation orchestration when the writer-result contract is defined.
-`CatalogApplication.add_file()` currently coordinates closures and a mutable
-planning cache, while several materialization types forward into one
-`StoragePlan`. A focused refactor could make that plan the authoritative
-target and write policy, with an optional writer beside it. Preserve hook
-order, hook-replaced locators, audit phases, and rollback behavior.
+### 4. Simplify The Add Path And Contain Hooks
 
-Grouped search views may help monthly file series, but need defined grouping,
-ordering, and missing-key behavior before an API is chosen. External manager
-bindings, remote storage policy, pipelines, and new backends should be driven
-by concrete workflows while keeping core storage and search independent of
-domain-specific logic.
+Preserve public add methods, hook names, UUID objects, template links, and
+deletion behavior. Internally use one normalized add request, one authoritative
+`StoragePlan`, an optional writer, and an optional view-link action. Remove the
+mutable cached plan in `CatalogApplication.add_file()` and the conversions
+through materialization intent/target/plan. Share primary planning with
+`plan_artifact_storage()`; a plan remains a proposal and must be rechecked when
+used.
+
+Callers should normally compute metadata and validate their output before
+calling an add method. Keep hooks as a compatibility extension. Revalidate
+metadata after the final mutating hook, reject late changes to naming inputs
+after writing, and check the final target at write time. Replace tests that
+assert runner delegation with tests for observable results, hook compatibility,
+rollback, ownership, and interrupted-operation repair.
+
+## Defer Until A Real Workflow Requires Them
+
+- Writer results (#117): add a structured result only when a real writer
+  produces a locator or facts unavailable from its plan and caller metadata.
+- Catalog read handles (#118): add a context-managed local reader only when
+  callers need resource ownership beyond `record.path()` and ordinary library
+  calls. A public write handle needs a durable publish and replacement contract.
+- Managed collection append, typed pipelines, converter routing, mount-relative
+  locators, replica/cache/deep-store state machines, ACLs, and leases: retain
+  these as research, with a named user workflow and failure that simpler
+  registration and lookup cannot handle before implementation.
+
+The earlier [storage and ownership safeguards](architecture.md) remain part of
+the current baseline: rendered paths reject obvious escapes, purge only treats
+known managed write modes as owned, and creating a catalog rejects an existing
+`catalog.json`. A concurrent filesystem change after path planning still needs
+write-time protection.
