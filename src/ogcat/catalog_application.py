@@ -17,10 +17,7 @@ from ogcat.models import ArtifactLocator, CatalogRecord, MetadataDict
 from ogcat.operation_helpers import storage_plan_with_locator
 from ogcat.operation_runner import (
     AddOperationRequest,
-    ArtifactLocatorFactory,
-    DerivedMetadataCollector,
     RecordLifecycleOperationRequest,
-    StoragePlanFactory,
 )
 from ogcat.secondary_artifacts import SecondaryArtifactOperation, TemplateLinkSecondaryArtifact
 from ogcat.spec import RecordSchema
@@ -128,7 +125,7 @@ class CatalogApplication:
         )
 
         with self.catalog.transaction() as transaction:
-            return self.run_add_operation(
+            request = AddOperationRequest(
                 transaction=transaction,
                 commit=True,
                 operation_type="add_file",
@@ -150,6 +147,7 @@ class CatalogApplication:
                 derived_metadata_collector=collect_file_metadata,
                 secondary_artifact_operations=secondary_artifact_operations,
             )
+            return self.catalog._build_add_operation_runner(request).run()
 
     def add_artifact(
         self,
@@ -187,7 +185,7 @@ class CatalogApplication:
                 return storage_plan_with_locator(storage_plan, canonical_locator)
             return storage_plan_for_locator(canonical_locator, writer=artifact_writer)
 
-        return self.run_add_operation(
+        request = AddOperationRequest(
             transaction=transaction,
             commit=commit,
             operation_type="add_artifact",
@@ -207,58 +205,7 @@ class CatalogApplication:
             artifact_writer=artifact_writer,
             storage_plan_factory=plan_artifact_storage,
         )
-
-    def run_add_operation(
-        self,
-        *,
-        transaction: UnitOfWork,
-        commit: bool,
-        operation_type: str,
-        record_type: str,
-        schema: RecordSchema,
-        schema_record_type: str | None,
-        metadata: MetadataDict,
-        storage_mode: str | None,
-        original_path: str | Path | None,
-        original_filename: str | None,
-        suffixes: list[str] | None,
-        derived_metadata: MetadataDict,
-        naming_metadata: MetadataDict | None,
-        time_added: str | None,
-        source: OperationSource,
-        locator_factory: ArtifactLocatorFactory,
-        artifact_writer: ArtifactWriter | None,
-        storage_plan_factory: StoragePlanFactory,
-        derived_metadata_collector: DerivedMetadataCollector | None = None,
-        secondary_artifact_operations: tuple[SecondaryArtifactOperation, ...] = (),
-    ) -> CatalogRecord:
-        """Build and run a shared add-operation request."""
-        request = AddOperationRequest(
-            transaction=transaction,
-            commit=commit,
-            operation_type=operation_type,
-            record_type=record_type,
-            schema=schema,
-            schema_record_type=schema_record_type,
-            metadata=metadata,
-            storage_mode=storage_mode,
-            original_path=original_path,
-            original_filename=original_filename,
-            suffixes=suffixes,
-            derived_metadata=derived_metadata,
-            naming_metadata=naming_metadata,
-            time_added=time_added,
-            source=source,
-            locator_factory=locator_factory,
-            artifact_writer=artifact_writer,
-            storage_plan_factory=storage_plan_factory,
-            derived_metadata_collector=derived_metadata_collector,
-            secondary_artifact_operations=secondary_artifact_operations,
-        )
-        result = self.catalog._build_add_operation_runner(request).run()
-        if result is None:
-            raise RuntimeError("add operation did not return a record.")
-        return result
+        return self.catalog._build_add_operation_runner(request).run()
 
     def delete(
         self,

@@ -77,19 +77,15 @@ Support the two existing ownership choices directly:
 - `add_file(path, operation="move", derived_metadata=...)` moves a completed
   file or directory store into managed storage with caller validation facts.
 
-Evaluate one narrow adoption operation for a completed path already published
-under the catalog's managed root. It would assert containment and completion,
-take explicit ownership without moving bytes, and register the record in a
-short operation. This is distinct from `add_reference()`: purge may remove an
-adopted object. Current Verification Games Zarr helpers move a directory
-first, then synthesize a `StoragePlan` and naming metadata to register it;
-failure between those steps leaves an unregistered object.
-
-Use a stable run/attempt/output identity for rerunnable registration. Specify
-`skip`, `update`, and `error` behavior for an existing identity and a way to
-reconcile partial multi-output runs. Leave checksum policy to the caller or a
-small optional helper; checksumming a large directory store should not be
-mandatory. Do not call the current `add_artifacts()` atomic batch ingest.
+For now, the workflow registrar owns stable run/attempt/output identity and
+defines `skip`, `update`, and `error` behavior for a repeated registration.
+Core idempotency, reconciliation of partial multi-output runs, and adoption of
+an already published path under the managed root remain deferred until a real
+registrar demonstrates the required semantics. Current Verification Games Zarr
+helpers can still leave an unregistered object if they move a directory before
+registration. Leave checksum policy to the caller or a small optional helper;
+checksumming a large directory store should not be mandatory. Do not call the
+current `add_artifacts()` atomic batch ingest.
 
 ### 3. Use Collection Selection In Consumers
 
@@ -118,11 +114,11 @@ collections need a reachable mount or a separate listing adapter.
 ### 4. Continue Simplifying The Add Path And Containing Hooks
 
 Preserve public add methods, hook names, UUID objects, template links, and
-deletion behavior. The first pass removed the mutable cached primary plan and
-unused intent helpers, and now revalidates after late hook mutation. Continue
-reducing internal planning layers only where it makes control flow clearer;
-share primary planning with `plan_artifact_storage()` when that can preserve
-observable hook order. A plan remains a proposal and must be rechecked when used.
+deletion behavior. The cleanup removed the generic runner interface, the
+unused materialisation intent/target/plan wrappers, and duplicate application
+adapters. `StoragePlan` is now the sole concrete primary plan. Continue reducing
+internal layers only when the result makes control flow clearer. A plan remains
+a proposal and must be rechecked when used.
 
 Callers should normally compute metadata and validate their output before
 calling an add method. Keep hooks as a compatibility extension. The add runner
@@ -137,6 +133,8 @@ and interrupted-operation repair.
 - Catalog read handles (#118): add a context-managed local reader only when
   callers need resource ownership beyond `record.path()` and ordinary library
   calls. A public write handle needs a durable publish and replacement contract.
+- Core idempotency and managed-path adoption: leave identity and retry policy
+  with each workflow registrar until observed workflows justify shared semantics.
 - Managed collection append, typed pipelines, converter routing, mount-relative
   locators, replica/cache/deep-store state machines, ACLs, and leases: retain
   these as research, with a named user workflow and failure that simpler

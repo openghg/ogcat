@@ -149,9 +149,10 @@ remain committed.
 Internally, `Catalog` prepares an `AddOperationRequest` and delegates the ordered lifecycle to an
 `AddOperationRunner`. The runner is not public API, but the boundary matters for plugin behavior:
 hooks and artifact writers see the same `OperationContext`, hook ordering, rollback behavior, and
-audit events whether the operation started from `add_file()` or `add_artifact()`. The generic
-`OperationRunner` interface is intentionally broader than add operations so future operation
-families can use the same command boundary without changing the public hook API.
+audit events whether the operation started from `add_file()` or `add_artifact()`. Add and
+record-lifecycle operations use concrete internal coordinator classes with operation-specific
+requests. They deliberately have no generic runner interface; the public hook API does not depend
+on such an abstraction.
 
 The same wrapper pattern works for path-backed transforms:
 

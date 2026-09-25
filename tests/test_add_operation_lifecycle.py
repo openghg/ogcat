@@ -20,7 +20,7 @@ from ogcat import (
 )
 from ogcat.catalog_application import CatalogApplication
 from ogcat.models import MetadataDict
-from ogcat.operation_runner import AddOperationRequest, OperationRunner
+from ogcat.operation_runner import AddOperationRequest
 from ogcat.secondary_artifacts import SecondaryArtifactResult, SecondaryArtifactRole
 from ogcat.storage import StoragePlan
 from ogcat.transactions import UnitOfWork
@@ -61,15 +61,14 @@ def test_add_file_facade_delegates_to_application_service(
     assert captured["create_template_replica"] is True
 
 
-def test_run_add_operation_delegates_to_operation_runner(
+def test_add_artifact_delegates_prepared_request_to_runner(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Catalog add setup delegates the lifecycle to OperationRunner."""
+    """Catalog add setup delegates a prepared request to the runner."""
     requests: list[AddOperationRequest] = []
-    runners: list[OperationRunner] = []
 
-    class FakeRunner(OperationRunner):
+    class FakeRunner:
         def __init__(self, request: AddOperationRequest) -> None:
             self.request = request
 
@@ -82,11 +81,9 @@ def test_run_add_operation_delegates_to_operation_runner(
                 locator=ArtifactLocator(kind="uri", value="s3://bucket/delegated.zarr"),
             )
 
-    def build_fake_runner(self: Catalog, request: AddOperationRequest) -> OperationRunner:
+    def build_fake_runner(self: Catalog, request: AddOperationRequest) -> FakeRunner:
         requests.append(request)
-        runner = FakeRunner(request)
-        runners.append(runner)
-        return runner
+        return FakeRunner(request)
 
     monkeypatch.setattr(Catalog, "_build_add_operation_runner", build_fake_runner)
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
@@ -98,9 +95,7 @@ def test_run_add_operation_delegates_to_operation_runner(
     )
 
     assert len(requests) == 1
-    assert len(runners) == 1
     request = requests[0]
-    assert isinstance(runners[0], OperationRunner)
     assert request.transaction.repository is catalog.repository
     assert request.commit is True
     assert request.operation_type == "add_artifact"
@@ -117,7 +112,7 @@ def test_add_file_application_request_uses_copy_writer(
     """Managed file requests carry their copy writer."""
     requests: list[AddOperationRequest] = []
 
-    class FakeRunner(OperationRunner):
+    class FakeRunner:
         def __init__(self, request: AddOperationRequest) -> None:
             self.request = request
 
@@ -130,7 +125,7 @@ def test_add_file_application_request_uses_copy_writer(
                 locator=ArtifactLocator.path(tmp_path / "stored.nc"),
             )
 
-    def build_fake_runner(self: Catalog, request: AddOperationRequest) -> OperationRunner:
+    def build_fake_runner(self: Catalog, request: AddOperationRequest) -> FakeRunner:
         requests.append(request)
         return FakeRunner(request)
 
@@ -155,7 +150,7 @@ def test_add_file_template_primary_request_has_no_template_link_secondary(
     """Template-primary file requests do not schedule a template-link secondary."""
     requests: list[AddOperationRequest] = []
 
-    class FakeRunner(OperationRunner):
+    class FakeRunner:
         def __init__(self, request: AddOperationRequest) -> None:
             self.request = request
 
@@ -168,7 +163,7 @@ def test_add_file_template_primary_request_has_no_template_link_secondary(
                 locator=ArtifactLocator.path(tmp_path / "stored.nc"),
             )
 
-    def build_fake_runner(self: Catalog, request: AddOperationRequest) -> OperationRunner:
+    def build_fake_runner(self: Catalog, request: AddOperationRequest) -> FakeRunner:
         requests.append(request)
         return FakeRunner(request)
 
@@ -191,7 +186,7 @@ def test_add_file_uuid_primary_can_skip_template_link_secondary(
     """UUID-primary file requests can skip the template-link secondary."""
     requests: list[AddOperationRequest] = []
 
-    class FakeRunner(OperationRunner):
+    class FakeRunner:
         def __init__(self, request: AddOperationRequest) -> None:
             self.request = request
 
@@ -204,7 +199,7 @@ def test_add_file_uuid_primary_can_skip_template_link_secondary(
                 locator=ArtifactLocator.path(tmp_path / "stored.nc"),
             )
 
-    def build_fake_runner(self: Catalog, request: AddOperationRequest) -> OperationRunner:
+    def build_fake_runner(self: Catalog, request: AddOperationRequest) -> FakeRunner:
         requests.append(request)
         return FakeRunner(request)
 
@@ -239,7 +234,7 @@ def test_add_artifact_application_request_uses_writer(
         ) -> None:
             raise AssertionError("fake runner should not invoke writer")
 
-    class FakeRunner(OperationRunner):
+    class FakeRunner:
         def __init__(self, request: AddOperationRequest) -> None:
             self.request = request
 
@@ -252,7 +247,7 @@ def test_add_artifact_application_request_uses_writer(
                 locator=ArtifactLocator.path(tmp_path / "stored.zarr"),
             )
 
-    def build_fake_runner(self: Catalog, request: AddOperationRequest) -> OperationRunner:
+    def build_fake_runner(self: Catalog, request: AddOperationRequest) -> FakeRunner:
         requests.append(request)
         return FakeRunner(request)
 
@@ -391,7 +386,7 @@ def test_secondary_artifacts_run_in_order_and_share_metadata(tmp_path: Path) -> 
     locator = ArtifactLocator.path(tmp_path / "external.txt")
 
     with catalog.transaction() as transaction:
-        record = catalog._application().run_add_operation(
+        request = AddOperationRequest(
             transaction=transaction,
             commit=True,
             operation_type="add_artifact",
@@ -413,11 +408,9 @@ def test_secondary_artifacts_run_in_order_and_share_metadata(tmp_path: Path) -> 
                 locator=canonical_locator,
                 write_mode="reference",
             ),
-            secondary_artifact_operations=(
-                FirstSecondaryArtifact(),
-                SecondSecondaryArtifact(),
-            ),
+            secondary_artifact_operations=(FirstSecondaryArtifact(), SecondSecondaryArtifact()),
         )
+        record = catalog._build_add_operation_runner(request).run()
 
     assert [call[0] for call in calls] == ["first", "second"]
     assert calls[0][1]["initial"] == "metadata"
