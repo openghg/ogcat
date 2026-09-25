@@ -21,6 +21,15 @@ uv sync --extra netcdf
 When ``xarray`` is available, ``ogcat`` extracts a lightweight summary of
 dimension names and sizes from ``.nc`` files during ingest.
 
+### fsspec storage
+
+```bash
+uv sync --extra fsspec
+```
+
+Install this extra when using fsspec URL paths for storage or writers. The
+filesystem protocol may require its own additional package.
+
 ### Documentation build
 
 ```bash

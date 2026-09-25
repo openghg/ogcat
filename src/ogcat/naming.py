@@ -280,11 +280,16 @@ def render_storage_location(
     """Render directory and filename templates into a final storage path."""
     validate_human_readable_template_fields(directory_template, filename_template)
     rel_dir = render_template(directory_template, context)
-    rel_dir = "/".join(_normalise_segment(part) for part in rel_dir.split("/") if part)
+    directory_parts = [_normalise_segment(part) for part in rel_dir.split("/") if part]
 
     filename = _render_filename(filename_template, context)
-    target = files_root / rel_dir / filename
+    if any(part in {".", ".."} for part in (*directory_parts, filename)):
+        raise ValueError("Storage template cannot render '.' or '..' as a path segment.")
+
+    target = files_root.joinpath(*directory_parts, filename)
     target = ensure_unique_path(target, exists=exists)
+    if not target.resolve().is_relative_to(files_root.resolve()):
+        raise ValueError("Storage template path resolves outside the files root.")
 
     rel_path = target.relative_to(files_root.parent)
     return target, str(rel_path), target.name

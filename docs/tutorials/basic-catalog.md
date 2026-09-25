@@ -18,7 +18,7 @@ uv sync
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from ogcat import ArtifactLocator, Catalog, CatalogSpec, MetadataFieldDescription, RecordSchema
+from ogcat import Catalog, CatalogSpec, MetadataFieldDescription, RecordSchema
 
 measurement_schema = RecordSchema(
     description="Managed local measurement files.",
@@ -74,20 +74,20 @@ with TemporaryDirectory(prefix="ogcat-tutorial-") as tmp:
         },
     )
 
-    reference = catalog.add_artifact(
+    reference = catalog.add_reference(
+        uri="https://example.org/mhd-method",
         record_type="reference",
-        locator=ArtifactLocator(kind="uri", value="https://example.org/mhd-method"),
         metadata={
             "title": "MHD processing method",
             "kind": "method-note",
             "topic": "methane",
         },
-        storage_mode="external",
     )
 ```
 
 `add_file()` copies the source file into the catalog's managed `data/objects/` tree.
-`add_artifact()` records a locator and metadata without copying or moving data.
+`add_reference()` records an existing local path or remote locator without
+copying or moving data.
 
 ## Search and inspect records
 
@@ -104,6 +104,9 @@ with TemporaryDirectory(prefix="ogcat-tutorial-") as tmp:
     print(record_ids)
     print(display_rows)
 ```
+
+`get_one()` raises if no record or more than one record matches. Refine the
+filters instead of taking the first search result when identifying an input.
 
 Unqualified fields such as `species` and `topic` are resolved across top-level
 record fields, `user_metadata`, and `derived_metadata`. Use dotted paths such as
@@ -163,15 +166,33 @@ Derived metadata can be repaired separately with
 mode names. Prefer these public methods over mutating a `CatalogRecord` and
 calling `catalog.repository.update(...)` directly.
 
-## CLI equivalents
+For read-only workers, open the existing catalog separately. Reopen it after
+another process writes if you need current records.
+
+```python
+    reader = Catalog.open(catalog.root, read_only=True)
+    assert reader.get_one(where={"site": "MHD", "species": "CH4"}).id == measurement.id
+```
+
+Keep one writer responsible for catalog mutations. Perform long computations
+outside catalog transactions and register their results afterward.
+
+## CLI workflow
+
+The CLI example uses a separate catalog with its default schema. Run these
+commands in the same shell from the repository root:
 
 ```bash
-uv run ogcat init /tmp/tutorial-catalog --name tutorial
-uv run ogcat add ./mhd_ch4_2024.txt --catalog /tmp/tutorial-catalog --meta title="MHD methane observations" site=MHD species=CH4 year=2024
-uv run ogcat search --catalog /tmp/tutorial-catalog species=CH4 --fields id,title,species,path
-uv run ogcat search --catalog /tmp/tutorial-catalog species=CH4 --ids
-uv run ogcat fields --catalog /tmp/tutorial-catalog --stored
-uv run ogcat fields --catalog /tmp/tutorial-catalog --values species
+tutorial_dir="$(mktemp -d)"
+printf 'demo methane data\n' > "$tutorial_dir/mhd_ch4_2024.txt"
+uv run ogcat init "$tutorial_dir/catalog" --name tutorial
+uv run ogcat add "$tutorial_dir/mhd_ch4_2024.txt" --catalog "$tutorial_dir/catalog" --meta title="MHD methane observations" site=MHD species=CH4 year=2024
+uv run ogcat search --catalog "$tutorial_dir/catalog" species=CH4 --fields id,title,species,path
+uv run ogcat search --catalog "$tutorial_dir/catalog" species=CH4 --one --ids
+uv run ogcat reference --uri https://example.org/mhd-method --catalog "$tutorial_dir/catalog" --meta title="MHD processing method" --meta kind=method-note
+uv run ogcat search --catalog "$tutorial_dir/catalog" kind=method-note --one --locators
+uv run ogcat fields --catalog "$tutorial_dir/catalog" --stored
+uv run ogcat fields --catalog "$tutorial_dir/catalog" --values species
 ```
 
 ## Delete records and managed artifacts
@@ -206,8 +227,10 @@ the tombstone if managed cleanup is incomplete.
 The CLI exposes the same lifecycle:
 
 ```bash
-uv run ogcat delete <id> --catalog /tmp/tutorial-catalog --reason superseded
-uv run ogcat search --catalog /tmp/tutorial-catalog --only-deleted --ids
-uv run ogcat restore <id> --catalog /tmp/tutorial-catalog
-uv run ogcat purge <id> --catalog /tmp/tutorial-catalog --yes
+record_id="$(uv run ogcat search --catalog "$tutorial_dir/catalog" species=CH4 --one --ids)"
+uv run ogcat delete "$record_id" --catalog "$tutorial_dir/catalog" --reason superseded
+uv run ogcat search --catalog "$tutorial_dir/catalog" --only-deleted --ids
+uv run ogcat restore "$record_id" --catalog "$tutorial_dir/catalog"
+uv run ogcat delete "$record_id" --catalog "$tutorial_dir/catalog"
+uv run ogcat purge "$record_id" --catalog "$tutorial_dir/catalog" --yes
 ```

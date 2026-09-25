@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from ogcat import Catalog, CatalogSpec, MetadataFieldDescription, RecordSchema
 
 
@@ -17,6 +19,45 @@ def test_create_and_open_catalog(tmp_path: Path) -> None:
     assert (root / "data" / "files").exists()
     assert (root / "data" / "objects").exists()
     assert reopened.spec.catalog_name == "fluxes"
+
+
+def test_create_preserves_existing_catalog(tmp_path: Path) -> None:
+    """Creating at an existing root must preserve its spec and records."""
+    root = tmp_path / "fluxes"
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="original"))
+    record = catalog.add_reference("s3://bucket/file.nc")
+    original_spec = (root / "catalog.json").read_bytes()
+    original_db = (root / "db.json").read_bytes()
+
+    with pytest.raises(FileExistsError):
+        Catalog.create(root, CatalogSpec(catalog_name="replacement"))
+
+    assert (root / "catalog.json").read_bytes() == original_spec
+    assert (root / "db.json").read_bytes() == original_db
+    assert Catalog.open(root).get(record.id) == record
+
+
+def test_create_reuses_directory_without_catalog(tmp_path: Path) -> None:
+    """An existing directory without catalog.json can host a new catalog."""
+    root = tmp_path / "fluxes"
+    root.mkdir()
+    existing_file = root / "notes.txt"
+    existing_file.write_text("keep", encoding="utf-8")
+
+    catalog = Catalog.create(root, CatalogSpec(catalog_name="fluxes"))
+
+    assert catalog.root == root
+    assert existing_file.read_text(encoding="utf-8") == "keep"
+
+
+def test_create_rejects_unsupported_backend_before_writing(tmp_path: Path) -> None:
+    """An invalid backend cannot leave a catalog spec that blocks a retry."""
+    root = tmp_path / "fluxes"
+
+    with pytest.raises(ValueError, match="Unsupported db_backend"):
+        Catalog.create(root, CatalogSpec(catalog_name="fluxes", db_backend="unknown"))
+
+    assert not (root / "catalog.json").exists()
 
 
 def test_catalog_spec_round_trips_via_catalog_json(tmp_path: Path) -> None:

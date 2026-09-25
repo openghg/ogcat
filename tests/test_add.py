@@ -1,7 +1,7 @@
 import os
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import pytest
 
@@ -72,6 +72,30 @@ def test_add_file_uses_generic_default_storage_layout(tmp_path: Path) -> None:
     assert record.suffixes == [".nc"]
     assert record.storage_mode == "copy"
     assert record.naming_metadata["primary_location"] == "uuid"
+
+
+def test_add_file_accepts_validated_derived_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A finished output can carry caller validation facts into managed storage."""
+    monkeypatch.setattr(
+        "ogcat.catalog_application.extract_derived_metadata",
+        lambda _path: {"netcdf": {"time": 12}, "automatic": "from extractor"},
+    )
+    source = tmp_path / "result.nc"
+    source.write_text("finished", encoding="utf-8")
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="results"))
+
+    record = catalog.add_file(
+        source,
+        operation="move",
+        derived_metadata={"netcdf": {"validated": True}, "shape": (12, 4)},
+    )
+
+    assert record.derived_metadata["netcdf"] == {"validated": True}
+    assert record.derived_metadata["shape"] == [12, 4]
+    assert record.derived_metadata["automatic"] == "from extractor"
+    stored_path = record.path()
+    assert stored_path is not None and stored_path.read_text() == "finished"
+    assert not source.exists()
 
 
 def test_add_file_copies_zarr_directory_as_managed_artifact(tmp_path: Path) -> None:
@@ -195,6 +219,31 @@ def test_add_file_can_store_primary_at_template_path(tmp_path: Path) -> None:
     int(artifact_uuid, 16)
     assert artifact_uuid != _record_id(record)
     assert record.naming_metadata["primary_location"] == "template"
+
+
+@pytest.mark.parametrize("primary_location", ["uuid", "template"])
+def test_add_file_rejects_parent_segment_in_storage_template(
+    tmp_path: Path,
+    primary_location: Literal["uuid", "template"],
+) -> None:
+    """Managed ingest cannot write through a template outside its storage root."""
+    source = tmp_path / "source.nc"
+    source.write_text("keep", encoding="utf-8")
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(
+        root,
+        CatalogSpec(
+            catalog_name="files",
+            default_schema=RecordSchema(directory_template="{species}", filename_template="data.nc"),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Storage template cannot render"):
+        catalog.add_file(source, metadata={"species": ".."}, primary_location=primary_location)
+
+    assert source.read_text(encoding="utf-8") == "keep"
+    assert not (root / "data" / "data.nc").exists()
+    assert len(catalog.search()) == 0
 
 
 def test_add_file_supports_flux_style_templates_when_requested(tmp_path: Path) -> None:

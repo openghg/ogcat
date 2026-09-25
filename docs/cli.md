@@ -9,20 +9,54 @@
 Create a new catalog.
 
 ```
-ogcat init <root> [--name NAME]
+ogcat init <root> --name NAME
 ```
+
+If ``catalog.json`` already exists at the root, initialization fails without
+changing the existing catalog.
 
 ### ``ogcat add``
 
 Ingest a file into a catalog.
 
 ```
-ogcat add <file> --catalog <root> [--meta KEY=VALUE ...] [--operation copy|move]
+ogcat add <file> --catalog <root> [--meta KEY=VALUE ...] [--operation copy|move] [--record-type TYPE]
 ```
+
+``--record-type`` selects a named record schema from the catalog spec.
 
 If an add operation fails after an operation id has been created, the error
 message includes ``operation_id: ...`` so it can be correlated with
 ``ogcat logs --operation``.
+
+The command prints the managed object path and, when a naming template creates
+one, the human-readable symlink path.
+
+### ``ogcat reference``
+
+Register an existing artifact without copying or moving it. Supply exactly one
+local path, URI, or fsspec URL path.
+
+```
+ogcat reference [PATH] --catalog <root> [--uri URI | --urlpath URLPATH] [--meta KEY=VALUE ...] [--record-type TYPE] [--json]
+```
+
+The default record type is ``external_reference``. ``--meta`` can be repeated;
+each item is ``KEY=VALUE`` or a JSON object.
+
+### ``ogcat collection``
+
+Register one logical collection rooted at an existing local directory, URI,
+or URL path. This records a member pattern without copying or scanning members.
+
+```
+ogcat collection [PATH] --catalog <root> [--uri URI | --urlpath URLPATH] [--pattern GLOB] [--member-format FORMAT] [--member-suffix SUFFIX ...] [--reader-hint TEXT] [--meta KEY=VALUE ...] [--record-type TYPE] [--json]
+```
+
+Supply exactly one of ``PATH``, ``--uri``, or ``--urlpath``. The default
+record type is ``collection`` and the default relative member pattern is
+``*``. The pattern describes members; it does not index their contents or
+dates.
 
 ### ``ogcat logs``
 
@@ -70,6 +104,8 @@ ogcat search --catalog <root> [FILTER ...] [OPTIONS]
 | ``--json`` | Print full matching records as JSON |
 | ``--ids`` | Print record ids only |
 | ``--paths`` | Print stored paths only |
+| ``--locators`` | Print raw locator values, including URI and URL-path references |
+| ``--one`` | Require exactly one matching record; fail on zero or multiple matches |
 | ``--fields a,b,c`` | Choose displayed columns |
 | ``--format table\|plain\|csv\|tsv\|pipe`` | Table format |
 | ``--limit N`` | Cap on displayed results |
@@ -81,6 +117,9 @@ ogcat search --catalog <root> [FILTER ...] [OPTIONS]
 fields such as ``status`` and ``lifecycle_metadata`` are reserved top-level
 search fields; use ``user_metadata.status`` for a domain metadata key named
 ``status``.
+Only one of ``--json``, ``--ids``, ``--paths``, and ``--locators`` can be used.
+``--one`` cannot be combined with ``--all`` or ``--limit``. Unlike a limit of
+one, it checks that the filters actually identify one record.
 
 **Compatibility flags** (also available):
 ``--where``, ``--contains``, ``--match``, ``--regex``, ``--exists``, ``--missing``, ``--ignore-case``
@@ -88,7 +127,7 @@ search fields; use ``user_metadata.status`` for a domain metadata key named
 Use ``--ids`` when piping search results into ID-based commands:
 
 ```bash
-record_id=$(ogcat search --catalog <root> species=CO2 --ids --limit 1)
+record_id=$(ogcat search --catalog <root> species=CO2 site=MHD --one --ids)
 ogcat show "$record_id" --catalog <root>
 ogcat path "$record_id" --catalog <root>
 ```
@@ -105,10 +144,33 @@ ogcat show <id> --catalog <root>
 
 ### ``ogcat path``
 
-Print the stored path of a record.
+Print the stored local path of a record. ``--readable`` prints its
+human-readable template symlink path instead, when the record has one.
 
 ```
-ogcat path <id> --catalog <root>
+ogcat path <id> --catalog <root> [--readable]
+```
+
+Remote references have no local path. A record without a template symlink has
+no readable path; use ``ogcat locator`` to get its raw locator.
+
+### ``ogcat locator``
+
+Print the raw locator value of any record, local or remote.
+
+```
+ogcat locator <id> --catalog <root>
+```
+
+### ``ogcat members``
+
+Print current local collection members, one path per line, in sorted path
+order. The stored relative pattern is applied when the command runs. Remote
+collections are unsupported, and an absent local root is an error. This
+command does not select members by date or inspect file contents.
+
+```
+ogcat members <collection-id> --catalog <root>
 ```
 
 ### ``ogcat delete``

@@ -1,7 +1,11 @@
 # Design Note: Artifact Descriptors
 
 This note records the first implementation slice from ADR 0002's virtual
-artifact filesystem model.
+artifact filesystem model. Since that slice, ogcat has added a
+[capability registry](design-note-capability-registry.md) and bundled reader,
+writer, and converter examples. The registry selects capabilities from
+descriptor claims and facets; `Catalog` does not yet expose an integrated
+artifact read handle, and writer results are not merged into descriptors.
 
 ## Chosen Shape
 
@@ -66,7 +70,7 @@ locator remain artifact-less until a real artifact is assigned.
 
 ## Why Inline
 
-TinyDB stores catalog records as whole JSON documents, and this slice does not
+TinyDB stores catalog records as whole JSON documents. This first slice did not
 introduce independent artifact CRUD, locks, permissions, replicas, or a reader
 registry. Inline descriptors keep artifact membership transactionally tied to
 the record with the current backend and avoid a migration to a second registry
@@ -99,7 +103,7 @@ version, evidence, confidence, and metadata are filled with defaults when the
 shape is otherwise clear. Older facet payloads with extra top-level fields have
 those fields folded into ``metadata``.
 
-## Current Limits
+## Remaining Limits
 
 `record_type` remains schema and search metadata. It is not an I/O dispatch key.
 
@@ -107,10 +111,11 @@ Only one current `data_artifact` descriptor is accepted in this slice. Replica
 leadership remains deferred to later `leader` or `write_leader` fields instead
 of overloading `primary`.
 
-`claims` and `facets` are schema and validation metadata only in this slice.
-This change does not implement reader/open behavior, the reader/writer/converter
-registry, replicas, cache/archive policy, mount resolution, permissions, locks,
-or Intake integration.
+Claims and facets now also drive registry lookup, but `Catalog` does not yet
+open artifacts through selected readers. Materializing writers do not return
+structured results that are merged into persisted descriptors. Replica
+leadership, cache/archive policy, mount resolution, permissions, locks, and
+Intake integration also remain outside the current slice.
 
 `derived_metadata.classification` remains the current home for cheap inferred
 classification fields such as `artifact_kind`, `format`, `archive_format`,

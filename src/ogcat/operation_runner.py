@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -27,6 +28,7 @@ from ogcat.classification import CLASSIFICATION_METADATA_KEY, classify_artifact
 from ogcat.exceptions import PurgeIncompleteError
 from ogcat.hooks import (
     HOOK_PHASES,
+    ArtifactWriter,
     HookDispatcher,
     HookLifecycleCallback,
     HookManager,
@@ -34,8 +36,6 @@ from ogcat.hooks import (
     OperationSource,
 )
 from ogcat.materialization import (
-    MaterializationIntent,
-    materialization_plan_from_locator,
     validate_writer_matches_storage_plan,
 )
 from ogcat.models import (
@@ -46,6 +46,7 @@ from ogcat.models import (
     MetadataDict,
     normalize_metadata,
 )
+from ogcat.naming import build_naming_context, render_template
 from ogcat.operation_helpers import (
     artifact_locator_from_context,
     naming_metadata_from_storage_plan,
@@ -151,8 +152,8 @@ class AddOperationRequest:
     time_added: str | None
     source: OperationSource
     locator_factory: ArtifactLocatorFactory
-    materialization_intent: MaterializationIntent
-    storage_plan_factory: StoragePlanFactory | None = None
+    artifact_writer: ArtifactWriter | None
+    storage_plan_factory: StoragePlanFactory
     derived_metadata_collector: DerivedMetadataCollector | None = None
     secondary_artifact_operations: tuple[SecondaryArtifactOperation, ...] = ()
 
@@ -196,7 +197,7 @@ class _AddOperationPlan:
     context: OperationContext
     locator: ArtifactLocator
     storage_plan: StoragePlan
-    validation_report: ValidationReport
+    user_metadata_at_write: MetadataDict
 
 
 class OperationRunner(ABC):
@@ -235,7 +236,7 @@ class AddOperationRunner(OperationRunner):
             details={"caller_owned_transaction": not self.request.commit},
         )
         try:
-            validation_report = self._validate_metadata(
+            self._validate_metadata(
                 context=hook_context,
                 hook_dispatcher=hook_dispatcher,
                 set_phase=set_phase,
@@ -248,7 +249,6 @@ class AddOperationRunner(OperationRunner):
             add_plan = self._plan_storage(
                 context=hook_context,
                 locator=canonical_locator,
-                validation_report=validation_report,
                 set_phase=set_phase,
             )
             self._write_artifact(add_plan=add_plan, set_phase=set_phase)
@@ -300,8 +300,8 @@ class AddOperationRunner(OperationRunner):
         context: OperationContext,
         hook_dispatcher: HookDispatcher,
         set_phase: _PhaseSetter,
-    ) -> ValidationReport:
-        """Run validation hooks and return the add-operation validation report."""
+    ) -> None:
+        """Run validation hooks and reject invalid add-operation metadata."""
         set_phase(HOOK_PHASES["before_validate_metadata"].name)
         hook_dispatcher.before_validate_metadata(context)
         set_phase("validation")
@@ -324,7 +324,6 @@ class AddOperationRunner(OperationRunner):
             details=_validation_audit_details(validation_report),
         )
         validation_report.raise_for_errors()
-        return validation_report
 
     def _resolve_locator(
         self,
@@ -347,19 +346,11 @@ class AddOperationRunner(OperationRunner):
         *,
         context: OperationContext,
         locator: ArtifactLocator,
-        validation_report: ValidationReport,
         set_phase: _PhaseSetter,
     ) -> _AddOperationPlan:
         """Build and audit the storage plan for an add operation."""
         set_phase("storage-plan")
-        context.storage_plan = (
-            self.request.storage_plan_factory(context, locator)
-            if self.request.storage_plan_factory is not None
-            else materialization_plan_from_locator(
-                locator,
-                intent=self.request.materialization_intent,
-            ).to_storage_plan()
-        )
+        context.storage_plan = self.request.storage_plan_factory(context, locator)
         storage_plan = context.storage_plan
         if storage_plan is None:
             raise RuntimeError("Add operation did not produce a storage plan.")
@@ -379,7 +370,7 @@ class AddOperationRunner(OperationRunner):
             context=context,
             locator=locator,
             storage_plan=storage_plan,
-            validation_report=validation_report,
+            user_metadata_at_write=deepcopy(context.user_metadata),
         )
 
     def _write_artifact(
@@ -389,7 +380,7 @@ class AddOperationRunner(OperationRunner):
         set_phase: _PhaseSetter,
     ) -> None:
         """Materialise or skip the artifact write for an add operation."""
-        writer = self.request.materialization_intent.writer
+        writer = self.request.artifact_writer
         if add_plan.storage_plan.write_mode == "reference":
             self.dependencies.emit_operation_audit(
                 add_plan.context,
@@ -452,19 +443,35 @@ class AddOperationRunner(OperationRunner):
         """Stage the catalog record and run record-write hooks."""
         set_phase(HOOK_PHASES["before_record_write"].name)
         hook_dispatcher.before_record_write(add_plan.context)
+        if add_plan.context.storage_plan != add_plan.storage_plan:
+            raise ValueError("Storage plan changed after artifact writing.")
+        if artifact_locator_from_context(add_plan.context) != add_plan.locator:
+            raise ValueError("Artifact locator changed after artifact writing.")
         add_plan.context.user_metadata = normalize_metadata_for_schema(
             add_plan.context.user_metadata,
             schema_name=self.dependencies.schema_name(self.request.schema_record_type),
         )
+        if self._template_name_changed(add_plan):
+            raise ValueError("Naming metadata changed after artifact writing.")
+        self.dependencies.metadata_validation_report(
+            schema=self.request.schema,
+            metadata=add_plan.context.user_metadata,
+            record_type=self.request.schema_record_type,
+        ).raise_for_errors()
         add_plan.context.derived_metadata = normalize_metadata(
             add_plan.context.derived_metadata,
             field_name="derived_metadata",
         )
+        storage_mode = self.request.storage_mode
+        if not add_plan.storage_plan.ogcat_owned and storage_mode in {None, "copy", "move", "write"}:
+            storage_mode = "reference"
+        elif storage_mode is None:
+            storage_mode = add_plan.storage_plan.write_mode
         record = self.dependencies.build_artifact_record(
             record_type=self.request.record_type,
             locator=add_plan.locator,
             metadata=add_plan.context.user_metadata,
-            storage_mode=self.request.storage_mode,
+            storage_mode=storage_mode,
             original_path=self.request.original_path,
             original_filename=self.request.original_filename,
             suffixes=self.request.suffixes,
@@ -493,6 +500,33 @@ class AddOperationRunner(OperationRunner):
         set_phase(HOOK_PHASES["after_record_write"].name)
         hook_dispatcher.after_record_write(add_plan.context)
         return persisted
+
+    def _template_name_changed(self, add_plan: _AddOperationPlan) -> bool:
+        """Detect post-write changes to a managed file's rendered target name."""
+        if self.request.operation_type != "add_file" or add_plan.storage_plan.primary_location != "template":
+            return False
+        assert self.request.original_path is not None
+        assert self.request.time_added is not None
+        assert self.request.naming_metadata is not None
+        before = build_naming_context(
+            record_id=add_plan.context.operation_id,
+            original_path=Path(self.request.original_path),
+            metadata=add_plan.user_metadata_at_write,
+            date_added=self.request.time_added[:10],
+        )
+        after = build_naming_context(
+            record_id=add_plan.context.operation_id,
+            original_path=Path(self.request.original_path),
+            metadata=add_plan.context.user_metadata,
+            date_added=self.request.time_added[:10],
+        )
+        templates = (
+            str(self.request.naming_metadata["directory_template"]),
+            str(self.request.naming_metadata["filename_template"]),
+        )
+        return any(
+            render_template(template, before) != render_template(template, after) for template in templates
+        )
 
     def _run_secondary_artifacts(
         self,
@@ -824,8 +858,12 @@ class RecordLifecycleOperationRunner(OperationRunner):
         artifact: ArtifactDescriptor,
     ) -> _PurgeArtifactResult:
         """Purge one managed artifact or audit why it was skipped."""
-        if self.request.record.storage_mode == "reference":
-            return self._emit_artifact_skip(context, artifact, reason="record storage mode is reference")
+        if self.request.record.storage_mode not in {"copy", "move", "write"}:
+            return self._emit_artifact_skip(
+                context,
+                artifact,
+                reason=f"record storage mode is {self.request.record.storage_mode or 'unspecified'}",
+            )
         locator = artifact.locator
         if locator is None:
             return self._emit_artifact_skip(context, artifact, reason="missing locator")

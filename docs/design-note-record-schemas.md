@@ -5,9 +5,8 @@
 broad, heterogeneous ingest fallback. Each `RecordSchema` can describe metadata
 fields, a directory template, a filename template, and a short description.
 
-Metadata field descriptions can also carry lightweight type names. These are
-serialised as human-readable schema hints for now; they are not enforced by the
-catalog core.
+Metadata field descriptions can also carry lightweight type names. Supported
+``value_types`` are enforced during record validation and ingest.
 
 The configured `default_record_schema` is the source of truth for broad catalog
 behavior. Earlier MVP top-level fields such as `metadata_fields`,

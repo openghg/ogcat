@@ -178,10 +178,18 @@ def test_delete_rolls_back_with_caller_owned_transaction(tmp_path: Path) -> None
     assert catalog.search(where={"species": "CO2"}).ids == [record_id]
 
 
-def test_purge_removes_managed_artifacts_and_hard_deletes_record(tmp_path: Path) -> None:
+@pytest.mark.parametrize("operation", ["copy", "move"])
+def test_purge_removes_managed_artifacts_and_hard_deletes_record(
+    tmp_path: Path,
+    operation: str,
+) -> None:
     """Purging a tombstone should remove catalog-managed files and the record."""
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
-    record = catalog.add_file(_source_file(tmp_path, "managed.nc"), metadata={"species": "CO2"})
+    record = catalog.add_file(
+        _source_file(tmp_path, "managed.nc"),
+        metadata={"species": "CO2"},
+        operation=operation,
+    )
     record_id = _record_id(record)
     artifact_paths = [
         artifact.locator.as_path()
@@ -320,6 +328,50 @@ def test_purge_skips_reference_paths_under_managed_roots(tmp_path: Path) -> None
         and event.details["purge_action"] == "skipped"
         for event in skip_events
     )
+
+
+@pytest.mark.parametrize("storage_mode", [None, "copy", "external"])
+def test_purge_skips_record_only_artifact_under_managed_root(
+    tmp_path: Path,
+    storage_mode: str | None,
+) -> None:
+    """Record-only artifacts stay user-owned even within a managed path."""
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+    target = catalog.root / catalog.spec.files_root / "user-owned.nc"
+    target.write_text("user data", encoding="utf-8")
+    record = catalog.add_artifact(
+        record_type="external_file",
+        locator=ArtifactLocator.path(target),
+        storage_mode=storage_mode,
+    )
+    assert record.storage_mode == ("external" if storage_mode == "external" else "reference")
+    record_id = _record_id(record)
+    catalog.delete(record_id)
+
+    catalog.purge(record_id)
+
+    assert target.read_text(encoding="utf-8") == "user data"
+    assert catalog.get(record_id) is None
+
+
+def test_purge_skips_legacy_artifact_without_storage_mode(tmp_path: Path) -> None:
+    """Legacy null storage modes do not prove ownership of managed paths."""
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+    target = catalog.root / catalog.spec.files_root / "user-owned.nc"
+    target.write_text("user data", encoding="utf-8")
+    record = catalog.add_artifact(
+        record_type="external_file",
+        locator=ArtifactLocator.path(target),
+    )
+    record.storage_mode = None
+    catalog.repository.update(record)
+    record_id = _record_id(record)
+    catalog.delete(record_id)
+
+    catalog.purge(record_id)
+
+    assert target.read_text(encoding="utf-8") == "user data"
+    assert catalog.get(record_id) is None
 
 
 def test_purge_requires_deleted_record_unless_forced(tmp_path: Path) -> None:

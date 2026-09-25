@@ -113,9 +113,10 @@ file ingest. With the current TinyDB backend this is a best-effort rollback mech
 compensating actions: staged records can be deleted and owned copied files can be removed if a later
 step fails. It is not a true database transaction and should not be described as ACID.
 
-Each unit of work exposes an `operation_id` so future audit logging or hooks can correlate staged
-record writes, storage activity, and cleanup. Stronger backends can map the same conceptual API to
-native transaction support later.
+Each unit of work exposes an `operation_id` that correlates staged record
+writes, storage activity, cleanup, and current catalog-local audit events.
+Stronger backends could map the same conceptual API to native transactions
+later.
 
 ## Operation Runners
 
@@ -180,8 +181,9 @@ That choice has a few practical benefits:
 - stored records can be interpreted in the context of the catalog that produced them
 - schema-level metadata field descriptions travel with the catalog instead of being hard-coded elsewhere
 
-Schemas are intentionally lightweight. Required metadata fields are checked at ingest, but there
-is no deep type validation or domain-specific schema language in the catalog core.
+Schemas are intentionally lightweight. Required metadata fields and supported
+``value_types`` are checked at ingest, but there is no deep domain-specific
+schema language in the catalog core.
 
 ## User Metadata and Derived Metadata
 
@@ -207,7 +209,8 @@ The present architecture is intentionally constrained.
 
 - richer locator handling is still future work; today the generalisation is intentionally minimal
 - TinyDB is the only supported backend
-- metadata validation is intentionally shallow and limited to required-field presence
+- metadata validation checks required fields and supported value types, but
+  unknown-field rejection requires an explicit strict validation call
 - search supports exact equality, contains, and regex matching only
 - there are no reader hooks, manager APIs, or import or scan workflows yet
 - extractor support is limited and should not be described as a general reader framework

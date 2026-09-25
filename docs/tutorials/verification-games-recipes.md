@@ -210,7 +210,58 @@ footprint_collection = catalog.add_collection(
 )
 
 print(footprint_collection.locator.kind, footprint_collection.derived_metadata["classification"])
+
+member_paths = catalog.member_paths(footprint_collection.id)
+january_paths = [path for path in member_paths if path.name.endswith("_202301.nc")]
+assert len(january_paths) == 1
 ```
+
+`Catalog.search(...)` selects collection records; it does not select files
+inside a collection. For a local collection, `member_paths()` applies the
+stored relative glob to the current directory and returns sorted matching
+paths. Filter those paths by their filename convention before calling
+`xarray.open_mfdataset`, or select by time coordinates after opening the
+dataset. The example files are text placeholders, so do not open them with
+xarray. There is no built-in member date index, and remote collections cannot
+be expanded with `member_paths()`.
+
+### Select one footprint series and year on BP1
+
+The [ACRG footprint example](../../examples/catalog_acrg_name_footprints.py)
+provides `select_monthly_footprint_paths()` for NAME files whose names end in
+`_YYYYMM.nc`. It checks that each requested month has exactly one file. On a
+machine with the BP1 catalog and footprint tree mounted, select the series
+before opening data. Run this cell from the ogcat repository root so the
+`examples` import resolves:
+
+```python
+from examples.catalog_acrg_name_footprints import select_monthly_footprint_paths
+
+footprints = Catalog.open("/group/chem/acrg/fp_name_catalog", read_only=True)
+series = footprints.get_one(
+    where={
+        "record_type": "footprint_collection",
+        "site": "MHD",
+        "domain": "EUROPE",
+        "species": "co2",
+        "model": "NAME",
+        "met_model": "UKV",
+        "inlet": "10magl",
+    }
+)
+paths_2021 = select_monthly_footprint_paths(
+    footprints, series.id, start_month="2021-01", end_month="2021-12"
+)
+
+# With xarray and a NetCDF backend installed:
+# ds = xr.open_mfdataset(paths_2021)
+```
+
+`met_model` matters here: UKV and UMG can both match the other MHD fields.
+The helper lists local members from the chosen collection and fails on
+missing or duplicate months before xarray opens any files. It is an example
+helper, not a `Catalog` method; other filename conventions need their own
+selection code.
 
 ## Add a managed copy
 
@@ -245,8 +296,10 @@ print(managed_record.path())
 
 ## Search, get one record, and open with xarray
 
-The notebooks often search with enough metadata to identify exactly one input,
-then open the record's locator with xarray.
+The notebooks should search with enough metadata to identify exactly one input,
+then open the record's locator with xarray. `get_one()` raises if the search
+matches zero or multiple records; include site, domain, model, and product
+variant where needed instead of taking the first match.
 
 ```python
 selected = catalog.get_one(
@@ -347,7 +400,11 @@ For record-set details, see
 ## Store generated artifacts after computation
 
 A common notebook pattern is to do heavy work outside ogcat, then register the
-small set of final outputs serially.
+small set of final outputs serially. Use one writer process for a TinyDB
+catalog. Jobs on BP1's GPFS can read with
+`Catalog.open(catalog.root, read_only=True)` and hand finished output paths to
+the writer; reopen a read-only catalog after the writer changes it. Do not
+hold a catalog transaction during a long computation.
 
 ### Register an already-written artifact
 
@@ -412,6 +469,10 @@ moved_output = catalog.add_file(
         "inputs": [registered_stage.id],
         "modifications": "Computed footprint dot flux for one site-month before baseline correction.",
         "site": "MHD",
+    },
+    derived_metadata={
+        "source_record_ids": [registered_stage.id],
+        "modifications": "Computed footprint dot flux for one site-month before baseline correction.",
     },
 )
 print(finished_path.exists(), moved_output.path())

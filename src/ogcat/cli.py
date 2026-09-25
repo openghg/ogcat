@@ -65,11 +65,11 @@ def _resolve_catalog_path(catalog: Path | None) -> Path:
     _fail("Provide --catalog or set OGCAT_CATALOG.")
 
 
-def _open_catalog_or_fail(catalog: Path | None) -> Catalog:
+def _open_catalog_or_fail(catalog: Path | None, *, read_only: bool = False) -> Catalog:
     """Open a catalog using CLI resolution semantics with friendly errors."""
     catalog_path = _resolve_catalog_path(catalog)
     try:
-        return Catalog.open(catalog_path)
+        return Catalog.open(catalog_path, read_only=read_only)
     except FileNotFoundError:
         _fail(f"Catalog not found or incomplete at {catalog_path}.")
     except ValueError as exc:
@@ -81,11 +81,13 @@ def _print_json(payload: object) -> None:
     typer.echo(json.dumps(payload, indent=2, sort_keys=True))
 
 
-def _validate_output_flags(*, json_mode: bool, ids_only: bool = False, paths_only: bool = False) -> None:
+def _validate_output_flags(
+    *, json_mode: bool, ids_only: bool = False, paths_only: bool = False, locators_only: bool = False
+) -> None:
     """Reject incompatible output mode combinations."""
-    enabled = [flag for flag in [json_mode, ids_only, paths_only] if flag]
+    enabled = [flag for flag in [json_mode, ids_only, paths_only, locators_only] if flag]
     if len(enabled) > 1:
-        raise typer.BadParameter("Choose only one of --json, --ids, or --paths.")
+        raise typer.BadParameter("Choose only one of --json, --ids, --paths, or --locators.")
 
 
 def _validate_deleted_search_flags(*, include_deleted: bool, only_deleted: bool) -> None:
@@ -313,6 +315,23 @@ def _displayed_results(
     return results[:limit]
 
 
+def _template_link_path(record: CatalogRecord) -> Path | None:
+    """Return the readable template symlink recorded for a managed file."""
+    for artifact in record.artifacts:
+        if artifact.id == "template_link" and artifact.locator is not None:
+            return artifact.locator.as_path()
+    return None
+
+
+def _reference_input(
+    path: Path | None, *, uri: str | None, urlpath: str | None
+) -> tuple[Path | None, str | None, str | None]:
+    """Require exactly one local path, URI, or fsspec URL path."""
+    if sum(value is not None for value in (path, uri, urlpath)) != 1:
+        raise typer.BadParameter("Provide exactly one PATH, --uri, or --urlpath.")
+    return path, uri, urlpath
+
+
 @app.command()
 def init(
     root: Annotated[Path, typer.Argument(help="Catalog root directory.")],
@@ -320,7 +339,10 @@ def init(
 ) -> None:
     """Create a new catalog."""
     spec = CatalogSpec(catalog_name=name)
-    catalog = Catalog.create(root, spec)
+    try:
+        catalog = Catalog.create(root, spec)
+    except FileExistsError:
+        _fail(f"Catalog already exists at {root}.")
     console.print(f"Created catalog at {catalog.root}")
 
 
@@ -346,6 +368,10 @@ def add_command(
         str | None,
         typer.Option("--record-type", help="Named record schema to use for this file."),
     ] = None,
+    json_mode: Annotated[
+        bool,
+        typer.Option("--json", help="Print the added record as JSON."),
+    ] = False,
 ) -> None:
     """Add a file to the catalog."""
     extra_meta_items = list(ctx.args)
@@ -364,7 +390,90 @@ def add_command(
         )
     except Exception as exc:
         _fail(_format_exception_message(exc))
+    if json_mode:
+        _print_json(record.to_dict())
+        return
     console.print(f"Added {record.id}: {record.stored_abspath}")
+    if (template_path := _template_link_path(record)) is not None:
+        typer.echo(f"Readable path: {template_path}")
+
+
+@app.command("reference")
+def add_reference_command(
+    path: Annotated[Path | None, typer.Argument(help="Existing local path to record.")] = None,
+    catalog: Annotated[Path | None, typer.Option("--catalog", help="Catalog root.")] = None,
+    uri: Annotated[str | None, typer.Option("--uri", help="Explicit URI to record.")] = None,
+    urlpath: Annotated[
+        str | None, typer.Option("--urlpath", help="Explicit fsspec URL path to record.")
+    ] = None,
+    meta: Annotated[
+        list[str] | None, typer.Option("--meta", help="Metadata KEY=VALUE or JSON object. Repeatable.")
+    ] = None,
+    record_type: Annotated[
+        str, typer.Option("--record-type", help="Logical record type.")
+    ] = "external_reference",
+    json_mode: Annotated[bool, typer.Option("--json", help="Print the record as JSON.")] = False,
+) -> None:
+    """Register an existing path or remote locator without moving data."""
+    reference, uri, urlpath = _reference_input(path, uri=uri, urlpath=urlpath)
+    active_catalog = _open_catalog_or_fail(catalog)
+    metadata = _parse_meta_items([] if meta is None else meta)
+    try:
+        record = active_catalog.add_reference(
+            reference, uri=uri, urlpath=urlpath, metadata=metadata, record_type=record_type
+        )
+    except Exception as exc:
+        _fail(_format_exception_message(exc))
+    if json_mode:
+        _print_json(record.to_dict())
+        return
+    console.print(f"Added reference {record.id}: {record.locator.value}")
+
+
+@app.command("collection")
+def add_collection_command(
+    path: Annotated[Path | None, typer.Argument(help="Existing local collection directory.")] = None,
+    catalog: Annotated[Path | None, typer.Option("--catalog", help="Catalog root.")] = None,
+    uri: Annotated[str | None, typer.Option("--uri", help="Explicit URI collection root.")] = None,
+    urlpath: Annotated[
+        str | None, typer.Option("--urlpath", help="Explicit fsspec URL path collection root.")
+    ] = None,
+    meta: Annotated[
+        list[str] | None, typer.Option("--meta", help="Metadata KEY=VALUE or JSON object. Repeatable.")
+    ] = None,
+    record_type: Annotated[str, typer.Option("--record-type", help="Logical record type.")] = "collection",
+    pattern: Annotated[str, typer.Option("--pattern", help="Relative member glob pattern.")] = "*",
+    member_format: Annotated[
+        str | None, typer.Option("--member-format", help="Format label for members.")
+    ] = None,
+    member_suffixes: Annotated[
+        list[str] | None, typer.Option("--member-suffix", help="Expected member suffix. Repeatable.")
+    ] = None,
+    reader_hint: Annotated[str | None, typer.Option("--reader-hint", help="Downstream reader hint.")] = None,
+    json_mode: Annotated[bool, typer.Option("--json", help="Print the record as JSON.")] = False,
+) -> None:
+    """Register an existing directory as one logical collection."""
+    collection, uri, urlpath = _reference_input(path, uri=uri, urlpath=urlpath)
+    active_catalog = _open_catalog_or_fail(catalog)
+    metadata = _parse_meta_items([] if meta is None else meta)
+    try:
+        record = active_catalog.add_collection(
+            collection,
+            uri=uri,
+            urlpath=urlpath,
+            metadata=metadata,
+            record_type=record_type,
+            collection_pattern=pattern,
+            member_format=member_format,
+            member_suffixes=member_suffixes,
+            reader_hint=reader_hint,
+        )
+    except Exception as exc:
+        _fail(_format_exception_message(exc))
+    if json_mode:
+        _print_json(record.to_dict())
+        return
+    console.print(f"Added collection {record.id}: {record.locator.value}")
 
 
 @app.command()
@@ -400,7 +509,7 @@ def logs(
     ] = False,
 ) -> None:
     """Show catalog audit events."""
-    active_catalog = _open_catalog_or_fail(catalog)
+    active_catalog = _open_catalog_or_fail(catalog, read_only=True)
     events = active_catalog.audit_events(
         user_id=user_id,
         operation_id=operation_id,
@@ -494,6 +603,14 @@ def search(
         bool,
         typer.Option("--paths", help="Print only matching stored paths."),
     ] = False,
+    locators_only: Annotated[
+        bool,
+        typer.Option("--locators", help="Print raw locator values, including remote references."),
+    ] = False,
+    one: Annotated[
+        bool,
+        typer.Option("--one", help="Require exactly one matching record."),
+    ] = False,
     limit: Annotated[
         int | None,
         typer.Option("--limit", min=0, help="Cap displayed results. Does not affect --json output."),
@@ -508,7 +625,7 @@ def search(
             "--fields",
             help=(
                 "Comma-separated display fields. Supports flattened names and dotted paths. "
-                "Ignored with --json, --ids, and --paths."
+                "Ignored with --json, --ids, --paths, and --locators."
             ),
         ),
     ] = None,
@@ -517,23 +634,28 @@ def search(
         typer.Option(
             "--format",
             help=(
-                "Display format: table, plain, csv, tsv, or pipe. Ignored with --json, --ids, and --paths."
+                "Display format: table, plain, csv, tsv, or pipe. "
+                "Ignored with --json, --ids, --paths, and --locators."
             ),
         ),
     ] = "table",
 ) -> None:
     """Search records in a catalog."""
-    _validate_output_flags(json_mode=json_mode, ids_only=ids_only, paths_only=paths_only)
+    _validate_output_flags(
+        json_mode=json_mode, ids_only=ids_only, paths_only=paths_only, locators_only=locators_only
+    )
     _validate_deleted_search_flags(include_deleted=include_deleted, only_deleted=only_deleted)
     if all_results and limit is not None:
         raise typer.BadParameter("Use either --all or --limit, not both.")
+    if one and (all_results or limit is not None):
+        raise typer.BadParameter("--one cannot be combined with --all or --limit.")
     display_limit = limit if limit is not None else DEFAULT_SEARCH_LIMIT
     display_fields: list[str] | None = None
     parsed_output_format: SearchOutputFormat = "table"
-    if not any([json_mode, ids_only, paths_only]):
+    if not any([json_mode, ids_only, paths_only, locators_only]):
         display_fields = _parse_fields_option(fields)
         parsed_output_format = _parse_search_output_format(output_format)
-    active_catalog = _open_catalog_or_fail(catalog)
+    active_catalog = _open_catalog_or_fail(catalog, read_only=True)
     query = SearchQuery.from_filters(
         where=_parse_meta_items([] if where is None else where),
         contains=_parse_key_value_search_options([] if contains is None else contains),
@@ -542,19 +664,32 @@ def search(
         exists=[] if exists is None else exists,
         missing=[] if missing is None else missing,
     ).and_(_parse_search_expressions(list(ctx.args)))
-    results = active_catalog.search(
-        query=query,
-        ignore_case=ignore_case,
-        include_deleted=include_deleted,
-        only_deleted=only_deleted,
-        as_record_set=False,
-    )
+    if one:
+        try:
+            results = [
+                active_catalog.get_one(
+                    query=query,
+                    ignore_case=ignore_case,
+                    include_deleted=include_deleted,
+                    only_deleted=only_deleted,
+                )
+            ]
+        except ValueError as exc:
+            _fail(str(exc))
+    else:
+        results = active_catalog.search(
+            query=query,
+            ignore_case=ignore_case,
+            include_deleted=include_deleted,
+            only_deleted=only_deleted,
+            as_record_set=False,
+        )
 
     if json_mode:
         _print_json([record.to_dict() for record in results])
         return
 
-    result_limit = limit if any([ids_only, paths_only]) else display_limit
+    result_limit = limit if any([ids_only, paths_only, locators_only]) else display_limit
     shown_results = _displayed_results(
         results,
         limit=result_limit,
@@ -572,6 +707,13 @@ def search(
             resolved = record.path()
             if resolved is not None:
                 typer.echo(str(resolved))
+            elif one:
+                _fail(f"Record is not path-backed: {record.id}")
+        return
+
+    if locators_only:
+        for record in shown_results:
+            typer.echo(record.locator.value)
         return
 
     if not results and parsed_output_format == "table":
@@ -615,7 +757,7 @@ def show(
     ] = False,
 ) -> None:
     """Show a single record."""
-    active_catalog = _open_catalog_or_fail(catalog)
+    active_catalog = _open_catalog_or_fail(catalog, read_only=True)
     record = active_catalog.get(record_id)
     if record is None:
         _fail(f"Record not found: {record_id}")
@@ -632,6 +774,8 @@ def show(
     table.add_row("record type", record.record_type)
     table.add_row("locator", json.dumps(record.locator.to_dict(), sort_keys=True))
     table.add_row("stored path", str(record.stored_abspath or ""))
+    if (template_path := _template_link_path(record)) is not None:
+        table.add_row("readable path", str(template_path))
     table.add_row("relative path", str(record.stored_relpath or ""))
     table.add_row("storage mode", str(record.storage_mode or ""))
     table.add_row("status", record.status)
@@ -731,16 +875,48 @@ def purge_record(
 def path(
     record_id: Annotated[str, typer.Argument(help="Record id.")],
     catalog: Annotated[Path | None, typer.Option("--catalog", help="Catalog root.")] = None,
+    readable: Annotated[
+        bool, typer.Option("--readable", help="Print the human-readable template symlink path.")
+    ] = False,
 ) -> None:
-    """Print the stored path for a record."""
-    active_catalog = _open_catalog_or_fail(catalog)
+    """Print the stored path, or the readable template symlink, for a record."""
+    active_catalog = _open_catalog_or_fail(catalog, read_only=True)
     record = active_catalog.get(record_id)
     if record is None:
         _fail(f"Record not found: {record_id}")
-    resolved = record.path()
+    resolved = _template_link_path(record) if readable else record.path()
     if resolved is None:
-        _fail(f"Record is not path-backed: {record_id}")
+        detail = "has no readable template path" if readable else "is not path-backed"
+        _fail(f"Record {detail}: {record_id}")
     typer.echo(str(resolved))
+
+
+@app.command()
+def locator(
+    record_id: Annotated[str, typer.Argument(help="Record id.")],
+    catalog: Annotated[Path | None, typer.Option("--catalog", help="Catalog root.")] = None,
+) -> None:
+    """Print a record's raw locator value, local or remote."""
+    active_catalog = _open_catalog_or_fail(catalog, read_only=True)
+    record = active_catalog.get(record_id)
+    if record is None:
+        _fail(f"Record not found: {record_id}")
+    typer.echo(record.locator.value)
+
+
+@app.command()
+def members(
+    record_id: Annotated[str, typer.Argument(help="Collection record id.")],
+    catalog: Annotated[Path | None, typer.Option("--catalog", help="Catalog root.")] = None,
+) -> None:
+    """Print local member paths from a collection, one per line."""
+    active_catalog = _open_catalog_or_fail(catalog, read_only=True)
+    try:
+        paths = active_catalog.member_paths(record_id)
+    except (KeyError, ValueError, NotImplementedError, FileNotFoundError) as exc:
+        _fail(str(exc))
+    for member in paths:
+        typer.echo(str(member))
 
 
 @app.command()
@@ -752,7 +928,7 @@ def info(
     ] = False,
 ) -> None:
     """Show a curated catalog overview."""
-    active_catalog = _open_catalog_or_fail(catalog)
+    active_catalog = _open_catalog_or_fail(catalog, read_only=True)
     description = active_catalog.describe()
 
     if json_mode:
@@ -808,7 +984,7 @@ def fields(
     ] = False,
 ) -> None:
     """List schema-declared fields or fields present in stored records."""
-    active_catalog = _open_catalog_or_fail(catalog)
+    active_catalog = _open_catalog_or_fail(catalog, read_only=True)
     if values is not None and stored:
         raise typer.BadParameter("Use either --stored or --values, not both.")
     if values is not None:
@@ -888,7 +1064,7 @@ def spec_show_schema(
     ] = False,
 ) -> None:
     """Show a full record schema."""
-    active_catalog = _open_catalog_or_fail(catalog)
+    active_catalog = _open_catalog_or_fail(catalog, read_only=True)
     try:
         schema = active_catalog.get_schema(record_type)
     except ValueError as exc:

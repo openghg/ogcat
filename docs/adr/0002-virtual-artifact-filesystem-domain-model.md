@@ -1,9 +1,9 @@
 # ADR 0002: Virtual Artifact Filesystem Domain Model
 
-- **Status**: Proposed
+- **Status**: Superseded as project direction by the [single-user workflow plan](../plans/2026-09-25-single-user-workflows.md). This proposed model was not adopted as a whole; implemented record/artifact/locator behavior remains supported.
 - **Date**: 2026-05-18
 - **Related issues**: [openghg/ogcat#108](https://github.com/openghg/ogcat/issues/108), [openghg/ogcat#109](https://github.com/openghg/ogcat/issues/109)
-- **Research note**: [Virtual Artifact Filesystem Research Notes](../design-note-virtual-artifact-filesystem-research.md)
+- **Research note**: [Virtual Artifact Filesystem Research Notes](../plans/archive/design-note-virtual-artifact-filesystem-research.md)
 
 ## Context
 

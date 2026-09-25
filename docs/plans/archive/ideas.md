@@ -5,9 +5,8 @@ locator work without committing the core package to them yet.
 
 ## Grouped Search Results
 
-Current search returns one record per matching artifact. That is the right base
-behavior for precise file-level lookup, but it can be noisy for datasets that
-are naturally monthly file series.
+Current search returns one row per matching record. File-level catalogs can be
+noisy for datasets that are naturally monthly file series.
 
 Possible extension:
 
@@ -33,6 +32,11 @@ Why it makes sense:
 - avoids losing per-file fidelity
 - improves usability for monthly-series datasets such as footprints
 
+Before adding this helper, define how it handles missing grouping keys,
+stable ordering, date parsing, and deleted records. Gap detection also needs
+an explicit expected cadence; a missing month cannot be inferred from a date
+range alone.
+
 Related CLI follow-up:
 
 - current CLI search output is still record-oriented
@@ -41,10 +45,12 @@ Related CLI follow-up:
 - output modes such as `--paths` may need explicit semantics for mixed
   path-backed and non-path-backed result sets
 
-## Collection Records
+## Existing Collection References And Managed Collections
 
-Another direction is to represent one logical collection instead of one record
-per file.
+`Catalog.add_collection()` already represents one existing directory, URI, or
+URL-path collection as a logical record. It stores a locator and cheap
+classification metadata. It does not manage the collection's members or
+persist collection claims and facets for capability-based reading.
 
 Example:
 
@@ -61,12 +67,14 @@ Example:
   - `end_date`
   - `file_pattern`
 
-This would likely be a different `record_type`, such as:
+Applications may use a domain-specific `record_type`, such as:
 
 - `external_collection`
-- `managed_store`
 
-Why it makes sense:
+`managed_store` would need a separate managed write and update contract; the
+record type alone would not make a collection managed.
+
+Why one collection record can make sense:
 
 - better matches "one dataset, many files"
 - leaves room for directory-backed stores and transform outputs
@@ -75,6 +83,8 @@ Tradeoff:
 
 - collection records are convenient summaries, but they lose direct one-record
   per-file visibility unless paired with file-level records or derived indexes
+- current collection references are not yet managed collection updates or
+  reader-dispatch-ready collection descriptors
 
 ## Managed Collection Updates And Member Manifests
 
@@ -95,7 +105,8 @@ it, record is inserted" flow.
 
 Possible future directions:
 
-- add an explicit update/upsert API for catalog records
+- add an explicit artifact update operation; current metadata update methods
+  do not append or replace artifact members
 - distinguish create-only writers from append/update writers
 - keep the core update API small, with plugins defining the concrete semantics
   for a given artifact shape
@@ -112,9 +123,16 @@ Possible future directions:
 - make rollback behavior explicit for append operations, since deleting a whole
   directory may be wrong once a collection already exists
 
-This also points toward a future artifact descriptor model where one logical
-record can have many concrete artifact members. Until then, a JSON-compatible
-manifest in ``derived_metadata`` could be a useful prototype.
+Artifact descriptors already exist. Before persisting a member manifest,
+choose one authoritative representation: a bounded manifest facet on the
+collection descriptor or a separate manifest artifact. Derived classification
+metadata may summarize the collection but should not become a second source of
+truth for its members.
+
+An append operation also needs a concurrency contract spanning member writes,
+manifest changes, and record updates. Locking only individual database calls
+would leave that sequence exposed to concurrent updates. Structured writer
+results and rollback behavior should be settled first.
 
 The core package probably should not define one universal meaning for
 ``update``. It can define the envelope: load an existing record, let a manager
@@ -166,8 +184,8 @@ Possible future improvements:
 
 ## Non-Path Locators
 
-The current model already leaves room for non-path locators such as URIs, but
-support is intentionally thin.
+Records already support non-path locators such as URIs. Runtime access through
+readers and managers remains limited.
 
 Examples:
 
@@ -177,83 +195,21 @@ Examples:
 
 Possible next steps:
 
-- keep `locator.kind` explicit, for example `path`, `uri`, or another small set
-- preserve non-path values verbatim instead of passing them through `Path(...)`
-- add lightweight helpers for path-backed versus non-path-backed behavior
-- consider optional higher-level integrations with tools such as `fsspec` later
+- define reader behavior for URI and URL-path locators after local-path reads
+- keep runtime access and credential policy in optional integrations
+- preserve the distinction between a stored locator and an opened handle
 
-Why it makes sense:
+Why extending runtime access makes sense:
 
-- avoids locking the model to local files only
-- supports cloud or remote references without forcing a heavy abstraction layer
+- makes existing remote references usable through an appropriate reader
+- keeps storage credentials and network behavior outside the core catalog model
 
 ## Reader Hints For Collections
 
-For collection-like artifacts, it may later be useful to attach a lightweight
-reader hint rather than a full plugin system.
+`Catalog.add_collection()` already accepts a human-readable `reader_hint` and
+stores it in derived classification metadata. For example, a caller can record
+`reader_hint="xarray.open_mfdataset"` for a monthly NetCDF series.
 
-Examples:
-
-- `artifact_type="netcdf_monthly_series"`
-- `reader_hint="xarray.open_mfdataset"`
-
-This should stay advisory rather than executable application state. The catalog
-can describe what something is, while higher-level code decides how to open it.
-
-## Follow-Up PR: Repository-Owned Search And Record Identity
-
-This should be treated as a focused architectural cleanup PR.
-
-Problem statement:
-
-- the current repository interface is too thin
-- `Catalog.search(...)` currently loads `repository.all()` and filters in Python
-- that leaks search policy out of the backend layer and prevents backends such
-  as TinyDB, SQLite, or MongoDB from owning query execution
-- `CatalogRecord` currently requires `id`, even though record identity is really
-  assigned by the repository/database layer
-- `allocate_record_ids()` is a workaround for that mismatch and should likely be
-  removed
-
-Preferred direction:
-
-- move search behind the repository interface
-- adopt "option 1" for record identity:
-  - `CatalogRecord.id` becomes optional before persistence
-  - repository `insert(...)` / `insert_many(...)` assign ids
-  - catalog-facing methods return persisted records with ids populated
-
-Suggested scope:
-
-- add a repository search method, likely reusing the current search inputs:
-  - `where`
-  - `contains`
-  - `regex`
-  - `ignore_case`
-- provide a simple backend implementation for TinyDB
-- update `Catalog.search(...)` to delegate to the repository instead of calling
-  `all()` and filtering in Python
-- remove `allocate_record_ids()` from the repository interface
-- update `Catalog.add_file(...)`, `add_artifact(...)`, and `add_artifacts(...)`
-  so they build records without ids and persist them through repository methods
-  that return ids or persisted records
-- keep the public `Catalog` API lightweight
-- avoid introducing a large ORM-like abstraction layer
-
-Questions to resolve in that PR:
-
-- should repository `insert(...)` return the assigned id, or the full persisted
-  `CatalogRecord`?
-- what is the cleanest shape for batch insert return values?
-- follow-up from #92: managed storage templates should not depend on `{id}`
-  before the record is persisted; generated replica views may use persisted
-  record ids after write
-- how much query expressiveness should the repository interface expose before it
-  becomes too backend-specific?
-
-Desired outcome:
-
-- repository backends own both identity assignment and search execution
-- `CatalogRecord` no longer needs caller-supplied ids
-- the catalog layer becomes thinner and less tied to backend implementation
-  details
+The hint is advisory, not executable dispatch state. A future collection reader
+needs explicit collection claims and facets, a requested interface, and a
+registered capability. It should not select code solely from the hint text.

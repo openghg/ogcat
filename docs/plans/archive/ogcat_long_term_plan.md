@@ -1,6 +1,10 @@
 # ogcat long-term implementation plan
 
-Status: draft for Codex-driven development  
+Status: historical design backlog, last revised in April 2026. Issue descriptions
+below are proposals from that snapshot, not a current completion checklist;
+several Priority 1 capabilities now exist. See the [current roadmap](../../roadmap.md)
+for reviewed status and near-term priorities.
+
 Audience: ogcat maintainers, OpenGHG maintainers, future plugin authors  
 Primary goal: evolve ogcat from a lightweight catalog MVP into a practical, extensible data-catalog and artifact-management layer that can eventually replace or orchestrate much of OpenGHG's storage/object-store logic without importing OpenGHG's domain-specific behaviour into ogcat core.
 
@@ -1776,7 +1780,7 @@ Use these terms carefully:
 - **Rollback action**: compensating action for a completed sub-step.
 - **Transaction**: only use for real backend transactions where the backend supports them.
 
-The [glossary](glossary.md) defines the shared vocabulary used by this plan and
+The [glossary](../../glossary.md) defines the shared vocabulary used by this plan and
 the current API docs.
 
 In TinyDB mode, say "transaction-like" or "recoverable operation", not ACID transaction.

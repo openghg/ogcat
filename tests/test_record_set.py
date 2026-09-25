@@ -282,6 +282,7 @@ def test_record_set_unique_values_preserves_first_seen_order(tmp_path: Path) -> 
 
 
 def test_record_set_field_discovery_skips_falsey_values(tmp_path: Path) -> None:
+    """Field discovery includes reference ownership while skipping empty values."""
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
     catalog.add_artifact(
         record_type="external_reference",
@@ -294,7 +295,7 @@ def test_record_set_field_discovery_skips_falsey_values(tmp_path: Path) -> None:
     assert "locator.uri" in fields
     assert "stored_abspath" not in fields
     assert "stored_relpath" not in fields
-    assert "storage_mode" not in fields
+    assert "storage_mode" in fields
     assert "original_path" not in fields
     assert "suffixes" not in fields
     assert "user_metadata.species" not in fields

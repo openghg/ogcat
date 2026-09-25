@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from tinydb import Query, TinyDB
+from tinydb.storages import JSONStorage
 
 from ogcat.models import CatalogRecord, JsonValue
 from ogcat.search import SearchOp, SearchQuery, SearchTerm, matches_record
@@ -16,13 +17,25 @@ from ogcat.search import SearchOp, SearchQuery, SearchTerm, matches_record
 class TinyDbCatalogRepository:
     """TinyDB-backed catalog repository."""
 
-    def __init__(self, db_path: Path) -> None:
+    def __init__(self, db_path: Path, *, read_only: bool = False) -> None:
+        """Open a TinyDB database, optionally without write access.
+
+        Args:
+            db_path: Database file path.
+            read_only: Open an existing database without creating files or
+                allowing record mutations.
+        """
         self._db_path = db_path
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = TinyDB(db_path)
+        self._read_only = read_only
+        if read_only:
+            self._db = TinyDB(db_path, storage=JSONStorage, access_mode="r")
+        else:
+            self._db_path.parent.mkdir(parents=True, exist_ok=True)
+            self._db = TinyDB(db_path)
 
     def insert(self, record: CatalogRecord) -> CatalogRecord:
         """Insert a new record and return it with its TinyDB doc_id."""
+        self._require_writable()
         payload = record.to_dict()
         payload.pop("id", None)
         doc_id = self._db.insert(payload)
@@ -30,6 +43,7 @@ class TinyDbCatalogRepository:
 
     def insert_many(self, records: list[CatalogRecord]) -> list[CatalogRecord]:
         """Insert multiple records and return them with their TinyDB doc_ids."""
+        self._require_writable()
         if not records:
             return []
         payloads = []
@@ -53,6 +67,7 @@ class TinyDbCatalogRepository:
 
     def update(self, record: CatalogRecord) -> None:
         """Update an existing record."""
+        self._require_writable()
         if record.id is None:
             raise ValueError("Cannot update a record without an id.")
         if record.id.isdigit():
@@ -65,6 +80,7 @@ class TinyDbCatalogRepository:
 
     def delete(self, record_id: str) -> None:
         """Delete an existing record."""
+        self._require_writable()
         if record_id.isdigit():
             removed_doc_ids = self._db.remove(doc_ids=[int(record_id)])
         else:
@@ -117,6 +133,11 @@ class TinyDbCatalogRepository:
     def all(self) -> list[CatalogRecord]:
         """Return all records."""
         return [self._record_from_document(item) for item in self._db.all()]
+
+    def _require_writable(self) -> None:
+        """Reject mutations on a database opened for reading."""
+        if self._read_only:
+            raise PermissionError(f"Catalog database is read-only: {self._db_path}")
 
     def _record_from_document(self, document: Any) -> CatalogRecord:
         """Build a record, recovering the id from TinyDB doc_id when needed."""

@@ -19,12 +19,17 @@ continues to work for ordinary single-artifact records.
 | ``record_type`` | Logical schema/search type, e.g. ``managed_file`` or ``external_reference``. |
 | ``locator`` | Compatibility shortcut to the data artifact locator (see [Locators and storage](locators-and-storage.md)). |
 | ``artifacts`` | Inline descriptors for the data artifact plus optional auxiliary artifacts, view links, manifests, previews, logs, or derived artifacts. |
-| ``storage_mode`` | How the artifact was stored, e.g. ``copy``, ``move``, or ``external``. |
+| ``storage_mode`` | Storage and ownership mode, such as managed ``copy``, ``move``, or ``write``; record-only artifacts use ``reference`` unless an external description was supplied. |
 | ``status`` | Reserved record lifecycle status. ``active`` records are returned by normal search; ``deleted`` records are tombstones. |
 | ``lifecycle_metadata`` | Reserved lifecycle metadata such as delete/restore operation ids, timestamps, and incomplete purge attempt details. |
 | ``original_filename`` | Source filename at ingest time. |
 | ``suffixes`` | File suffix list derived from the source path. |
 | ``time_added`` | ISO 8601 timestamp when the record was created. |
+
+Purge removes files only for records with a known managed write mode and a
+locator under a managed catalog root. A path's location alone does not make
+ogcat its owner; records with an absent or reference storage mode leave the
+referenced file in place.
 
 ## Metadata namespaces
 

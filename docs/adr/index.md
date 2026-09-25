@@ -8,7 +8,8 @@ ADRs use this status vocabulary:
 
 - `Proposed`: a target design has been recorded, but implementation is pending.
 - `Accepted`: the design is implemented or actively treated as the project direction.
-- `Superseded`: a later ADR replaces the decision.
+- `Superseded`: a later decision or plan replaces the direction. A proposed ADR
+  may be superseded without its entire model having been implemented.
 
 ```{toctree}
 :maxdepth: 1

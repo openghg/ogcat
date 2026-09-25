@@ -70,9 +70,9 @@ hyphens before path-safe normalisation, so `["a", "b", "c"]` renders as
 
 ## Record schemas
 
-A *record schema* declares which metadata fields a catalog expects.  Schemas
-are stored in ``catalog.json`` and are purely advisory unless you also enable
-strict validation.
+A *record schema* declares which metadata fields a catalog expects. Schemas
+are stored in ``catalog.json``. Required fields and supported ``value_types``
+are enforced during ingest; field descriptions and examples are informational.
 
 ```python
 from ogcat import CatalogSpec, RecordSchema, MetadataFieldDescription
@@ -93,6 +93,7 @@ spec = CatalogSpec(
                 description="Calendar year.",
                 example=2024,
                 required=True,
+                value_types=["int"],
             ),
         ],
     ),
@@ -136,11 +137,16 @@ spec = CatalogSpec(
 ## Validation
 
 Validation checks that required fields declared by the effective schema are
-present in the record's user metadata.
+present in the record's user metadata. If a field declares ``value_types``,
+its value must match at least one supported type label. Common labels include
+``str``, ``int``, ``number``, ``bool``, ``date``, ``datetime``, ``list[str]``,
+and ``dict``. Call ``validate_schema()`` or ``validate_spec()`` to check schema
+type labels themselves.
 
 ```python
 from ogcat import validate_metadata
 
+schema = spec.get_schema()
 report = validate_metadata(record.user_metadata, schema)
 if report.issues:
     for issue in report.issues:
@@ -152,6 +158,11 @@ Missing required fields are errors and block ingest. Use a
 ``before_validate_metadata`` hook to fill defaults before validation, or call
 ``validate_metadata()`` directly when you want to inspect a report without
 writing a record.
+
+Unknown fields are accepted during ingest. To check them explicitly, set
+``allow_unknown_metadata=False`` on the schema and call
+``validate_metadata(metadata, schema, strict=True)``. The schema setting alone
+does not make ingest reject unknown fields.
 
 ## The ``ogcat fields`` command
 

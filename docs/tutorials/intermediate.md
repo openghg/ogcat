@@ -1,57 +1,18 @@
-# Tutorial: intermediate topics
+# Further workflows
 
-These tutorials are placeholders for focused guides that build on the basic
-catalog workflow. They should stay small and runnable.
+After completing the [basic catalog tutorial](basic-catalog.md), use these
+examples for a specific next task:
 
-## Custom hooks and extractors
+- [Verification-games workflow recipes](verification-games-recipes.md) cover
+  existing file references, directory-backed collections, managed copies,
+  search, and generated artifacts.
+- [Artifact workflow examples](artifact-workflows.md) show custom writers,
+  storage planning, and derived outputs.
+- [Advanced real-world catalogs](advanced-real-world.md) show catalog layouts
+  for personal flux data and footprint files.
+- [Hooks and plugins](../concepts/hooks-and-plugins.md) explains extension
+  points and links to a runnable extractor example.
+- [Metadata and validation](../concepts/metadata-and-validation.md) explains
+  schema requirements, value types, and explicit strict validation.
 
-Use this level for examples that register hooks through `PluginRegistry`, fill
-metadata before validation, collect derived metadata, or handle rollback
-warnings. The existing runnable example is:
-
-```bash
-uv run python examples/custom_extractor/scripts/run.py
-```
-
-Future content should show:
-
-- `before_validate_metadata` for metadata defaults
-- `extract_metadata` for derived metadata
-- `context.add_warning(...)` for non-fatal findings
-- focused tests for hook outcomes
-
-## Artifact writers
-
-Use this level for examples that materialise data during `add_artifact()`, for
-example writing an in-memory object or unpacking a zip archive with helpers from
-`ogcat.writers`.
-
-Future content should show:
-
-- `memory_source()` with `memory_writer()`
-- `path_source()` with `path_writer()`
-- `UnzipArtifactWriter`
-- rollback behavior when a writer fails
-
-## Validation patterns
-
-Use this level for stricter catalog policies. Required metadata fields are
-errors during ingest, while unknown metadata is accepted unless strict
-validation is requested explicitly.
-
-Future content should show:
-
-- `validate_spec()` before writing a catalog spec
-- `validate_metadata()` and `ValidationIssue.path`
-- `allow_unknown_metadata=False` with explicit strict validation
-- user-friendly error messages in CLIs or notebooks
-
-## CLI parity
-
-Use this level for shell-first workflows that mirror the Python API.
-
-Future content should show:
-
-- compact search expressions such as `species=CH4`, `title:methane`, and `field?`
-- `--fields` plus `--format csv|tsv|pipe`
-- `--json`, `--ids`, and `--paths` for automation
+For command syntax, see the [CLI reference](../cli.md).

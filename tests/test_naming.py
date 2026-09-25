@@ -73,3 +73,62 @@ def test_render_storage_location_allows_public_fields_and_metadata(tmp_path: Pat
     assert target == tmp_path / "files" / "2026" / "co2" / "surface-flux.nc"
     assert relative_path == "files/2026/co2/surface-flux.nc"
     assert resolved_filename == "surface-flux.nc"
+
+
+@pytest.mark.parametrize(
+    ("directory_template", "filename_template", "context"),
+    [
+        ("{species}", "data.nc", {"species": ".."}),
+        ("safe/../outside", "data.nc", {}),
+        ("safe", "{name}", {"name": ".."}),
+        ("safe", ".", {}),
+    ],
+)
+def test_render_storage_location_rejects_dot_path_segments(
+    tmp_path: Path,
+    directory_template: str,
+    filename_template: str,
+    context: dict[str, object],
+) -> None:
+    """Rendered template paths cannot refer to a parent or current directory."""
+    with pytest.raises(ValueError, match="Storage template cannot render"):
+        render_storage_location(
+            files_root=tmp_path / "files",
+            directory_template=directory_template,
+            filename_template=filename_template,
+            context=context,
+            exists=lambda _: False,
+        )
+
+
+def test_render_storage_location_rejects_symlink_directory_escape(tmp_path: Path) -> None:
+    """A pre-existing symlinked directory cannot redirect storage outside its root."""
+    files_root = tmp_path / "files"
+    files_root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (files_root / "linked").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="resolves outside the files root"):
+        render_storage_location(
+            files_root=files_root,
+            directory_template="linked",
+            filename_template="data.nc",
+            context={},
+        )
+
+
+def test_render_storage_location_rejects_dangling_symlink_file_escape(tmp_path: Path) -> None:
+    """A dangling symlink at the filename cannot redirect storage outside its root."""
+    files_root = tmp_path / "files"
+    files_root.mkdir()
+    outside_target = tmp_path / "outside.nc"
+    (files_root / "data.nc").symlink_to(outside_target)
+
+    with pytest.raises(ValueError, match="resolves outside the files root"):
+        render_storage_location(
+            files_root=files_root,
+            directory_template="",
+            filename_template="data.nc",
+            context={},
+        )
