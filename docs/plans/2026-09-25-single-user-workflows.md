@@ -60,7 +60,8 @@ public API specification.
 - Open an existing catalog in a genuinely read-only mode without creating
   directories, logs, or write handles; reject mutations before hooks or files
   are touched. Reopen after another process writes; TinyDB readers do not
-  promise live cross-process consistency.
+  promise live cross-process consistency. Release repository resources with a
+  catalog context or `close()` before long computation or reopening a reader.
 - Expand only a local collection's canonical classification pattern to sorted
   existing paths. Reject unsupported URI/urlpath member enumeration, missing
   roots, unsafe paths, and non-collection records. A NAME-specific helper may
@@ -109,8 +110,10 @@ updated as implementation lands; a proposal above is not evidence of delivery.
 | Rerunnable footprint importer | Repeating an import should refresh month summaries rather than add another record for the same series. | Mounted and listing-backed rerun tests cover a newly discovered month and ambiguous existing duplicates. An old URI record stays a URI if the source later becomes mounted. |
 | CLI parity for registration and lookup | Avoid requiring Python for common reference, collection, strict selection, locator, and readable-view operations. | CLI command tests and documented help output. |
 | Managed completed-output metadata | Preserve caller validation facts when moving a finished file without constructing a `StoragePlan`. | `add_file` regression test covers a move, normalized values, and caller precedence over generic extraction. |
-| Add-path simplification and late validation | Remove an internal intent conversion and mutable plan cache; reject hooks changing the target or invalidating schema after bytes have been written. | Lifecycle/hook/writer tests check hook order, rollback, late schema/target/template changes. Managed primary planning still runs twice to preserve hook phase order. |
+| Add-path simplification and late validation (PR 134) | Remove an internal intent conversion and mutable plan cache; reject hooks changing the target or invalidating schema after bytes have been written. | Lifecycle/hook/writer tests check hook order, rollback, late schema/target/template changes. At this stage, managed primary planning still ran twice; the follow-up below removes that duplication. |
 | Remove unused orchestration abstractions | The generic runner base, materialisation intent/target/plan wrappers, and duplicate application adapters added extension points without a second implementation or workflow that used them. Keep concrete add and record-lifecycle coordinators and one concrete `StoragePlan`. | Existing public API and lifecycle tests remain the compatibility boundary. Workflow registrars still own identity and retry policy; core idempotency, adoption, and public handles remain deferred. |
+| Plan primary storage once | A locator hook runs after a destination is chosen. Repeating planning afterward can fail on changed naming inputs even when the accepted locator remains valid, and repeats collision selection. Keep the proposed plan and adjust it only for an explicit locator redirect. | Regression coverage checks one planning call, locator redirects and removal, preserved hook order, managed naming metadata, and late mutation rollback. Writers still validate the target before materialisation; this is not filesystem race protection. |
+| Catalog resource lifetime and CLI cleanup | The documented reopen-after-registration workflow needs a way to release the old database handle. Add `Catalog.close()` and context management; CLI commands release catalogs on success and failure. | Resource tests cover actual handle closure, repeated close, exceptional exit, cached reads after close, source preservation on rejected writes, and transaction rollback before closing. Completed adds stay committed. This does not add locking or durable transactions. |
 | Retired plans and refreshed docs | Keep speculative filesystem/handle ideas accessible without presenting them as current scope. | Archived plans under `docs/plans/archive`, ADR status and roadmap updated; documentation build before PR. |
 
 ## Validation evidence
@@ -129,10 +132,18 @@ updated as implementation lands; a proposal above is not evidence of delivery.
   offline Sphinx build with warnings treated as errors. It changes internal
   maintainer modules only; the documented public API and operation ordering are
   unchanged.
+- The single-pass planning and resource-lifetime follow-up passed 557 tests
+  with four optional tests skipped, changed-file Ruff checks, and Pyright with
+  no errors or warnings. Forty focused Verification Games tests also passed
+  against the current editable ogcat checkout; no BP1 production data were
+  modified. The offline Sphinx HTML build passed with warnings treated as
+  errors. The revised getting-started and resource-lifetime examples were
+  exercised against a temporary catalog, including composed registration and
+  reopening a read-only view.
 
 ## Deliberately deferred
 
-Generic idempotency, managed-path adoption, read/write handles, converter
+Generic idempotency, managed-path adoption, artifact read/write handles, converter
 pipelines, distributed leases, ACLs, remote member listing, a server, and a
 SQLite migration have no demonstrated need in the three inspected BP1
 catalogs. Workflow registrars own identity and retry policy for now. Preserve

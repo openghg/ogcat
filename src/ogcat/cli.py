@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, NoReturn
 
 import typer
+from click import get_current_context
 from rich.console import Console
 from rich.table import Table
 
@@ -69,7 +70,7 @@ def _open_catalog_or_fail(catalog: Path | None, *, read_only: bool = False) -> C
     """Open a catalog using CLI resolution semantics with friendly errors."""
     catalog_path = _resolve_catalog_path(catalog)
     try:
-        return Catalog.open(catalog_path, read_only=read_only)
+        return get_current_context().with_resource(Catalog.open(catalog_path, read_only=read_only))
     except FileNotFoundError:
         _fail(f"Catalog not found or incomplete at {catalog_path}.")
     except ValueError as exc:
@@ -340,10 +341,10 @@ def init(
     """Create a new catalog."""
     spec = CatalogSpec(catalog_name=name)
     try:
-        catalog = Catalog.create(root, spec)
+        with Catalog.create(root, spec) as catalog:
+            console.print(f"Created catalog at {catalog.root}")
     except FileExistsError:
         _fail(f"Catalog already exists at {root}.")
-    console.print(f"Created catalog at {catalog.root}")
 
 
 @app.command(

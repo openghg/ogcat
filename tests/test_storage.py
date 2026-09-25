@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
@@ -726,29 +727,99 @@ def test_plan_artifact_storage_explicit_locator_overrides_primary_location(tmp_p
     assert plan.resolved_filename == "artifact.nc"
 
 
+def test_add_file_template_collision_is_planned_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A colliding template name is checked once per candidate before copying."""
+    checked: list[ArtifactLocator] = []
+
+    class CountingAdapter(LocalStorageAdapter):
+        def exists(self, locator: ArtifactLocator) -> bool:
+            """Record only the planner's existence checks."""
+            checked.append(locator)
+            return super().exists(locator)
+
+    source = tmp_path / "source.txt"
+    source.write_text("payload", encoding="utf-8")
+    catalog = Catalog.create(
+        tmp_path / "catalog",
+        CatalogSpec(
+            catalog_name="files",
+            default_schema=RecordSchema(directory_template="group", filename_template="fixed.txt"),
+        ),
+    )
+    directory = catalog.root / catalog.spec.files_root / "group"
+    directory.mkdir(parents=True)
+    occupied = directory / "fixed.txt"
+    occupied.write_text("existing", encoding="utf-8")
+    monkeypatch.setattr(storage_planning, "LocalStorageAdapter", CountingAdapter)
+
+    record = catalog.add_file(source, primary_location="template")
+
+    assert [locator.as_path() for locator in checked] == [occupied, directory / "fixed_2.txt"]
+    assert record.path() == directory / "fixed_2.txt"
+    assert (directory / "fixed_2.txt").read_text(encoding="utf-8") == "payload"
+    assert occupied.read_text(encoding="utf-8") == "existing"
+
+
+@pytest.mark.parametrize("primary_location", ["uuid", "template"])
+def test_add_file_hook_local_redirect_preserves_storage_root_relative_metadata(
+    tmp_path: Path, primary_location: Literal["uuid", "template"]
+) -> None:
+    """Hook redirects retain storage-relative naming beneath the managed root."""
+    source = tmp_path / "source.txt"
+    source.write_text("payload", encoding="utf-8")
+    catalog_root = tmp_path / "catalog"
+    spec = CatalogSpec(catalog_name="files")
+    storage_root = catalog_root / (spec.objects_root if primary_location == "uuid" else spec.files_root)
+    target = storage_root / "redirected" / "target.txt"
+
+    class RedirectHook:
+        def resolve_artifact_locator(self, context: OperationContext) -> None:
+            """Choose a new local path while the proposed plan stays private."""
+            assert context.storage_plan is None
+            context.planned_locators = [
+                ArtifactLocator.from_path(target, relative_path=target.relative_to(catalog_root).as_posix())
+            ]
+
+    catalog = Catalog.create(catalog_root, spec, plugins=PluginRegistry([RedirectHook()]))
+
+    record = catalog.add_file(source, primary_location=primary_location, create_template_replica=False)
+
+    assert record.path() == target
+    assert record.naming_metadata["storage_relative_path"] == "redirected/target.txt"
+    assert record.naming_metadata["resolved_directory"] == "redirected"
+    assert record.naming_metadata["resolved_filename"] == "target.txt"
+    assert target.read_text(encoding="utf-8") == "payload"
+
+
+@pytest.mark.parametrize("locator_kind", ["uri", "urlpath"])
+@pytest.mark.parametrize("relative_path", [None, "copied.nc"])
 def test_add_file_hook_urlpath_redirect_updates_plan_and_skips_path_extractor(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    locator_kind: Literal["uri", "urlpath"],
+    relative_path: str | None,
 ) -> None:
     """Hook-redirected add_file operations keep plan metadata consistent."""
 
     class RedirectHook:
         def resolve_artifact_locator(self, context: OperationContext) -> None:
             context.planned_locators = [
-                ArtifactLocator.from_urlpath(
-                    "memory://bucket/copied.nc",
-                    relative_path="copied.nc",
+                ArtifactLocator(
+                    kind=locator_kind, value="memory://bucket/copied.nc", relative_path=relative_path
                 )
             ]
 
         def before_record_write(self, context: OperationContext) -> None:
             assert context.storage_plan is not None
-            assert context.storage_plan.locator.kind == "urlpath"
-            assert context.storage_plan.adapter == "fsspec"
+            assert context.storage_plan.locator.kind == locator_kind
+            assert context.storage_plan.adapter == ("fsspec" if locator_kind == "urlpath" else None)
 
     def fake_write(self, context: OperationContext, source: OperationSource, target: ArtifactLocator) -> None:
         assert source.path == source_file
-        assert target.kind == "urlpath"
+        assert target.kind == locator_kind
         context.derived_metadata["writer"] = "redirected"
 
     def fail_extract(path: Path) -> dict[str, object]:
@@ -766,10 +837,10 @@ def test_add_file_hook_urlpath_redirect_updates_plan_and_skips_path_extractor(
 
     record = catalog.add_file(source_file, operation="copy")
 
-    assert record.locator.kind == "urlpath"
+    assert record.locator.kind == locator_kind
     assert record.derived_metadata["writer"] == "redirected"
-    assert record.naming_metadata["storage_relative_path"] == "copied.nc"
-    assert record.naming_metadata["resolved_directory"] == ""
+    assert record.naming_metadata.get("storage_relative_path") == relative_path
+    assert record.naming_metadata["resolved_directory"] == ("" if relative_path else "memory://bucket")
     assert record.naming_metadata["resolved_filename"] == "copied.nc"
 
 

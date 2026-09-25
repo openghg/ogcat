@@ -5,10 +5,10 @@ creation. Operation runners own the operation lifecycle once those inputs are
 prepared.
 
 ``AddOperationRunner`` is the concrete runner for the current add lifecycle. It
-uses a template-style flow: ``run()`` fixes the ordering of validation, locator
-resolution, storage planning, artifact writing, metadata collection, record
-staging, commit, and rollback, while private phase methods keep each step
-separately testable and replaceable by future sibling runners.
+uses a fixed sequence: validate metadata, prepare one storage plan, resolve its
+locator through hooks, write the artifact, collect metadata, stage the record,
+and commit. Failures enter the transaction rollback path. The proposed plan
+stays private until locator hooks finish; hooks then see the final storage plan.
 """
 
 from __future__ import annotations
@@ -48,6 +48,7 @@ from ogcat.operation_helpers import (
     artifact_locator_from_context,
     naming_metadata_from_storage_plan,
     normalize_metadata_for_schema,
+    storage_plan_with_locator,
 )
 from ogcat.secondary_artifacts import SecondaryArtifactOperation, SecondaryArtifactResult
 from ogcat.spec import RecordSchema
@@ -55,8 +56,7 @@ from ogcat.storage import StoragePlan, TargetKind, remove_target
 from ogcat.transactions import OperationState, RollbackFailure, UnitOfWork
 from ogcat.validation import ValidationReport
 
-ArtifactLocatorFactory = Callable[[OperationContext], ArtifactLocator]
-StoragePlanFactory = Callable[[OperationContext, ArtifactLocator], StoragePlan | None]
+StoragePlanFactory = Callable[[OperationContext], StoragePlan]
 DerivedMetadataCollector = Callable[[OperationContext, ArtifactLocator], None]
 _PhaseSetter = Callable[[str], None]
 _PurgeArtifactAction = Literal["removed", "skipped", "failed"]
@@ -131,7 +131,13 @@ class OperationServices:
 
 @dataclass(slots=True)
 class AddOperationRequest:
-    """Inputs required to run one catalog add operation."""
+    """Inputs required to run one catalog add operation.
+
+    ``storage_plan_factory`` runs once after metadata validation and before
+    locator hooks. ``storage_root`` is the managed local root used to rebase
+    storage-relative naming metadata if a hook redirects that planned locator.
+    General artifact requests omit it to preserve their locator-based metadata.
+    """
 
     transaction: UnitOfWork
     commit: bool
@@ -148,9 +154,9 @@ class AddOperationRequest:
     naming_metadata: MetadataDict | None
     time_added: str | None
     source: OperationSource
-    locator_factory: ArtifactLocatorFactory
     artifact_writer: ArtifactWriter | None
     storage_plan_factory: StoragePlanFactory
+    storage_root: Path | None = None
     derived_metadata_collector: DerivedMetadataCollector | None = None
     secondary_artifact_operations: tuple[SecondaryArtifactOperation, ...] = ()
 
@@ -229,14 +235,9 @@ class AddOperationRunner:
                 hook_dispatcher=hook_dispatcher,
                 set_phase=set_phase,
             )
-            canonical_locator = self._resolve_locator(
-                context=hook_context,
-                hook_dispatcher=hook_dispatcher,
-                set_phase=set_phase,
-            )
             add_plan = self._plan_storage(
                 context=hook_context,
-                locator=canonical_locator,
+                hook_dispatcher=hook_dispatcher,
                 set_phase=set_phase,
             )
             self._write_artifact(add_plan=add_plan, set_phase=set_phase)
@@ -313,35 +314,25 @@ class AddOperationRunner:
         )
         validation_report.raise_for_errors()
 
-    def _resolve_locator(
+    def _plan_storage(
         self,
         *,
         context: OperationContext,
         hook_dispatcher: HookDispatcher,
         set_phase: _PhaseSetter,
-    ) -> ArtifactLocator:
-        """Resolve the canonical artifact locator for an add operation."""
-        set_phase("locator-factory")
-        context.planned_locators = [self.request.locator_factory(context)]
+    ) -> _AddOperationPlan:
+        """Plan once, apply locator hooks, and audit the final storage decision."""
+        set_phase("storage-plan")
+        proposed_plan = self.request.storage_plan_factory(context)
+        context.planned_locators = [proposed_plan.locator]
         set_phase(HOOK_PHASES["resolve_artifact_locator"].name)
         hook_dispatcher.resolve_artifact_locator(context)
-        canonical_locator = artifact_locator_from_context(context)
-        context.planned_locators[0] = canonical_locator
-        return canonical_locator
-
-    def _plan_storage(
-        self,
-        *,
-        context: OperationContext,
-        locator: ArtifactLocator,
-        set_phase: _PhaseSetter,
-    ) -> _AddOperationPlan:
-        """Build and audit the storage plan for an add operation."""
+        locator = artifact_locator_from_context(context)
         set_phase("storage-plan")
-        context.storage_plan = self.request.storage_plan_factory(context, locator)
-        storage_plan = context.storage_plan
-        if storage_plan is None:
-            raise RuntimeError("Add operation did not produce a storage plan.")
+        storage_plan = storage_plan_with_locator(
+            proposed_plan, locator, storage_root=self.request.storage_root
+        )
+        context.storage_plan = storage_plan
         self.dependencies.emit_operation_audit(
             context,
             event_type="write",
