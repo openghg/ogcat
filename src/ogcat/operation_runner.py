@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -27,6 +28,7 @@ from ogcat.classification import CLASSIFICATION_METADATA_KEY, classify_artifact
 from ogcat.exceptions import PurgeIncompleteError
 from ogcat.hooks import (
     HOOK_PHASES,
+    ArtifactWriter,
     HookDispatcher,
     HookLifecycleCallback,
     HookManager,
@@ -34,8 +36,6 @@ from ogcat.hooks import (
     OperationSource,
 )
 from ogcat.materialization import (
-    MaterializationIntent,
-    materialization_plan_from_locator,
     validate_writer_matches_storage_plan,
 )
 from ogcat.models import (
@@ -46,6 +46,7 @@ from ogcat.models import (
     MetadataDict,
     normalize_metadata,
 )
+from ogcat.naming import build_naming_context, render_template
 from ogcat.operation_helpers import (
     artifact_locator_from_context,
     naming_metadata_from_storage_plan,
@@ -151,8 +152,8 @@ class AddOperationRequest:
     time_added: str | None
     source: OperationSource
     locator_factory: ArtifactLocatorFactory
-    materialization_intent: MaterializationIntent
-    storage_plan_factory: StoragePlanFactory | None = None
+    artifact_writer: ArtifactWriter | None
+    storage_plan_factory: StoragePlanFactory
     derived_metadata_collector: DerivedMetadataCollector | None = None
     secondary_artifact_operations: tuple[SecondaryArtifactOperation, ...] = ()
 
@@ -196,6 +197,7 @@ class _AddOperationPlan:
     context: OperationContext
     locator: ArtifactLocator
     storage_plan: StoragePlan
+    user_metadata_at_write: MetadataDict
 
 
 class OperationRunner(ABC):
@@ -348,14 +350,7 @@ class AddOperationRunner(OperationRunner):
     ) -> _AddOperationPlan:
         """Build and audit the storage plan for an add operation."""
         set_phase("storage-plan")
-        context.storage_plan = (
-            self.request.storage_plan_factory(context, locator)
-            if self.request.storage_plan_factory is not None
-            else materialization_plan_from_locator(
-                locator,
-                intent=self.request.materialization_intent,
-            ).to_storage_plan()
-        )
+        context.storage_plan = self.request.storage_plan_factory(context, locator)
         storage_plan = context.storage_plan
         if storage_plan is None:
             raise RuntimeError("Add operation did not produce a storage plan.")
@@ -375,6 +370,7 @@ class AddOperationRunner(OperationRunner):
             context=context,
             locator=locator,
             storage_plan=storage_plan,
+            user_metadata_at_write=deepcopy(context.user_metadata),
         )
 
     def _write_artifact(
@@ -384,7 +380,7 @@ class AddOperationRunner(OperationRunner):
         set_phase: _PhaseSetter,
     ) -> None:
         """Materialise or skip the artifact write for an add operation."""
-        writer = self.request.materialization_intent.writer
+        writer = self.request.artifact_writer
         if add_plan.storage_plan.write_mode == "reference":
             self.dependencies.emit_operation_audit(
                 add_plan.context,
@@ -447,10 +443,21 @@ class AddOperationRunner(OperationRunner):
         """Stage the catalog record and run record-write hooks."""
         set_phase(HOOK_PHASES["before_record_write"].name)
         hook_dispatcher.before_record_write(add_plan.context)
+        if add_plan.context.storage_plan != add_plan.storage_plan:
+            raise ValueError("Storage plan changed after artifact writing.")
+        if artifact_locator_from_context(add_plan.context) != add_plan.locator:
+            raise ValueError("Artifact locator changed after artifact writing.")
         add_plan.context.user_metadata = normalize_metadata_for_schema(
             add_plan.context.user_metadata,
             schema_name=self.dependencies.schema_name(self.request.schema_record_type),
         )
+        if self._template_name_changed(add_plan):
+            raise ValueError("Naming metadata changed after artifact writing.")
+        self.dependencies.metadata_validation_report(
+            schema=self.request.schema,
+            metadata=add_plan.context.user_metadata,
+            record_type=self.request.schema_record_type,
+        ).raise_for_errors()
         add_plan.context.derived_metadata = normalize_metadata(
             add_plan.context.derived_metadata,
             field_name="derived_metadata",
@@ -493,6 +500,33 @@ class AddOperationRunner(OperationRunner):
         set_phase(HOOK_PHASES["after_record_write"].name)
         hook_dispatcher.after_record_write(add_plan.context)
         return persisted
+
+    def _template_name_changed(self, add_plan: _AddOperationPlan) -> bool:
+        """Detect post-write changes to a managed file's rendered target name."""
+        if self.request.operation_type != "add_file" or add_plan.storage_plan.primary_location != "template":
+            return False
+        assert self.request.original_path is not None
+        assert self.request.time_added is not None
+        assert self.request.naming_metadata is not None
+        before = build_naming_context(
+            record_id=add_plan.context.operation_id,
+            original_path=Path(self.request.original_path),
+            metadata=add_plan.user_metadata_at_write,
+            date_added=self.request.time_added[:10],
+        )
+        after = build_naming_context(
+            record_id=add_plan.context.operation_id,
+            original_path=Path(self.request.original_path),
+            metadata=add_plan.context.user_metadata,
+            date_added=self.request.time_added[:10],
+        )
+        templates = (
+            str(self.request.naming_metadata["directory_template"]),
+            str(self.request.naming_metadata["filename_template"]),
+        )
+        return any(
+            render_template(template, before) != render_template(template, after) for template in templates
+        )
 
     def _run_secondary_artifacts(
         self,

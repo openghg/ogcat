@@ -9,11 +9,9 @@ from typing import TYPE_CHECKING
 from ogcat.extractors import extract_derived_metadata
 from ogcat.hooks import ArtifactWriter, OperationContext, OperationSource
 from ogcat.materialization import (
-    MaterializationIntent,
-    MaterializationPlan,
-    reference_intent,
-    storage_plan_intent,
-    writer_intent,
+    storage_plan_for_locator,
+    target_kind_from_writer,
+    write_mode_from_writer,
 )
 from ogcat.models import ArtifactLocator, CatalogRecord, MetadataDict
 from ogcat.operation_helpers import storage_plan_with_locator
@@ -65,6 +63,7 @@ class CatalogApplication:
         primary_location: PrimaryLocation,
         create_template_replica: bool,
         time_added: str,
+        derived_metadata: MetadataDict | None = None,
     ) -> CatalogRecord:
         """Run the managed local-file add operation."""
         files_root = self.catalog.root / self.catalog.spec.files_root
@@ -75,7 +74,6 @@ class CatalogApplication:
             "filename_template": filename_template,
             "primary_location": primary_location,
         }
-        planned_primary: PrimaryStoragePlanResult | None = None
 
         def plan_primary(context: OperationContext) -> PrimaryStoragePlanResult:
             """Plan the managed-file primary location for this operation."""
@@ -97,38 +95,31 @@ class CatalogApplication:
 
         def resolve_local_file_locator(context: OperationContext) -> ArtifactLocator:
             """Resolve the managed-file storage path for this operation."""
-            nonlocal planned_primary
-            planned_primary = plan_primary(context)
-            if primary_location == "template":
-                naming_metadata["artifact_uuid"] = context.operation_id
-            return planned_primary.locator
+            return plan_primary(context).locator
 
         def plan_local_file_storage(
             context: OperationContext,
             locator: ArtifactLocator,
         ) -> StoragePlan:
             """Build the storage plan for a managed local file."""
-            primary = planned_primary or plan_primary(context)
-            artifact_uuid = context.operation_id if primary_location == "template" else None
-            primary_target = primary.to_materialization_target(
+            primary = plan_primary(context)
+            return primary.to_storage_plan(
                 locator=locator,
-                target_kind=materialization_intent.target_kind,
-                artifact_uuid=artifact_uuid,
+                target_kind=target_kind_from_writer(artifact_writer),
+                write_mode=write_mode_from_writer(artifact_writer),
+                ogcat_owned=True,
+                artifact_uuid=context.operation_id if primary_location == "template" else None,
             )
-            return MaterializationPlan(
-                primary_target=primary_target,
-                intent=materialization_intent,
-            ).to_storage_plan()
 
         def collect_file_metadata(context: OperationContext, locator: ArtifactLocator) -> None:
             """Collect generic derived metadata from the written file."""
             locator_path = locator.as_path()
             if locator_path is not None:
-                context.derived_metadata.update(extract_derived_metadata(locator_path))
+                for key, value in extract_derived_metadata(locator_path).items():
+                    context.derived_metadata.setdefault(key, value)
 
         source_description = OperationSource(kind="local_file", path=source, descriptor=str(source))
         artifact_writer = _managed_path_writer(source=source, operation=operation)
-        materialization_intent = writer_intent(artifact_writer)
         secondary_artifact_operations = self._template_link_secondary_artifacts(
             primary_location=primary_location,
             create_template_replica=create_template_replica,
@@ -149,12 +140,12 @@ class CatalogApplication:
                 original_path=source,
                 original_filename=source.name,
                 suffixes=source.suffixes,
-                derived_metadata={},
+                derived_metadata={} if derived_metadata is None else derived_metadata,
                 naming_metadata=naming_metadata,
                 time_added=time_added,
                 source=source_description,
                 locator_factory=resolve_local_file_locator,
-                materialization_intent=materialization_intent,
+                artifact_writer=artifact_writer,
                 storage_plan_factory=plan_local_file_storage,
                 derived_metadata_collector=collect_file_metadata,
                 secondary_artifact_operations=secondary_artifact_operations,
@@ -186,12 +177,16 @@ class CatalogApplication:
             path=locator.as_path(),
             descriptor=locator.value,
         )
-        if storage_plan is not None:
-            materialization_intent = storage_plan_intent(storage_plan, writer=artifact_writer)
-        else:
-            materialization_intent = (
-                reference_intent() if artifact_writer is None else writer_intent(artifact_writer)
-            )
+
+        def plan_artifact_storage(
+            _context: OperationContext,
+            canonical_locator: ArtifactLocator,
+        ) -> StoragePlan:
+            """Use the explicit storage decision or derive one from the writer."""
+            if storage_plan is not None:
+                return storage_plan_with_locator(storage_plan, canonical_locator)
+            return storage_plan_for_locator(canonical_locator, writer=artifact_writer)
+
         return self.run_add_operation(
             transaction=transaction,
             commit=commit,
@@ -209,15 +204,8 @@ class CatalogApplication:
             time_added=time_added,
             source=operation_source,
             locator_factory=lambda context: locator,
-            materialization_intent=materialization_intent,
-            storage_plan_factory=(
-                None
-                if storage_plan is None
-                else lambda context, canonical_locator: storage_plan_with_locator(
-                    storage_plan,
-                    canonical_locator,
-                )
-            ),
+            artifact_writer=artifact_writer,
+            storage_plan_factory=plan_artifact_storage,
         )
 
     def run_add_operation(
@@ -239,8 +227,8 @@ class CatalogApplication:
         time_added: str | None,
         source: OperationSource,
         locator_factory: ArtifactLocatorFactory,
-        materialization_intent: MaterializationIntent,
-        storage_plan_factory: StoragePlanFactory | None = None,
+        artifact_writer: ArtifactWriter | None,
+        storage_plan_factory: StoragePlanFactory,
         derived_metadata_collector: DerivedMetadataCollector | None = None,
         secondary_artifact_operations: tuple[SecondaryArtifactOperation, ...] = (),
     ) -> CatalogRecord:
@@ -262,7 +250,7 @@ class CatalogApplication:
             time_added=time_added,
             source=source,
             locator_factory=locator_factory,
-            materialization_intent=materialization_intent,
+            artifact_writer=artifact_writer,
             storage_plan_factory=storage_plan_factory,
             derived_metadata_collector=derived_metadata_collector,
             secondary_artifact_operations=secondary_artifact_operations,

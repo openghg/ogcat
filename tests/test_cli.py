@@ -102,6 +102,171 @@ def test_search_json_output(tmp_path: Path) -> None:
     assert payload[0]["user_metadata"]["species"] == "CO2"
 
 
+def test_reference_cli_registers_local_and_remote_locators(tmp_path: Path) -> None:
+    """CLI references keep path, URI, and fsspec URL path kinds distinct."""
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="refs"))
+    source = tmp_path / "existing.nc"
+    source.write_text("existing", encoding="utf-8")
+
+    local = runner.invoke(
+        app,
+        ["reference", str(source), "--catalog", str(catalog.root), "--meta", "site=MHD", "--json"],
+    )
+    uri = runner.invoke(
+        app,
+        ["reference", "--uri", "s3://bucket/data.nc", "--catalog", str(catalog.root), "--json"],
+    )
+    urlpath = runner.invoke(
+        app,
+        ["reference", "--urlpath", "s3://bucket/data.nc", "--catalog", str(catalog.root), "--json"],
+    )
+    invalid = runner.invoke(
+        app,
+        ["reference", str(source), "--uri", "s3://bucket/data.nc", "--catalog", str(catalog.root)],
+    )
+
+    assert local.exit_code == uri.exit_code == urlpath.exit_code == 0
+    assert json.loads(local.stdout)["locator"] == {
+        "kind": "path",
+        "value": str(source),
+        "relative_path": None,
+    }
+    assert json.loads(local.stdout)["user_metadata"]["site"] == "MHD"
+    assert json.loads(uri.stdout)["locator"]["kind"] == "uri"
+    assert json.loads(urlpath.stdout)["locator"]["kind"] == "urlpath"
+    assert invalid.exit_code != 0
+    assert "exactly one" in strip_ansi(invalid.output)
+
+
+def test_collection_cli_registers_existing_directory_and_lists_members(tmp_path: Path) -> None:
+    """CLI collection registration and member listing preserve the stored pattern."""
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="footprints"))
+    source = tmp_path / "MHD"
+    source.mkdir()
+    first = source / "MHD_202101.nc"
+    second = source / "MHD_202102.nc"
+    first.write_text("first", encoding="utf-8")
+    second.write_text("second", encoding="utf-8")
+    (source / "readme.txt").write_text("ignore", encoding="utf-8")
+
+    added = runner.invoke(
+        app,
+        [
+            "collection",
+            str(source),
+            "--catalog",
+            str(catalog.root),
+            "--meta",
+            "site=MHD",
+            "--record-type",
+            "footprint_series",
+            "--pattern",
+            "*.nc",
+            "--member-format",
+            "netcdf",
+            "--json",
+        ],
+    )
+
+    assert added.exit_code == 0
+    payload = json.loads(added.stdout)
+    assert payload["record_type"] == "footprint_series"
+    assert payload["derived_metadata"]["classification"]["collection_pattern"] == "*.nc"
+    listed = runner.invoke(app, ["members", payload["id"], "--catalog", str(catalog.root)])
+    assert listed.exit_code == 0
+    assert listed.stdout.splitlines() == [str(first), str(second)]
+
+
+def test_search_one_and_raw_locator_output(tmp_path: Path) -> None:
+    """Strict search rejects ambiguity and raw locators cover remote records."""
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="refs"))
+    first = catalog.add_reference(uri="s3://bucket/first.nc", metadata={"site": "MHD", "name": "first"})
+    catalog.add_reference(urlpath="s3://bucket/second.nc", metadata={"site": "MHD", "name": "second"})
+
+    ambiguous = runner.invoke(
+        app, ["search", "--catalog", str(catalog.root), "site=MHD", "--one", "--locators"]
+    )
+    unique = runner.invoke(
+        app,
+        ["search", "--catalog", str(catalog.root), "name=first", "--one", "--locators"],
+    )
+    missing = runner.invoke(
+        app, ["search", "--catalog", str(catalog.root), "site=ZZZ", "--one", "--locators"]
+    )
+    locator = runner.invoke(app, ["locator", _record_id(first), "--catalog", str(catalog.root)])
+
+    assert ambiguous.exit_code != 0
+    assert "multiple records" in strip_ansi(ambiguous.output)
+    assert unique.exit_code == 0
+    assert unique.stdout.splitlines() == ["s3://bucket/first.nc"]
+    assert missing.exit_code != 0
+    assert "no records" in strip_ansi(missing.output)
+    assert locator.exit_code == 0
+    assert locator.stdout.strip() == "s3://bucket/first.nc"
+
+
+def test_add_and_show_surface_readable_template_path(tmp_path: Path) -> None:
+    """Human CLI output includes the readable symlink beside the UUID primary."""
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+    source = tmp_path / "example.nc"
+    source.write_text("data", encoding="utf-8")
+
+    added = runner.invoke(app, ["add", str(source), "--catalog", str(catalog.root)])
+
+    assert added.exit_code == 0
+    record = Catalog.open(catalog.root).search()[0]
+    readable = Path(str(record.naming_metadata["template_replica_path"]))
+    assert readable.is_symlink()
+    assert f"Readable path: {readable}" in strip_ansi(added.output)
+    shown = runner.invoke(app, ["show", _record_id(record), "--catalog", str(catalog.root)])
+    assert shown.exit_code == 0
+    assert "readable path" in strip_ansi(shown.output)
+    path_result = runner.invoke(
+        app, ["path", _record_id(record), "--catalog", str(catalog.root), "--readable"]
+    )
+    assert path_result.exit_code == 0
+    assert path_result.stdout.strip() == str(readable)
+
+
+def test_inspection_commands_open_catalog_read_only(tmp_path: Path, monkeypatch) -> None:
+    """CLI reads use read-only repository access while registration stays writable."""
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+    source = tmp_path / "example.nc"
+    source.write_text("data", encoding="utf-8")
+    record = catalog.add_file(source)
+    collection_root = tmp_path / "footprints"
+    collection_root.mkdir()
+    collection = catalog.add_collection(collection_root, collection_pattern="*.nc")
+    opened_read_only: list[bool] = []
+    original_open = Catalog.open
+
+    def tracked_open(cls: type[Catalog], root: str | Path, *, read_only: bool = False) -> Catalog:
+        """Record the mode selected by CLI commands."""
+        opened_read_only.append(read_only)
+        return original_open(root, read_only=read_only)
+
+    monkeypatch.setattr(Catalog, "open", classmethod(tracked_open))
+    inspections = [
+        ["search", "--ids"],
+        ["show", _record_id(record), "--json"],
+        ["path", _record_id(record)],
+        ["locator", _record_id(record)],
+        ["members", _record_id(collection)],
+        ["info", "--json"],
+        ["fields", "--json"],
+        ["logs", "--json"],
+        ["spec", "show-schema", "--json"],
+    ]
+    for command in inspections:
+        result = runner.invoke(app, [*command, "--catalog", str(catalog.root)])
+        assert result.exit_code == 0, result.output
+        assert opened_read_only[-1] is True
+
+    added = runner.invoke(app, ["reference", "--uri", "s3://bucket/new.nc", "--catalog", str(catalog.root)])
+    assert added.exit_code == 0
+    assert opened_read_only[-1] is False
+
+
 def test_delete_restore_and_deleted_search_flags(tmp_path: Path) -> None:
     """CLI delete tombstones records and deleted-search flags expose them."""
     catalog = _create_catalog(tmp_path)

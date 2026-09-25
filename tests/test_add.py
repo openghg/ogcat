@@ -74,6 +74,30 @@ def test_add_file_uses_generic_default_storage_layout(tmp_path: Path) -> None:
     assert record.naming_metadata["primary_location"] == "uuid"
 
 
+def test_add_file_accepts_validated_derived_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A finished output can carry caller validation facts into managed storage."""
+    monkeypatch.setattr(
+        "ogcat.catalog_application.extract_derived_metadata",
+        lambda _path: {"netcdf": {"time": 12}, "automatic": "from extractor"},
+    )
+    source = tmp_path / "result.nc"
+    source.write_text("finished", encoding="utf-8")
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="results"))
+
+    record = catalog.add_file(
+        source,
+        operation="move",
+        derived_metadata={"netcdf": {"validated": True}, "shape": (12, 4)},
+    )
+
+    assert record.derived_metadata["netcdf"] == {"validated": True}
+    assert record.derived_metadata["shape"] == [12, 4]
+    assert record.derived_metadata["automatic"] == "from extractor"
+    stored_path = record.path()
+    assert stored_path is not None and stored_path.read_text() == "finished"
+    assert not source.exists()
+
+
 def test_add_file_copies_zarr_directory_as_managed_artifact(tmp_path: Path) -> None:
     """Managed ingest should copy a file-like directory store as one artifact."""
     source_dir = tmp_path / "source"

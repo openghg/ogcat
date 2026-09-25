@@ -97,40 +97,6 @@ class MaterializationPlan:
         )
 
 
-def reference_intent() -> MaterializationIntent:
-    """Return the materialization intent for record-only references."""
-    return MaterializationIntent(
-        writer=None,
-        target_kind="file",
-        write_mode="reference",
-        ogcat_owned=False,
-    )
-
-
-def writer_intent(writer: ArtifactWriter) -> MaterializationIntent:
-    """Return the materialization intent declared by a writer."""
-    return MaterializationIntent(
-        writer=writer,
-        target_kind=target_kind_from_writer(writer),
-        write_mode=write_mode_from_writer(writer),
-        ogcat_owned=True,
-    )
-
-
-def storage_plan_intent(
-    plan: StoragePlan,
-    *,
-    writer: ArtifactWriter | None = None,
-) -> MaterializationIntent:
-    """Return materialization intent with an explicit storage plan as authority."""
-    return MaterializationIntent(
-        writer=None if plan.write_mode == "reference" else writer,
-        target_kind=plan.target_kind,
-        write_mode=plan.write_mode,
-        ogcat_owned=plan.ogcat_owned,
-    )
-
-
 def target_from_locator(locator: ArtifactLocator, *, target_kind: TargetKind) -> MaterializationTarget:
     """Build a materialization target directly from a canonical locator."""
     return MaterializationTarget(
@@ -152,6 +118,24 @@ def materialization_plan_from_locator(
     return MaterializationPlan(
         primary_target=target_from_locator(locator, target_kind=intent.target_kind),
         intent=intent,
+    )
+
+
+def storage_plan_for_locator(
+    locator: ArtifactLocator,
+    *,
+    writer: ArtifactWriter | None,
+) -> StoragePlan:
+    """Build a reference or writer-backed plan from a resolved locator."""
+    return plan_storage(
+        locator,
+        target_kind="file" if writer is None else target_kind_from_writer(writer),
+        write_mode="reference" if writer is None else write_mode_from_writer(writer),
+        ogcat_owned=writer is not None,
+        adapter=adapter_name(locator),
+        storage_relative_path=locator.relative_path,
+        resolved_directory=directory_from_locator(locator),
+        resolved_filename=filename_from_locator(locator),
     )
 
 
@@ -195,11 +179,9 @@ __all__ = [
     "MaterializationPlan",
     "MaterializationTarget",
     "materialization_plan_from_locator",
-    "reference_intent",
-    "storage_plan_intent",
+    "storage_plan_for_locator",
     "target_from_locator",
     "target_kind_from_writer",
     "validate_writer_matches_storage_plan",
     "write_mode_from_writer",
-    "writer_intent",
 ]

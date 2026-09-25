@@ -49,7 +49,7 @@ searching records.
 
    architecture
    roadmap
-   ideas
+   plans/index
    adr/index
    design-note-record-schemas
    design-note-artifact-locators
@@ -57,5 +57,3 @@ searching records.
    design-note-artifact-claims-and-facets
    design-note-capability-registry
    design-note-hooks-plugins
-   design-note-virtual-artifact-filesystem-research
-   ogcat_long_term_plan

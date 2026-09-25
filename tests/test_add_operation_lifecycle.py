@@ -1,5 +1,6 @@
 """Regression tests for the internal add-operation lifecycle phases."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -18,7 +19,6 @@ from ogcat import (
     ValidationReport,
 )
 from ogcat.catalog_application import CatalogApplication
-from ogcat.materialization import reference_intent
 from ogcat.models import MetadataDict
 from ogcat.operation_runner import AddOperationRequest, OperationRunner
 from ogcat.secondary_artifacts import SecondaryArtifactResult, SecondaryArtifactRole
@@ -106,17 +106,15 @@ def test_run_add_operation_delegates_to_operation_runner(
     assert request.operation_type == "add_artifact"
     assert request.record_type == "external_reference"
     assert request.metadata == {"title": "Delegated"}
-    assert request.materialization_intent.writer is None
-    assert request.materialization_intent.write_mode == "reference"
-    assert request.materialization_intent.ogcat_owned is False
+    assert request.artifact_writer is None
     assert record.id == "runner"
 
 
-def test_add_file_application_request_uses_copy_materialization(
+def test_add_file_application_request_uses_copy_writer(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Managed file requests carry explicit copy materialization intent."""
+    """Managed file requests carry their copy writer."""
     requests: list[AddOperationRequest] = []
 
     class FakeRunner(OperationRunner):
@@ -145,10 +143,7 @@ def test_add_file_application_request_uses_copy_materialization(
 
     request = requests[0]
     assert request.operation_type == "add_file"
-    assert request.materialization_intent.target_kind == "file"
-    assert request.materialization_intent.write_mode == "copy"
-    assert request.materialization_intent.ogcat_owned is True
-    assert type(request.materialization_intent.writer).__name__ == "CopyArtifactWriter"
+    assert type(request.artifact_writer).__name__ == "CopyArtifactWriter"
     assert len(request.secondary_artifact_operations) == 1
     assert request.secondary_artifact_operations[0].role == "template_link"
 
@@ -225,11 +220,11 @@ def test_add_file_uuid_primary_can_skip_template_link_secondary(
     assert request.secondary_artifact_operations == ()
 
 
-def test_add_artifact_application_request_uses_writer_materialization(
+def test_add_artifact_application_request_uses_writer(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Writer-backed artifact requests carry target kind and write mode intent."""
+    """Writer-backed artifact requests carry the supplied writer."""
     requests: list[AddOperationRequest] = []
 
     class DirectoryWriter:
@@ -274,10 +269,7 @@ def test_add_artifact_application_request_uses_writer_materialization(
 
     request = requests[0]
     assert request.operation_type == "add_artifact"
-    assert request.materialization_intent.writer is writer
-    assert request.materialization_intent.target_kind == "directory"
-    assert request.materialization_intent.write_mode == "write"
-    assert request.materialization_intent.ogcat_owned is True
+    assert request.artifact_writer is writer
 
 
 def test_add_file_lifecycle_preserves_hook_order_and_file_storage(tmp_path: Path) -> None:
@@ -416,7 +408,11 @@ def test_secondary_artifacts_run_in_order_and_share_metadata(tmp_path: Path) -> 
             time_added="2026-05-17T00:00:00Z",
             source=OperationSource(kind="test", descriptor="secondary order"),
             locator_factory=lambda context: locator,
-            materialization_intent=reference_intent(),
+            artifact_writer=None,
+            storage_plan_factory=lambda context, canonical_locator: StoragePlan(
+                locator=canonical_locator,
+                write_mode="reference",
+            ),
             secondary_artifact_operations=(
                 FirstSecondaryArtifact(),
                 SecondSecondaryArtifact(),
@@ -772,6 +768,103 @@ def test_derived_metadata_from_writer_extract_hook_and_record_hook_persists(tmp_
     assert record.derived_metadata["writer"] == "text"
     assert record.derived_metadata["extract_hook"] is True
     assert record.derived_metadata["record_hook"] == "generated_text"
+
+
+def test_late_required_metadata_removal_rolls_back_file(tmp_path: Path) -> None:
+    """A record hook cannot bypass schema validation after the file is written."""
+
+    class RemovingTitleHook:
+        def before_record_write(self, context: OperationContext) -> None:
+            context.user_metadata.pop("title")
+
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(
+        root,
+        CatalogSpec(
+            catalog_name="files",
+            default_schema=RecordSchema(
+                metadata_fields=[
+                    MetadataFieldDescription(name="title", description="Required title.", required=True)
+                ]
+            ),
+        ),
+        plugins=PluginRegistry([RemovingTitleHook()]),
+    )
+    source = tmp_path / "source.nc"
+    source.write_text("payload", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Missing required metadata for schema default: title"):
+        catalog.add_file(source, metadata={"title": "Before"})
+
+    assert source.exists()
+    assert catalog.repository.all() == []
+    assert list((root / "data" / "objects").rglob("*.nc")) == []
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("locator", "Artifact locator changed after artifact writing"),
+        ("storage_plan", "Storage plan changed after artifact writing"),
+    ],
+)
+def test_late_target_change_rolls_back_file(tmp_path: Path, mutation: str, message: str) -> None:
+    """A record hook cannot change the target after the writer has run."""
+
+    class RetargetingHook:
+        def before_record_write(self, context: OperationContext) -> None:
+            replacement = ArtifactLocator.path(tmp_path / "other.nc")
+            if mutation == "locator":
+                context.planned_locators[0] = replacement
+            else:
+                assert context.storage_plan is not None
+                context.storage_plan = replace(context.storage_plan, locator=replacement)
+
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(
+        root,
+        CatalogSpec(catalog_name="files"),
+        plugins=PluginRegistry([RetargetingHook()]),
+    )
+    source = tmp_path / "source.nc"
+    source.write_text("payload", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        catalog.add_file(source)
+
+    assert source.exists()
+    assert catalog.repository.all() == []
+    assert list((root / "data" / "objects").rglob("*.nc")) == []
+
+
+def test_late_template_name_change_rolls_back_file(tmp_path: Path) -> None:
+    """A template-primary name cannot change after its target is written."""
+
+    class RenamingHook:
+        def before_record_write(self, context: OperationContext) -> None:
+            context.user_metadata["title"] = "After"
+
+    root = tmp_path / "catalog"
+    catalog = Catalog.create(
+        root,
+        CatalogSpec(
+            catalog_name="files",
+            default_schema=RecordSchema(
+                directory_template="{title}",
+                filename_template="{original_filename}",
+            ),
+        ),
+        plugins=PluginRegistry([RenamingHook()]),
+    )
+    source = tmp_path / "source.nc"
+    source.write_text("payload", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Naming metadata changed after artifact writing"):
+        catalog.add_file(source, metadata={"title": "Before"}, primary_location="template")
+
+    assert source.exists()
+    assert catalog.repository.all() == []
+    assert list((root / "data" / "files").rglob("*.nc")) == []
 
 
 def test_writer_failure_runs_registered_rollback_and_leaves_no_record(tmp_path: Path) -> None:

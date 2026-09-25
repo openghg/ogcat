@@ -50,11 +50,13 @@ import argparse
 import re
 import subprocess
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn, TimeElapsedColumn
 
 from ogcat import Catalog, CatalogSpec, MetadataFieldDescription, RecordSchema
+from ogcat.models import CatalogRecord
 
 FOOTPRINT_COLLECTION_RECORD_TYPE = "footprint_collection"
 
@@ -351,6 +353,69 @@ def discover_paths_from_source_root(source_root: Path) -> list[Path]:
     return sorted(path for path in source_root.rglob("*.nc") if path.is_file())
 
 
+def select_monthly_footprint_paths(
+    catalog: Catalog,
+    record_id: object,
+    *,
+    start_month: str,
+    end_month: str,
+) -> list[Path]:
+    """Select inclusive NAME footprint months from one local collection.
+
+    Args:
+        catalog: Catalog containing the chosen footprint collection.
+        record_id: Identifier selected with ``get_one`` using all distinguishing
+            metadata, including the meteorological model where relevant.
+        start_month: First required month as ``YYYY-MM``.
+        end_month: Last required month as ``YYYY-MM``.
+
+    Returns:
+        Local NetCDF paths in ascending month order.
+
+    Raises:
+        ValueError: If the range or a member filename is invalid, or a required
+            month is missing or represented by multiple files.
+    """
+
+    def month_number(value: str) -> int:
+        """Validate a calendar month and return its linear month number."""
+        if re.fullmatch(r"\d{4}-\d{2}", value) is None:
+            raise ValueError(f"Expected a month in YYYY-MM form: {value!r}")
+        year, month = int(value[:4]), int(value[5:])
+        date(year, month, 1)
+        return year * 12 + month - 1
+
+    first = month_number(start_month)
+    last = month_number(end_month)
+    if first > last:
+        raise ValueError("start_month must be no later than end_month.")
+
+    by_month: dict[int, Path] = {}
+    for path in catalog.member_paths(record_id):
+        match = FOOTPRINT_MEMBER_DATE_RE.search(path.name)
+        if match is None:
+            raise ValueError(f"Footprint member has no YYYYMM filename suffix: {path}")
+        year, month = int(match.group("year")), int(match.group("month"))
+        try:
+            date(year, month, 1)
+        except ValueError as exc:
+            raise ValueError(f"Footprint member has an invalid YYYYMM suffix: {path}") from exc
+        number = year * 12 + month - 1
+        if first <= number <= last:
+            if number in by_month:
+                raise ValueError(f"Multiple footprint files found for {year:04d}-{month:02d}.")
+            by_month[number] = path
+
+    missing = [
+        f"{number // 12:04d}-{number % 12 + 1:02d}"
+        for number in range(first, last + 1)
+        if number not in by_month
+    ]
+    if missing:
+        raise ValueError(f"Missing footprint months: {', '.join(missing)}")
+    return [by_month[number] for number in range(first, last + 1)]
+
+
 def discover_paths_from_listing(listing_path: Path) -> list[Path]:
     """Discover footprint files from a saved recursive directory listing."""
     listing_text = _read_listing_text(listing_path)
@@ -419,6 +484,17 @@ def build_catalog(
     all_paths = list(discovered_paths.values())
     collections, skipped = group_footprint_collections(all_paths)
     added_count = 0
+    existing_by_key: dict[tuple[Path, str], list[CatalogRecord]] = {}
+    for record in catalog.search(
+        where={"record_type": FOOTPRINT_COLLECTION_RECORD_TYPE}, as_record_set=False
+    ):
+        key = _stored_collection_key(record)
+        if key is not None:
+            existing_by_key.setdefault(key, []).append(record)
+    for collection in collections:
+        key = (collection.collection_root.expanduser().resolve(), collection.collection_pattern)
+        if len(existing_by_key.get(key, [])) > 1:
+            raise ValueError(f"Multiple existing footprint collections match {key[0]} / {key[1]}.")
     print(f"Discovered {len(all_paths)} candidate NetCDF files in {len(collections)} collection(s).")
 
     progress = Progress(
@@ -436,12 +512,33 @@ def build_catalog(
                     f"Processing collection {index:,} of {len(collections):,}: {collection.collection_root}",
                     flush=True,
                 )
-            _add_footprint_collection(catalog, collection)
-            added_count += 1
+            key = (collection.collection_root.expanduser().resolve(), collection.collection_pattern)
+            matching = existing_by_key.get(key, [])
+            if matching:
+                metadata = collection.to_user_metadata()
+                record = matching[0]
+                if any(record.user_metadata.get(name) != value for name, value in metadata.items()):
+                    catalog.update_metadata(record.id, metadata, mode="shallow_merge")
+            else:
+                _add_footprint_collection(catalog, collection)
+                added_count += 1
 
             progress.advance(task_id)
 
     return catalog, added_count, skipped
+
+
+def _stored_collection_key(record: CatalogRecord) -> tuple[Path, str] | None:
+    """Return this example's root and canonical member pattern for a record."""
+    classification = record.derived_metadata.get("classification")
+    if not isinstance(classification, dict) or classification.get("artifact_kind") != "collection":
+        return None
+    pattern = classification.get("collection_pattern")
+    if not isinstance(pattern, str) or record.locator.kind not in {"path", "uri"}:
+        return None
+    if "://" in record.locator.value:
+        return None
+    return Path(record.locator.value).expanduser().resolve(), pattern
 
 
 def _open_or_create_catalog(catalog_root: Path, *, catalog_name: str, append: bool) -> Catalog:

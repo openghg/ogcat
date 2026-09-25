@@ -2,10 +2,10 @@
 
 `ogcat` stands for OpenGHG Catalog.
 
-`ogcat` is a lightweight artifact catalog with a managed-file MVP. Today it provides a
+`ogcat` is a lightweight artifact catalog for local and shared files. It provides a
 self-describing on-disk catalog layout, a small Python API, and a CLI for creating catalogs,
-adding files by copy or move, recording existing artifact references, listing metadata field
-descriptions, and locating stored paths.
+adding files by copy or move, recording existing artifact references and collections, listing
+metadata field descriptions, and locating stored paths.
 
 ## Scope
 
@@ -13,11 +13,12 @@ descriptions, and locating stored paths.
 - a self-describing catalog layout with `catalog.json`, `db.json`, and `data/`
 - path-based managed ingest using `copy` or `move`
 - reference records for existing local paths, URIs, and explicit URI/urlpath locators
+- collection records for local or remote roots, with local member listing
 - flexible JSON-serialisable user metadata
 - simple derived metadata extraction for supported file types
 - template-based storage naming
 - exact, contains, and regex search from Python and CLI
-- shell-friendly CLI outputs for ids, paths, and JSON where appropriate
+- shell-friendly CLI outputs for ids, paths, locators, and JSON where appropriate
 
 ## Non-goals
 
@@ -126,6 +127,9 @@ record = catalog.get_one(
     }
 )
 
+# get_one raises on zero or multiple matches. Include enough metadata to
+# distinguish variants such as site, domain, and model.
+
 # For local paths, record.path() is often the easiest value to open.
 # For URI/urlpath records, use the locator value.
 # ds = xr.open_dataset(record.locator.value)
@@ -156,32 +160,16 @@ The CLI accepts both explicit flags and simple positional expressions:
 uv run ogcat search --catalog example-catalog species=CO2
 uv run ogcat search --catalog example-catalog tags:paris user.site.code? --json
 uv run ogcat search --catalog example-catalog 'locator.uri~s3://bucket/*.zarr' --match title=paris --ids
-uv run ogcat show "$(uv run ogcat search --catalog example-catalog species=CO2 --ids --limit 1)" --catalog example-catalog
-uv run ogcat path "$(uv run ogcat search --catalog example-catalog species=CO2 --ids --limit 1)" --catalog example-catalog
+record_id="$(uv run ogcat search --catalog example-catalog species=CO2 product=CTE-HR year=2024 month=1 --one --ids)"
+uv run ogcat show "$record_id" --catalog example-catalog
+uv run ogcat path "$record_id" --catalog example-catalog
 uv run ogcat fields --catalog example-catalog --stored
 uv run ogcat fields --catalog example-catalog --values species
 ```
 
-Register simple hooks directly in Python:
-
-```python
-from ogcat import Catalog, CatalogSpec, PluginRegistry
-from ogcat.hooks import OperationContext
-
-
-class FilenameTitlePlugin:
-    def before_validate_metadata(self, context: OperationContext) -> None:
-        if context.source_path is not None:
-            context.user_metadata.setdefault("title", context.source_path.stem)
-
-
-spec = CatalogSpec(catalog_name="files")
-plugins = PluginRegistry([FilenameTitlePlugin()])
-catalog = Catalog.create("example-catalog", spec, plugins=plugins)
-```
-
-See [docs/design-note-hooks-plugins.md](docs/design-note-hooks-plugins.md) for hook lifecycle,
-rollback, and transaction examples.
+For advanced materialisation, see
+[hooks and plugins](docs/design-note-hooks-plugins.md) for lifecycle, rollback,
+and transaction examples.
 
 Use `add_file()` when ogcat should manage a local copy or move into the catalog's `data/objects/` tree.
 Use `add_reference()` when the artifact already exists and ogcat should only record a local path,
@@ -191,6 +179,19 @@ series opened with `xarray.open_mfdataset`. Use `add_artifact()` with an `Operat
 artifact writer when a plugin or helper should materialise new data before the record is written.
 See `ogcat.writers` for small helper wrappers around in-memory data, path-backed transforms, and zip
 extraction examples.
+
+For a local collection, `catalog.member_paths(record.id)` returns sorted paths matching its stored
+relative glob at call time. It does not index or filter members by their dates or contents; select
+the required files by their names or after opening their time coordinates. Remote collections do
+not support `member_paths()`.
+
+For a finished output already on disk, compute outside a catalog transaction, then call
+`add_file(..., operation="move", derived_metadata={...})` to move it into managed storage while
+preserving source-specific metadata. Use `add_reference()` if the output must stay where it is.
+Only one process should write a TinyDB catalog. Workers can open
+`Catalog.open(root, read_only=True)` for queries; reopen that view after another process writes.
+This matters on BP1's GPFS as well as local filesystems: ogcat does not coordinate concurrent
+TinyDB writers.
 
 By default, `add_file()` stores the primary artifact under a UUID path and creates a template-based
 symlink replica for human-readable browsing. Pass `primary_location="template"` when the template
@@ -249,6 +250,7 @@ uv run ogcat search --catalog ./example-catalog --where species=CO2 --limit 20
 uv run ogcat search --catalog ./example-catalog --where species=CO2 --fields id,species,user_metadata.domain,path
 uv run ogcat search --catalog ./example-catalog --where species=CO2 --fields id,species,path --format tsv
 uv run ogcat search --catalog ./example-catalog --where species=CO2 --all
+uv run ogcat search --catalog ./example-catalog species=CO2 product=CTE-HR --one --locators
 ```
 
 Delete records with trash-style semantics. ``delete`` tombstones a record and
@@ -275,7 +277,17 @@ Show a record or print its stored path:
 ```bash
 uv run ogcat show 1 --catalog ./example-catalog
 uv run ogcat path 1 --catalog ./example-catalog
+uv run ogcat path 1 --catalog ./example-catalog --readable
+uv run ogcat locator 1 --catalog ./example-catalog
 ```
+
+Use `ogcat reference PATH --catalog ROOT` or `ogcat reference --uri URI --catalog ROOT`
+to register an existing artifact without moving it. Use
+`ogcat collection DIRECTORY --pattern '*.nc' --catalog ROOT` for one logical
+dataset spread across local files; `ogcat members ID --catalog ROOT` lists its
+current matching paths. `search --one` fails on ambiguous or missing records;
+`--locators` prints raw local or remote locator values. See the
+[CLI reference](docs/cli.md) for options and remote collection limits.
 
 Inspect catalog info and declared metadata fields:
 
@@ -285,7 +297,7 @@ uv run ogcat fields --catalog ./example-catalog
 uv run ogcat fields --catalog ./example-catalog --json
 ```
 
-`ogcat search` supports compact positional filters: `field=value` for equality, `field:value` for contains/list membership, `field~pattern` for glob or substring matching, `field?` for exists, and `!field?` for missing. Compatibility flags remain available: `--where`, `--contains`, `--match`, `--regex`, `--exists`, and `--missing`. Human-readable search output is capped by default; use `--limit N` to choose a cap or `--all` to show every match. Use `--fields a,b,c` to choose displayed fields, and `--format table|plain|csv|tsv|pipe` to choose the display format. For automation and shell use, `--json`, `--ids`, and `--paths` provide stable machine-friendly outputs; `--json` prints full matching records and ignores `--fields`, `--format`, and the default display cap.
+`ogcat search` supports compact positional filters: `field=value` for equality, `field:value` for contains/list membership, `field~pattern` for glob or substring matching, `field?` for exists, and `!field?` for missing. Compatibility flags remain available: `--where`, `--contains`, `--match`, `--regex`, `--exists`, and `--missing`. Human-readable search output is capped by default; use `--limit N` to choose a cap or `--all` to show every match. Use `--fields a,b,c` to choose displayed fields, and `--format table|plain|csv|tsv|pipe` to choose the display format. For automation and shell use, `--json`, `--ids`, `--paths`, and `--locators` provide stable machine-friendly outputs; `--json` prints full matching records and ignores `--fields`, `--format`, and the default display cap.
 
 ## Search Semantics
 
@@ -312,7 +324,8 @@ catalog.search(where={"artifact_kind": "zarr_store"})
 catalog.search(where={"derived_metadata.classification.inner_format": "netcdf"})
 ```
 
-Current search is intentionally small. It does not support numeric range queries or richer expressions such as `>`, `<`, `>=`, `<=`, or boolean query composition.
+Current search is intentionally small. It does not support numeric range queries or operators
+such as `>`, `<`, `>=`, `<=`, or OR/NOT query composition.
 
 ## Development
 
@@ -343,7 +356,7 @@ uv run python -m http.server 8000
 
 ## Storage Model
 
-Current storage is still centred on path-backed managed ingest for the MVP. Files added with
+Storage is centred on path-backed managed ingest. Files added with
 `add_file()` are copied or moved into the catalog's `data/objects/` tree by default, and the
 resulting primary path is recorded in the catalog database alongside metadata and naming
 information. Template-derived paths are linked replicas that can be regenerated after metadata or
@@ -366,19 +379,20 @@ adding domain-specific framework code.
 ## Current Limitations
 
 - the only supported backend today is TinyDB behind the repository abstraction
-- non-file record types are only partially modelled so far; readers, managers, and richer URI
-  handling are still future work
+- collection records describe member patterns, but member-date indexing and remote member
+  expansion are not implemented
 - derived metadata extraction is intentionally small and currently focused on optional netCDF summaries
 - reader and manager bindings are not implemented yet
 - richer readers, managers, and import workflows are future work
+- TinyDB does not provide a coordinated multi-process writer; use one writer, and register
+  finished outputs after long-running computation rather than holding an open transaction
 
 ## Roadmap
 
-The current direction is:
-
-- today: spec-driven file catalog with metadata, naming, and search
-- next: generalise from managed files to catalogued artefacts with clearer record typing and locator handling
-- later: reader hooks, manager bindings, and scan or import workflows
+The current direction is to make single-user registration and retrieval reliable,
+including managed files, existing references, and local collections. The
+[active plan](docs/plans/2026-09-25-single-user-workflows.md) records the
+workflow decisions and deferred features.
 
 See [docs/architecture.md](docs/architecture.md),
 [docs/design-note-artifact-locators.md](docs/design-note-artifact-locators.md),

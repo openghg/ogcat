@@ -561,6 +561,47 @@ def test_repository_delete(tmp_path: Path) -> None:
     assert repository.all() == []
 
 
+def test_repository_read_only_opens_existing_database_without_mutations(tmp_path: Path) -> None:
+    """Read-only repositories can query records but reject every mutation."""
+    db_path = tmp_path / "db.json"
+    writable = TinyDbCatalogRepository(db_path)
+    record = writable.insert(
+        CatalogRecord(
+            catalog="fluxes",
+            time_added="2026-04-23T12:00:00Z",
+            locator=ArtifactLocator.path("/tmp/catalog/files/example.nc"),
+        )
+    )
+    before = db_path.read_bytes()
+
+    repository = TinyDbCatalogRepository(db_path, read_only=True)
+
+    assert repository.get("1") == record
+    assert repository.all() == [record]
+    assert repository.search(where={"catalog": "fluxes"}) == [record]
+    for mutation in (
+        lambda: repository.insert(record),
+        lambda: repository.insert_many([]),
+        lambda: repository.insert_many([record]),
+        lambda: repository.update(record),
+        lambda: repository.delete("1"),
+    ):
+        with pytest.raises(PermissionError, match="read-only"):
+            mutation()
+
+    assert db_path.read_bytes() == before
+
+
+def test_repository_read_only_does_not_create_missing_database(tmp_path: Path) -> None:
+    """Opening a missing database for reading leaves its parent absent."""
+    db_path = tmp_path / "missing" / "db.json"
+
+    with pytest.raises(FileNotFoundError):
+        TinyDbCatalogRepository(db_path, read_only=True)
+
+    assert not db_path.parent.exists()
+
+
 def test_repository_recovers_missing_document_id_from_tinydb_doc_id(tmp_path: Path) -> None:
     repository = TinyDbCatalogRepository(tmp_path / "db.json")
     repository._db.insert(

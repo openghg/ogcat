@@ -1,10 +1,11 @@
 # Roadmap
 
-Planning snapshot from `ogcat` at `3391150` and a read-only review of local
-Verification Games and BP1 catalogs on 2026-09-25. This page separates existing
-behavior from proposed work. The [long-term plan](ogcat_long_term_plan.md) and
-[virtual artifact filesystem ADR](adr/0002-virtual-artifact-filesystem-domain-model.md)
-preserve broader design ideas; their issue lists are not the implementation order.
+Planning snapshot from a review of local Verification Games and BP1 catalogs on
+2026-09-25, updated as the first implementation lands. This page separates existing
+behavior from proposed work. The [implementation record](plans/2026-09-25-single-user-workflows.md)
+tracks decisions and delivered changes. The [archived long-term plan](plans/archive/ogcat_long_term_plan.md)
+and [virtual artifact filesystem ADR](adr/0002-virtual-artifact-filesystem-domain-model.md)
+preserve earlier ideas; their issue lists are not the implementation order.
 
 ## Observed Workflows
 
@@ -28,26 +29,31 @@ artifact descriptors with claims and facets. A capability registry and bundled
 reader/writer examples exist, but `Catalog` does not dispatch reads through them.
 
 `Catalog.add_artifacts()` commits items one by one. `Catalog.add_collection()`
-records a collection root and classification metadata; it does not enumerate or
-append members. The importer calculates member counts and first/last months,
+records a collection root and classification metadata; `Catalog.member_paths()`
+enumerates current local glob matches, without storing or appending members.
+The importer calculates member counts and first/last months,
 but does not persist its parsed member list. Those summaries do not guarantee
 continuous coverage. `Catalog.add_reference()` does not verify that a local
 target exists. Applications must validate completed output before registration.
 
-The CLI exposes managed `add`, search, record inspection, path output, and
-delete/restore/purge. It does not expose `add_reference()` or
-`add_collection()`. `ogcat add` prints the primary path but not the readable
-template link.
+The CLI exposes managed `add`, reference and collection registration, strict
+single-result search, member enumeration, locator output, readable template
+links, and delete/restore/purge. `Catalog.open(read_only=True)` supports
+read-only inspection; reopen a reader after an external write. A managed
+`add_file()` may carry caller-supplied derived metadata.
 
 ## Next Work, In Order
 
-### 1. State And Enforce The Single-Writer Contract
+### 1. Enforce And Recover The Single-Writer Contract
 
 Treat one process at a time as the catalog mutation contract. HPC workers write
 outputs and completion manifests; one registrar validates and registers them.
 The current result-output scripts can each open the same TinyDB catalog, so
-sequential timestamps are not evidence of serialization. Add a regression test
-that makes simultaneous mutation fail clearly or route through one writer.
+sequential timestamps are not evidence of serialization. For now, a single
+registrar process must serialize writes and open a fresh writable catalog for
+each registration session. This is an operating rule, not a lock guarantee.
+Before accepting concurrent writers, test target-filesystem lock semantics and
+cover every read-modify-write path and TinyDB refresh in a guarded writer session.
 
 Keep TinyDB for zero-setup single-user use while evaluating storage robustness.
 Its JSON storage writes in place, and the current `UnitOfWork` holds in-memory
@@ -57,10 +63,10 @@ readable link. Protect `catalog.json` updates with replacement and recovery.
 Do not select SQLite from the assumption that local-disk guarantees carry over
 to NFS or GPFS; test the actual deployment filesystem first.
 
-Add a genuinely read-only `Catalog.open()` mode: TinyDB supports read access,
-but the current repository opens it for writing and creates directories. An
-existing Verification Games audit hit `EROFS` while trying to inspect a shared
-catalog. Read-only opening must not create an audit log or permit writes.
+Read-only opening now avoids write handles, directory creation, and audit
+emission and rejects catalog mutation before hooks or files are touched. Since
+TinyDB writes its JSON in place, a reader running during a write may still
+observe an incomplete document; coordinate readers or reopen after writes.
 
 ### 2. Make Finished-Output Registration A Short Operation
 
@@ -68,9 +74,8 @@ Support the two existing ownership choices directly:
 
 - `add_reference(path)` records a completed external path without taking
   ownership. The caller verifies existence, completeness, and readability.
-- `add_file(path, operation="move")` moves a completed file or directory store
-  into managed storage. Allow caller-supplied derived metadata so callers do
-  not construct a `StoragePlan` merely to preserve validation results.
+- `add_file(path, operation="move", derived_metadata=...)` moves a completed
+  file or directory store into managed storage with caller validation facts.
 
 Evaluate one narrow adoption operation for a completed path already published
 under the catalog's managed root. It would assert containment and completion,
@@ -86,14 +91,12 @@ reconcile partial multi-output runs. Leave checksum policy to the caller or a
 small optional helper; checksumming a large directory store should not be
 mandatory. Do not call the current `add_artifacts()` atomic batch ingest.
 
-### 3. Complete The Common CLI And Lookup API
+### 3. Use Collection Selection In Consumers
 
-Expose proposed `add-reference` and `add-collection` commands corresponding to
-the existing Python methods. Support metadata, record type, and JSON output.
-Keep local-path verification and explicit URI/urlpath behavior distinct. Show
-the readable template link in human `add` and `show` output; preserve
-`record.path()` as the canonical path. Provide raw locator output for URI
-records, which `search --paths` currently skips.
+The CLI now has `reference`, `collection`, `members`, `locator`, strict
+`search --one`, and readable view output. Keep local-path verification and
+explicit URI/urlpath behavior distinct; a reference record does not guarantee
+its target exists.
 
 Promote the existing strict `Catalog.get_one()` lookup and expose its
 zero-or-multiple-match errors in a CLI lookup. Do not make a job silently choose
@@ -101,38 +104,31 @@ zero-or-multiple-match errors in a CLI lookup. Do not make a job silently choose
 can return both UKV and UMG footprint collections; a notebook selects the first
 result. A reproducible run should resolve and record an exact record ID,
 locator, and relevant input version before launch. For local
-collection references, add a small member-path operation that expands the
-stored relative pattern and returns sorted current paths. A NAME-specific
-adapter can parse the existing `YYYYMM` filename suffix and select months
-overlapping a requested range **before** xarray opens files. Report no matching
-collection, ambiguous collections, missing roots, absent requested months, and
-duplicate month files explicitly. Include boundary months and leave exact
-within-file time slicing to xarray or OpenGHG. A stored `month_start`/`month_end`
-range alone cannot prove which months exist. URI-only collections need a
-reachable mount or a separate listing adapter; local selection must not pretend
-to enumerate them. Make the footprint importer rerunnable instead of appending
-duplicate series on every run. A proposed `Catalog.member_paths(record_id)` and
-`ogcat members ID` should return paths, leaving NAME month parsing in its
-small domain adapter. Use the collection classification pattern as the single
-source: the current importer also copies it into user metadata, and different
-consumers read different copies.
+collection references, `member_paths()` expands the stored relative pattern
+and returns sorted current paths. The NAME example selects inclusive `YYYYMM`
+months **before** xarray opens files and rejects absent or duplicate months.
+The footprint importer now reuses a matching root and canonical pattern on
+`--append`, refreshes its month summaries, and rejects ambiguous existing
+records. Consumers such as Verification Games still need to call the selector
+and pin the chosen record ID; the existing scripts can open a broad glob.
+Leave exact within-file time slicing to xarray or OpenGHG. A stored
+`month_start`/`month_end` range cannot prove which months exist. URI-only
+collections need a reachable mount or a separate listing adapter.
 
-### 4. Simplify The Add Path And Contain Hooks
+### 4. Continue Simplifying The Add Path And Containing Hooks
 
 Preserve public add methods, hook names, UUID objects, template links, and
-deletion behavior. Internally use one normalized add request, one authoritative
-`StoragePlan`, an optional writer, and an optional view-link action. Remove the
-mutable cached plan in `CatalogApplication.add_file()` and the conversions
-through materialization intent/target/plan. Share primary planning with
-`plan_artifact_storage()`; a plan remains a proposal and must be rechecked when
-used.
+deletion behavior. The first pass removed the mutable cached primary plan and
+unused intent helpers, and now revalidates after late hook mutation. Continue
+reducing internal planning layers only where it makes control flow clearer;
+share primary planning with `plan_artifact_storage()` when that can preserve
+observable hook order. A plan remains a proposal and must be rechecked when used.
 
 Callers should normally compute metadata and validate their output before
-calling an add method. Keep hooks as a compatibility extension. Revalidate
-metadata after the final mutating hook, reject late changes to naming inputs
-after writing, and check the final target at write time. Replace tests that
-assert runner delegation with tests for observable results, hook compatibility,
-rollback, ownership, and interrupted-operation repair.
+calling an add method. Keep hooks as a compatibility extension. The add runner
+now rejects late changes to schema requirements, storage target, and template
+primary name. Further work should test observable results, rollback, ownership,
+and interrupted-operation repair.
 
 ## Defer Until A Real Workflow Requires Them
 

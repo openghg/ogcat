@@ -20,7 +20,11 @@ from ogcat.audit import (
     JsonlAuditSink,
 )
 from ogcat.catalog_application import CatalogApplication
-from ogcat.classification import CLASSIFICATION_METADATA_KEY, collection_classification_metadata
+from ogcat.classification import (
+    CLASSIFICATION_METADATA_KEY,
+    _normalize_collection_pattern,
+    collection_classification_metadata,
+)
 from ogcat.hooks import (
     ArtifactWriter,
     HookLifecycleEvent,
@@ -86,6 +90,7 @@ class Catalog:
         hook_manager: Long-lived hook registry.
         audit_sink: Sink for structured operation audit events.
         audit_user_id: User id recorded on audit events.
+        read_only: Whether this instance permits catalog mutations.
     """
 
     root: Path
@@ -94,6 +99,7 @@ class Catalog:
     hook_manager: HookManager = field(default_factory=HookManager)
     audit_sink: AuditSink | None = None
     audit_user_id: str | None = None
+    read_only: bool = False
 
     @classmethod
     def create(
@@ -152,6 +158,7 @@ class Catalog:
         cls,
         root: str | Path,
         *,
+        read_only: bool = False,
         plugins: PluginInput = None,
         hooks: HookInput = None,
         audit_sink: AuditSink | None = None,
@@ -161,6 +168,7 @@ class Catalog:
 
         Args:
             root: Existing catalog root containing ``catalog.json``.
+            read_only: Open existing catalog data without creating or writing files.
             plugins: Optional plugin registry, or iterable of hook objects,
                 used to build a hook manager.
             hooks: Optional hook manager, or iterable of hook objects. Pass
@@ -180,7 +188,7 @@ class Catalog:
         hook_manager = _coerce_hook_manager(plugins=plugins, hooks=hooks)
         root_path = Path(root).expanduser().resolve()
         spec = CatalogSpec.read(root_path / "catalog.json")
-        repository = _open_repository(root_path, spec)
+        repository = _open_repository(root_path, spec, read_only=read_only)
         return cls(
             root=root_path,
             spec=spec,
@@ -188,6 +196,7 @@ class Catalog:
             hook_manager=hook_manager,
             audit_sink=_coerce_audit_sink(root_path, audit_sink),
             audit_user_id=_resolve_audit_user_id(audit_user_id),
+            read_only=read_only,
         )
 
     def add_file(
@@ -198,6 +207,7 @@ class Catalog:
         record_type: str | None = None,
         primary_location: PrimaryLocation = "uuid",
         create_template_replica: bool = True,
+        derived_metadata: Mapping[Any, Any] | None = None,
     ) -> CatalogRecord:
         """Add a local file or file-like directory store using managed copy or move.
 
@@ -212,6 +222,8 @@ class Catalog:
             create_template_replica: Whether UUID-primary file adds create a
                 human-readable template symlink replica. Ignored for
                 template-primary adds.
+            derived_metadata: Optional validated metadata from the source
+                artifact to store alongside extracted metadata.
 
         Returns:
             Persisted catalog record.
@@ -221,11 +233,17 @@ class Catalog:
             ValueError: If validation fails, the operation is unsupported, or
                 ``record_type`` names an unknown schema.
         """
+        self._require_writable()
         source = Path(path).expanduser().resolve()
         metadata_input = {} if metadata is None else metadata
         schema = self._select_schema(record_type, require_known=record_type is not None)
         schema_name = self._schema_name(record_type)
         metadata = _coerce_metadata_input(metadata_input, schema_name=schema_name)
+        normalized_derived_metadata = (
+            None
+            if derived_metadata is None
+            else normalize_metadata(derived_metadata, field_name="derived_metadata")
+        )
         resolved_record_type = "managed_file" if record_type is None else record_type
         directory_template = _require_template(schema.directory_template, field_name="directory_template")
         filename_template = _require_template(schema.filename_template, field_name="filename_template")
@@ -247,6 +265,7 @@ class Catalog:
             primary_location=resolved_primary_location,
             create_template_replica=create_template_replica,
             time_added=timestamp,
+            derived_metadata=normalized_derived_metadata,
         )
 
     def plan_artifact_storage(
@@ -419,6 +438,7 @@ class Catalog:
             ValueError: If validation fails or the transaction belongs to a
                 different repository.
         """
+        self._require_writable()
         if locator is None and storage_plan is None:
             raise ValueError("add_artifact requires either locator or storage_plan.")
         if locator is not None and storage_plan is not None:
@@ -677,6 +697,7 @@ class Catalog:
         actions. This context manager does not provide true database
         transactions or ACID semantics.
         """
+        self._require_writable()
         with UnitOfWork(self.repository) as transaction:
             yield transaction
 
@@ -739,6 +760,7 @@ class Catalog:
         Returns:
             Persisted records in input order.
         """
+        self._require_writable()
         validated_items = [_validate_artifact_batch_item(item, index) for index, item in enumerate(artifacts)]
 
         records: list[CatalogRecord] = []
@@ -1058,6 +1080,54 @@ class Catalog:
             return None
         return record.path()
 
+    def member_paths(self, record_id: object) -> list[Path]:
+        """Return existing local members of a collection in path order.
+
+        Members are found from the collection's stored relative pattern at
+        call time. This method does not inspect their contents or select by
+        metadata such as date.
+
+        Args:
+            record_id: Identifier of an active collection record.
+
+        Returns:
+            Sorted paths to matching files or directories.
+
+        Raises:
+            KeyError: If the record does not exist.
+            ValueError: If the record is not an active collection or a pattern
+                or matched path escapes its local root.
+            NotImplementedError: If the collection has a non-local locator.
+            FileNotFoundError: If the local collection root is unavailable.
+        """
+        record = self.get(record_id)
+        if record is None:
+            raise KeyError(f"Record {record_id!s} does not exist.")
+        classification = record.derived_metadata.get(CLASSIFICATION_METADATA_KEY)
+        if (
+            record.status != "active"
+            or not isinstance(classification, dict)
+            or classification.get("artifact_kind") != "collection"
+        ):
+            raise ValueError(f"Record {record_id!s} is not an active collection.")
+        if record.locator.kind != "path":
+            raise NotImplementedError("member_paths supports local path collections only.")
+        root = record.path()
+        if root is None or not root.is_dir():
+            raise FileNotFoundError(f"Collection root is not an existing directory: {root}")
+        raw_pattern = classification.get("collection_pattern")
+        if not isinstance(raw_pattern, str):
+            raise ValueError("Collection record has no valid collection_pattern.")
+        pattern = _normalize_collection_pattern(raw_pattern)
+        resolved_root = root.resolve()
+        members: list[Path] = []
+        for candidate in root.glob(pattern):
+            if not candidate.resolve().is_relative_to(resolved_root):
+                raise ValueError(f"Collection member escapes its root: {candidate}")
+            if candidate.exists():
+                members.append(candidate)
+        return sorted(members)
+
     def delete(
         self,
         record_id: object,
@@ -1085,6 +1155,7 @@ class Catalog:
             ValueError: If the record is already deleted or the transaction
                 belongs to another repository.
         """
+        self._require_writable()
         application = self._application()
         if transaction is not None:
             self._validate_transaction(transaction)
@@ -1121,6 +1192,7 @@ class Catalog:
         Returns:
             Restored catalog record.
         """
+        self._require_writable()
         application = self._application()
         if transaction is not None:
             self._validate_transaction(transaction)
@@ -1412,7 +1484,7 @@ class Catalog:
 
     def _emit_audit(self, event: AuditEvent) -> None:
         """Emit an audit event without failing the catalog operation."""
-        if self.audit_sink is None:
+        if self.read_only or self.audit_sink is None:
             return
         try:
             self.audit_sink.emit(event)
@@ -1514,6 +1586,11 @@ class Catalog:
         """Build the internal application service for catalog operations."""
         return CatalogApplication(self)
 
+    def _require_writable(self) -> None:
+        """Reject mutations before hooks or filesystem writes can run."""
+        if self.read_only:
+            raise PermissionError(f"Catalog is read-only: {self.root}")
+
     def _build_add_operation_runner(self, request: AddOperationRequest) -> OperationRunner:
         """Build the runner used for one internal add operation."""
         return AddOperationRunner(dependencies=self._operation_runner_dependencies(), request=request)
@@ -1574,6 +1651,7 @@ class Catalog:
         transaction: UnitOfWork | None,
     ) -> CatalogRecord:
         """Update one metadata namespace using explicit replace or shallow merge."""
+        self._require_writable()
         update_mode = _coerce_metadata_update_mode(mode)
         record = self._require_record(record_id)
         if namespace == "user_metadata":
@@ -1631,6 +1709,7 @@ class Catalog:
         transaction: UnitOfWork | None,
     ) -> CatalogRecord:
         """Apply a record replacement through a caller-owned or internal transaction."""
+        self._require_writable()
         if transaction is not None:
             if transaction.repository is not self.repository:
                 raise ValueError("Transaction is bound to a different catalog repository.")
@@ -1663,6 +1742,7 @@ class Catalog:
 
     def _replace_spec(self, **updates: object) -> None:
         """Replace the active spec after validation and persist it."""
+        self._require_writable()
         payload = {
             "catalog_name": self.spec.catalog_name,
             "db_backend": self.spec.db_backend,
@@ -1725,11 +1805,11 @@ def _coerce_primary_location(value: object) -> PrimaryLocation:
     raise ValueError("primary_location must be 'uuid' or 'template'.")
 
 
-def _open_repository(root: Path, spec: CatalogSpec) -> CatalogRepository:
+def _open_repository(root: Path, spec: CatalogSpec, *, read_only: bool = False) -> CatalogRepository:
     """Create the configured repository for a catalog spec."""
     if spec.db_backend != "tinydb":
         raise ValueError(f"Unsupported db_backend: {spec.db_backend}")
-    return TinyDbCatalogRepository(root / spec.db_path)
+    return TinyDbCatalogRepository(root / spec.db_path, read_only=read_only)
 
 
 def _coerce_audit_sink(root: Path, audit_sink: AuditSink | None) -> AuditSink:
