@@ -1,4 +1,10 @@
-"""Main catalog API."""
+"""User-facing catalog operations, queries, and resource lifetime.
+
+Create or open a ``Catalog`` to register and find artifacts. Use it as a context
+manager, or call ``close``, to release its repository resources. The catalog
+context controls resource lifetime only; explicit transactions must be nested
+inside it and retain their own commit and rollback semantics.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +17,7 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from types import TracebackType
 from typing import Any, Literal, cast, overload
 from uuid import uuid4
 
@@ -90,6 +97,10 @@ class Catalog:
         audit_sink: Sink for structured operation audit events.
         audit_user_id: User id recorded on audit events.
         read_only: Whether this instance permits catalog mutations.
+
+    Use as a context manager or call ``close`` to release repository resources.
+    Nest any ``transaction`` contexts inside the catalog context so rollback
+    finishes before the repository closes. Closing does not undo completed adds.
     """
 
     root: Path
@@ -99,6 +110,7 @@ class Catalog:
     audit_sink: AuditSink | None = None
     audit_user_id: str | None = None
     read_only: bool = False
+    _closed: bool = field(default=False, init=False, repr=False, compare=False)
 
     @classmethod
     def create(
@@ -197,6 +209,51 @@ class Catalog:
             audit_user_id=_resolve_audit_user_id(audit_user_id),
             read_only=read_only,
         )
+
+    def close(self) -> None:
+        """Release repository resources without committing or rolling back.
+
+        Repeated calls have no effect. Finish any active transaction before
+        closing. Subsequent repository queries and mutations raise
+        ``RuntimeError``; already returned records remain usable.
+
+        Custom repositories may omit ``close`` when they hold no resources.
+        """
+        if not self._closed:
+            close = getattr(self.repository, "close", None)
+            if callable(close):
+                close()
+            self._closed = True
+
+    def __enter__(self) -> Catalog:
+        """Enter the catalog resource context.
+
+        Returns:
+            This open catalog.
+
+        Raises:
+            RuntimeError: If the catalog has already been closed.
+        """
+        self._require_open()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Close the repository on normal or exceptional context exit.
+
+        Args:
+            exc_type: Exception type, if the context failed.
+            exc: Exception raised inside the context, if any.
+            traceback: Traceback associated with the exception, if any.
+
+        Exceptions from the context propagate. Closing does not commit or
+        roll back; transaction contexts must be nested inside this context.
+        """
+        self.close()
 
     def add_file(
         self,
@@ -677,6 +734,8 @@ class Catalog:
         The current TinyDB backend uses staged writes and compensating rollback
         actions. This context manager does not provide true database
         transactions or ACID semantics.
+        Nest this context inside the catalog context so rollback can complete
+        before the repository closes.
         """
         self._require_writable()
         with UnitOfWork(self.repository) as transaction:
@@ -906,6 +965,7 @@ class Catalog:
         Raises:
             ValueError: If ``include_deleted`` and ``only_deleted`` are both true.
         """
+        self._require_open()
         _validate_deleted_visibility_flags(
             include_deleted=include_deleted,
             only_deleted=only_deleted,
@@ -989,6 +1049,7 @@ class Catalog:
 
     def describe(self, *, include_deleted: bool = False) -> dict[str, object]:
         """Return a serialisable summary of catalog configuration and contents."""
+        self._require_open()
         db_path = self.root / self.spec.db_path
         files_root = self.root / self.spec.files_root
         objects_root = self.root / self.spec.objects_root
@@ -1024,6 +1085,7 @@ class Catalog:
 
     def list_record_fields(self, *, include_deleted: bool = False) -> list[str]:
         """Return discoverable field paths present in stored records."""
+        self._require_open()
         return self.record_set(
             _filter_records_by_status(
                 self.repository.all(),
@@ -1034,6 +1096,7 @@ class Catalog:
 
     def unique_values(self, field: str, *, include_deleted: bool = False) -> list[JsonValue]:
         """Return unique scalar values present for a field across stored records."""
+        self._require_open()
         return self.record_set(
             _filter_records_by_status(
                 self.repository.all(),
@@ -1052,6 +1115,7 @@ class Catalog:
 
     def get(self, record_id: object) -> CatalogRecord | None:
         """Get a record by id after coercing public input with ``str()``."""
+        self._require_open()
         return self.repository.get(_coerce_record_id(record_id))
 
     def path(self, record_id: object) -> Path | None:
@@ -1527,8 +1591,14 @@ class Catalog:
         """Build the internal application service for catalog operations."""
         return CatalogApplication(self)
 
+    def _require_open(self) -> None:
+        """Reject repository access after this catalog has been closed."""
+        if self._closed:
+            raise RuntimeError(f"Catalog is closed: {self.root}")
+
     def _require_writable(self) -> None:
         """Reject mutations before hooks or filesystem writes can run."""
+        self._require_open()
         if self.read_only:
             raise PermissionError(f"Catalog is read-only: {self.root}")
 
@@ -1633,7 +1703,7 @@ class Catalog:
     def _require_record(self, record_id: object) -> CatalogRecord:
         """Return an existing record or raise a clear missing-record error."""
         resolved_record_id = _coerce_record_id(record_id)
-        record = self.repository.get(resolved_record_id)
+        record = self.get(resolved_record_id)
         if record is None:
             raise KeyError(f"Record not found: {resolved_record_id}")
         return record

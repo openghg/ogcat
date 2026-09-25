@@ -6,6 +6,7 @@ import re
 from io import StringIO
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 import ogcat.operation_runner as operation_runner
@@ -85,6 +86,35 @@ def test_init_preserves_existing_catalog(tmp_path: Path) -> None:
     assert "Created catalog" not in strip_ansi(repeated.output)
     assert (root / "catalog.json").read_bytes() == original_spec
     assert Catalog.open(root).spec.catalog_name == "first"
+
+
+def test_cli_releases_catalogs_on_success_and_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Command teardown closes database resources even when a command fails."""
+    closed: list[Catalog] = []
+    original_close = Catalog.close
+
+    def tracked_close(catalog: Catalog) -> None:
+        """Keep closed catalogs available to check their subsequent behavior."""
+        original_close(catalog)
+        closed.append(catalog)
+
+    monkeypatch.setattr(Catalog, "close", tracked_close)
+    root = str(tmp_path / "catalog")
+    commands = [
+        (["init", root, "--name", "files"], 0),
+        (["search", "--catalog", root, "--json"], 0),
+        (["add", str(tmp_path / "missing.nc"), "--catalog", root], 1),
+        (["reference", "--uri", "s3://bucket/file.nc", "--catalog", root, "--meta", "invalid"], 2),
+    ]
+    for command, expected_exit in commands:
+        previous_count = len(closed)
+        result = runner.invoke(app, command)
+        assert result.exit_code == expected_exit, result.output
+        assert len(closed) == previous_count + 1
+        with pytest.raises(RuntimeError, match="closed"):
+            closed[-1].get("1")
 
 
 def test_search_json_output(tmp_path: Path) -> None:

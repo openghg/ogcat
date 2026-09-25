@@ -248,6 +248,13 @@ rollback work:
 - return or add `derived_metadata` during `extract_metadata`;
 - call `context.rollback(...)` after creating external side effects.
 
+Add operations propose one storage plan after validation, then pass its locator
+to `resolve_artifact_locator`. During that hook, `context.storage_plan` is
+`None`; the runner sets it after adjusting the proposed plan to the first
+resolved locator. Put naming-input changes in `before_validate_metadata`.
+Metadata edits during locator resolution do not re-run naming; a hook that
+wants another destination must change `planned_locators` explicitly.
+
 The context includes the catalog root, operation id, operation type, record type, user metadata,
 derived metadata, planned locators, source information, storage mode, and rollback registration.
 `context.source_path` and `context.source_descriptor` remain compatibility shims over

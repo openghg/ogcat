@@ -402,10 +402,9 @@ def test_secondary_artifacts_run_in_order_and_share_metadata(tmp_path: Path) -> 
             naming_metadata={"initial": "metadata"},
             time_added="2026-05-17T00:00:00Z",
             source=OperationSource(kind="test", descriptor="secondary order"),
-            locator_factory=lambda context: locator,
             artifact_writer=None,
-            storage_plan_factory=lambda context, canonical_locator: StoragePlan(
-                locator=canonical_locator,
+            storage_plan_factory=lambda context: StoragePlan(
+                locator=locator,
                 write_mode="reference",
             ),
             secondary_artifact_operations=(FirstSecondaryArtifact(), SecondSecondaryArtifact()),
@@ -718,6 +717,66 @@ def test_validation_failure_runs_after_validate_and_stops_before_write(tmp_path:
 
     assert calls == ["before_validate_metadata", "after_validate_metadata:False"]
     assert not target.exists()
+    assert catalog.repository.all() == []
+
+
+def test_locator_hook_can_consume_template_metadata_without_replanning(tmp_path: Path) -> None:
+    """Consumed naming input cannot invalidate the selected target, even with later metadata changes."""
+
+    class ConsumeNamingHook:
+        def resolve_artifact_locator(self, context: OperationContext) -> None:
+            """Keep the chosen locator and remove the optional naming input."""
+            assert context.storage_plan is None
+            context.user_metadata.pop("name")
+
+        def before_record_write(self, context: OperationContext) -> None:
+            """Add unrelated metadata after writing the artifact."""
+            context.user_metadata["status"] = "ready"
+
+    source = tmp_path / "source.txt"
+    source.write_text("payload", encoding="utf-8")
+    catalog = Catalog.create(
+        tmp_path / "catalog",
+        CatalogSpec(
+            catalog_name="files",
+            default_schema=RecordSchema(directory_template="group", filename_template="{name|.}"),
+        ),
+        plugins=PluginRegistry([ConsumeNamingHook()]),
+    )
+
+    record = catalog.add_file(source, metadata={"name": "chosen.txt"}, primary_location="template")
+
+    target = catalog.root / catalog.spec.files_root / "group" / "chosen.txt"
+    assert record.path() == target
+    assert target.read_text(encoding="utf-8") == "payload"
+    assert record.user_metadata == {"status": "ready"}
+    assert record.naming_metadata["resolved_filename"] == "chosen.txt"
+
+
+def test_locator_hook_failure_does_not_materialize_managed_file(tmp_path: Path) -> None:
+    """A failed locator hook leaves both the source and repository untouched."""
+    planned: list[Path] = []
+
+    class RejectLocatorHook:
+        def resolve_artifact_locator(self, context: OperationContext) -> None:
+            """Reject the proposed target before any managed write occurs."""
+            target = context.planned_locators[0].as_path()
+            assert target is not None
+            planned.append(target)
+            raise RuntimeError("rejected target")
+
+    source = tmp_path / "source.txt"
+    source.write_text("payload", encoding="utf-8")
+    catalog = Catalog.create(
+        tmp_path / "catalog", CatalogSpec(catalog_name="files"), plugins=PluginRegistry([RejectLocatorHook()])
+    )
+
+    with pytest.raises(RuntimeError, match="rejected target"):
+        catalog.add_file(source, operation="move")
+
+    assert len(planned) == 1
+    assert not planned[0].exists()
+    assert source.read_text(encoding="utf-8") == "payload"
     assert catalog.repository.all() == []
 
 

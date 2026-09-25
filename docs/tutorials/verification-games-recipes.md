@@ -237,22 +237,23 @@ before opening data. Run this cell from the ogcat repository root so the
 ```python
 from examples.catalog_acrg_name_footprints import select_monthly_footprint_paths
 
-footprints = Catalog.open("/group/chem/acrg/fp_name_catalog", read_only=True)
-series = footprints.get_one(
-    where={
-        "record_type": "footprint_collection",
-        "site": "MHD",
-        "domain": "EUROPE",
-        "species": "co2",
-        "model": "NAME",
-        "met_model": "UKV",
-        "inlet": "10magl",
-    }
-)
-paths_2021 = select_monthly_footprint_paths(
-    footprints, series.id, start_month="2021-01", end_month="2021-12"
-)
+with Catalog.open("/group/chem/acrg/fp_name_catalog", read_only=True) as footprints:
+    series = footprints.get_one(
+        where={
+            "record_type": "footprint_collection",
+            "site": "MHD",
+            "domain": "EUROPE",
+            "species": "co2",
+            "model": "NAME",
+            "met_model": "UKV",
+            "inlet": "10magl",
+        }
+    )
+    paths_2021 = select_monthly_footprint_paths(
+        footprints, series.id, start_month="2021-01", end_month="2021-12"
+    )
 
+# The catalog handle is closed before loading or computing with these paths.
 # With xarray and a NetCDF backend installed:
 # ds = xr.open_mfdataset(paths_2021)
 ```
@@ -403,8 +404,14 @@ A common notebook pattern is to do heavy work outside ogcat, then register the
 small set of final outputs serially. Use one writer process for a TinyDB
 catalog. Jobs on BP1's GPFS can read with
 `Catalog.open(catalog.root, read_only=True)` and hand finished output paths to
-the writer; reopen a read-only catalog after the writer changes it. Do not
-hold a catalog transaction during a long computation.
+the writer. Use short catalog contexts as in the footprint selection above,
+then open a fresh read-only catalog after the writer changes it. A registrar
+can likewise use `with Catalog.open(root) as catalog:` around registration of
+finished outputs. The snippets below reuse the notebook's `catalog` variable;
+call `catalog.close()` when that session is finished. Do not hold a catalog
+transaction during a long computation. A catalog context closes its database
+handle without locking the catalog or undoing completed operations; see
+[resource lifetime](../concepts/transactions-and-logging.md).
 
 ### Register an already-written artifact
 

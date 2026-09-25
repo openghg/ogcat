@@ -9,6 +9,7 @@ schema-aware normalization behavior in one place.
 
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
 
@@ -33,16 +34,36 @@ def artifact_locator_from_context(context: OperationContext) -> ArtifactLocator:
     return context.planned_locators[0]
 
 
-def storage_plan_with_locator(plan: StoragePlan, locator: ArtifactLocator) -> StoragePlan:
-    """Return a storage plan adjusted to a hook-resolved canonical locator."""
+def storage_plan_with_locator(
+    plan: StoragePlan, locator: ArtifactLocator, *, storage_root: Path | None = None
+) -> StoragePlan:
+    """Adjust a storage plan to a hook-resolved canonical locator.
+
+    Args:
+        plan: Plan prepared before locator-resolution hooks.
+        locator: Canonical target selected by the hooks.
+        storage_root: Managed local root for storage-relative path metadata.
+            Omit for general artifact plans, whose directory remains absolute.
+
+    Returns:
+        Original plan when the locator is unchanged, otherwise an adjusted
+        plan preserving write policy and artifact identity.
+    """
     if plan.locator == locator:
         return plan
+    relative_path = locator.relative_path
+    if storage_root is not None and locator.kind == "path":
+        with suppress(ValueError):
+            relative_path = Path(locator.value).relative_to(storage_root).as_posix()
+    resolved_directory = directory_from_locator(locator)
+    if storage_root is not None and relative_path is not None:
+        resolved_directory = directory_from_relative_path(relative_path)
     return replace(
         plan,
         locator=locator,
         adapter=adapter_name(locator),
-        storage_relative_path=locator.relative_path,
-        resolved_directory=directory_from_locator(locator),
+        storage_relative_path=relative_path,
+        resolved_directory=resolved_directory,
         resolved_filename=filename_from_locator(locator),
     )
 

@@ -39,7 +39,9 @@ target exists. Applications must validate completed output before registration.
 The CLI exposes managed `add`, reference and collection registration, strict
 single-result search, member enumeration, locator output, readable template
 links, and delete/restore/purge. `Catalog.open(read_only=True)` supports
-read-only inspection; reopen a reader after an external write. A managed
+read-only inspection; reopen a reader after an external write. Use
+`with Catalog.open(...) as catalog:` or `catalog.close()` to release its
+database handle. The CLI closes catalogs at command exit. A managed
 `add_file()` may carry caller-supplied derived metadata.
 
 ## Next Work, In Order
@@ -116,7 +118,10 @@ collections need a reachable mount or a separate listing adapter.
 Preserve public add methods, hook names, UUID objects, template links, and
 deletion behavior. The cleanup removed the generic runner interface, the
 unused materialisation intent/target/plan wrappers, and duplicate application
-adapters. `StoragePlan` is now the sole concrete primary plan. Continue reducing
+adapters. `StoragePlan` is now the sole concrete primary plan. Add operations
+propose it once after validation, then adjust it for an explicit locator hook
+redirect before writing. Naming-input changes belong before validation;
+locator hooks no longer cause a second planning pass. Continue reducing
 internal layers only when the result makes control flow clearer. A plan remains
 a proposal and must be rechecked when used.
 
@@ -130,9 +135,11 @@ and interrupted-operation repair.
 
 - Writer results (#117): add a structured result only when a real writer
   produces a locator or facts unavailable from its plan and caller metadata.
-- Catalog read handles (#118): add a context-managed local reader only when
+- Artifact read handles (#118): add a context-managed local reader only when
   callers need resource ownership beyond `record.path()` and ordinary library
-  calls. A public write handle needs a durable publish and replacement contract.
+  calls. The existing catalog context manages the database handle; it does not
+  open artifact data. A public write handle needs a durable publish and
+  replacement contract.
 - Core idempotency and managed-path adoption: leave identity and retry policy
   with each workflow registrar until observed workflows justify shared semantics.
 - Managed collection append, typed pipelines, converter routing, mount-relative

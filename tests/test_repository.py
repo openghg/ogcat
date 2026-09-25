@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from pathlib import Path
-from typing import get_args, get_type_hints
+from typing import cast, get_args, get_type_hints
 
 import pytest
+from tinydb.storages import JSONStorage
 
 from ogcat.models import (
     ArtifactClaim,
@@ -20,6 +21,35 @@ from ogcat.models import (
     RepresentationClaim,
 )
 from ogcat.tinydb_repository import TinyDbCatalogRepository
+
+
+def test_repository_close_releases_storage_and_rejects_cached_queries(tmp_path: Path) -> None:
+    """Closing is idempotent and prevents cached reads or subsequent mutations."""
+    repository = TinyDbCatalogRepository(tmp_path / "db.json")
+    record = repository.insert(
+        CatalogRecord(catalog="example", time_added="2026-09-25", user_metadata={"species": "co2"})
+    )
+    assert repository.search(where={"user_metadata.species": "co2"}) == [record]
+    handle = cast(JSONStorage, repository._db.storage)._handle
+
+    repository.close()
+    repository.close()
+
+    assert handle.closed
+    with pytest.raises(RuntimeError, match="closed"):
+        repository.search(where={"user_metadata.species": "co2"})
+    with pytest.raises(RuntimeError, match="closed"):
+        repository.get(str(record.id))
+    with pytest.raises(RuntimeError, match="closed"):
+        repository.all()
+    with pytest.raises(RuntimeError, match="closed"):
+        repository.insert(record)
+    with pytest.raises(RuntimeError, match="closed"):
+        repository.insert_many([])
+    with pytest.raises(RuntimeError, match="closed"):
+        repository.update(record)
+    with pytest.raises(RuntimeError, match="closed"):
+        repository.delete(str(record.id))
 
 
 def test_repository_insert_get_update_and_all(tmp_path) -> None:

@@ -14,7 +14,6 @@ from ogcat.materialization import (
     write_mode_from_writer,
 )
 from ogcat.models import ArtifactLocator, CatalogRecord, MetadataDict
-from ogcat.operation_helpers import storage_plan_with_locator
 from ogcat.operation_runner import (
     AddOperationRequest,
     RecordLifecycleOperationRequest,
@@ -25,7 +24,6 @@ from ogcat.storage import StoragePlan
 from ogcat.storage_planning import (
     PrimaryLocation,
     PrimaryStoragePlanningContext,
-    PrimaryStoragePlanResult,
     plan_primary_storage,
 )
 from ogcat.transactions import UnitOfWork
@@ -72,9 +70,9 @@ class CatalogApplication:
             "primary_location": primary_location,
         }
 
-        def plan_primary(context: OperationContext) -> PrimaryStoragePlanResult:
-            """Plan the managed-file primary location for this operation."""
-            return plan_primary_storage(
+        def plan_local_file_storage(context: OperationContext) -> StoragePlan:
+            """Plan the managed file once, before locator-resolution hooks."""
+            primary = plan_primary_storage(
                 PrimaryStoragePlanningContext(
                     catalog_root=self.catalog.root,
                     files_root=files_root,
@@ -90,18 +88,7 @@ class CatalogApplication:
                 )
             )
 
-        def resolve_local_file_locator(context: OperationContext) -> ArtifactLocator:
-            """Resolve the managed-file storage path for this operation."""
-            return plan_primary(context).locator
-
-        def plan_local_file_storage(
-            context: OperationContext,
-            locator: ArtifactLocator,
-        ) -> StoragePlan:
-            """Build the storage plan for a managed local file."""
-            primary = plan_primary(context)
             return primary.to_storage_plan(
-                locator=locator,
                 target_kind=target_kind_from_writer(artifact_writer),
                 write_mode=write_mode_from_writer(artifact_writer),
                 ogcat_owned=True,
@@ -141,9 +128,9 @@ class CatalogApplication:
                 naming_metadata=naming_metadata,
                 time_added=time_added,
                 source=source_description,
-                locator_factory=resolve_local_file_locator,
                 artifact_writer=artifact_writer,
                 storage_plan_factory=plan_local_file_storage,
+                storage_root=files_root if primary_location == "template" else objects_root,
                 derived_metadata_collector=collect_file_metadata,
                 secondary_artifact_operations=secondary_artifact_operations,
             )
@@ -176,14 +163,11 @@ class CatalogApplication:
             descriptor=locator.value,
         )
 
-        def plan_artifact_storage(
-            _context: OperationContext,
-            canonical_locator: ArtifactLocator,
-        ) -> StoragePlan:
+        def plan_artifact_storage(_context: OperationContext) -> StoragePlan:
             """Use the explicit storage decision or derive one from the writer."""
             if storage_plan is not None:
-                return storage_plan_with_locator(storage_plan, canonical_locator)
-            return storage_plan_for_locator(canonical_locator, writer=artifact_writer)
+                return storage_plan
+            return storage_plan_for_locator(locator, writer=artifact_writer)
 
         request = AddOperationRequest(
             transaction=transaction,
@@ -201,7 +185,6 @@ class CatalogApplication:
             naming_metadata=naming_metadata,
             time_added=time_added,
             source=operation_source,
-            locator_factory=lambda context: locator,
             artifact_writer=artifact_writer,
             storage_plan_factory=plan_artifact_storage,
         )

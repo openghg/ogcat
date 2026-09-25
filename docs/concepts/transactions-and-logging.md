@@ -1,5 +1,37 @@
 # Transactions and logging
 
+## Catalog resource lifetime
+
+Use ``with Catalog.open(...) as catalog:`` or
+``with Catalog.create(...) as catalog:`` to close the database handle when a
+session ends. ``catalog.close()`` provides the same cleanup explicitly and is
+safe to call more than once. Subsequent repository queries or mutations through
+that catalog raise ``RuntimeError``; records, search results, and paths already
+returned remain usable.
+
+Closing does not commit or roll back an operation. An ordinary successful add
+is already committed, even if later code in the catalog context raises. For
+composed operations, put the transaction **inside** the catalog context so its
+rollback can still access the repository:
+
+```python
+from ogcat import Catalog
+
+with Catalog.open("./my-catalog") as catalog:
+    with catalog.transaction() as transaction:
+        catalog.add_reference("./finished.nc", transaction=transaction)
+        catalog.add_reference("./summary.json", transaction=transaction)
+        transaction.commit()
+        # Without commit(), the transaction rolls back on exit.
+```
+
+The CLI closes its catalog at command exit. Neither the catalog context nor
+the transaction acquires a writer lock. Keep one registrar per catalog, open
+a fresh writable catalog for each registration session, and reopen read-only
+views after that session. Resolve inputs before long computations and register
+finished outputs afterward; see the
+[Verification Games recipe](../tutorials/verification-games-recipes.md).
+
 ## Operation lifecycle
 
 Every ``add_file()`` or ``add_artifact()`` call runs inside a *unit of work*.
