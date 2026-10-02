@@ -113,8 +113,7 @@ class UnitOfWork:
         Returns:
             The registered rollback action.
         """
-        if self.state is OperationState.COMMITTED:
-            raise RuntimeError("Cannot register rollback action after commit.")
+        self._require_active("register rollback action")
         if callable(action) and not hasattr(action, "undo"):
             rollback_action: RollbackAction = CallableRollbackAction(
                 description=description or getattr(action, "__name__", "rollback action"),
@@ -129,8 +128,7 @@ class UnitOfWork:
 
     def insert_staged_record(self, record: CatalogRecord) -> CatalogRecord:
         """Insert a staged record and delete it if the unit of work rolls back."""
-        if self.state is OperationState.COMMITTED:
-            raise RuntimeError("Cannot stage record after commit.")
+        self._require_active("stage record")
         persisted = self.repository.insert(record)
         if persisted.id is None:
             raise RuntimeError("Repository returned a persisted record without an id.")
@@ -157,12 +155,11 @@ class UnitOfWork:
             The replacement record.
 
         Raises:
-            RuntimeError: If the transaction has already committed.
+            RuntimeError: If the transaction has already finished.
             ValueError: If the replacement record has no id.
             KeyError: If no stored record exists for the supplied id.
         """
-        if self.state is OperationState.COMMITTED:
-            raise RuntimeError("Cannot update record after commit.")
+        self._require_active("update record")
         if record.id is None:
             raise ValueError("Cannot update a record without an id.")
         previous = self.repository.get(record.id)
@@ -178,8 +175,15 @@ class UnitOfWork:
 
     def commit(self) -> None:
         """Commit staged work and discard rollback actions."""
+        self._require_active("commit")
         self._rollback_actions.clear()
         self.state = OperationState.COMMITTED
+
+    def _require_active(self, action: str) -> None:
+        """Reject changes after the unit of work has finished."""
+        if self.state not in (OperationState.PLANNED, OperationState.STAGED):
+            state = "commit" if self.state is OperationState.COMMITTED else self.state.value
+            raise RuntimeError(f"Cannot {action} after {state}.")
 
     def rollback(self, *, original_exception: BaseException | None = None) -> None:
         """Run registered rollback actions in reverse order.
@@ -188,6 +192,9 @@ class UnitOfWork:
             original_exception: Optional exception that triggered rollback. When
                 supplied, rollback failure summaries are added as exception notes
                 so the original failure remains visible to callers.
+
+        Raises:
+            BaseExceptionGroup: If cleanup fails without an original exception.
         """
         if self.state is OperationState.COMMITTED:
             return
@@ -202,9 +209,15 @@ class UnitOfWork:
             self.state = OperationState.FAILED
             if original_exception is not None:
                 for failure in self.rollback_errors:
-                    original_exception.add_note(
+                    note = (
                         f"rollback failed for {failure.description}: "
                         f"{type(failure.exception).__name__}: {failure.exception}"
                     )
+                    if note not in getattr(original_exception, "__notes__", ()):
+                        original_exception.add_note(note)
+            else:
+                raise BaseExceptionGroup(
+                    "Rollback failed", [failure.exception for failure in self.rollback_errors]
+                )
         else:
             self.state = OperationState.ROLLED_BACK
