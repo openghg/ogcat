@@ -181,13 +181,18 @@ final cleanup; its mounted BP1 cell was skipped and optional NetCDF opening
 reported the missing backend. No BP1 production tests or writes were run.
 
 The real Verification Games workflow check exposed overlapping writable catalog
-instances, which now fail immediately. A separate compatibility branch is in
-progress. The earlier forty-test runs do not show that the new contract leaves
-those workflows unchanged. No BP1 production deployment or data changes are
-part of this delivery.
+instances, which now fail immediately. [Compatibility PR 72](https://github.com/openghg/verification-games/pull/72)
+adapts result registration, forward-workflow readers, and active notebooks in an
+isolated checkout. Eighty-seven focused workflow tests passed against updated
+ogcat, including real-catalog overlap and failed-ingest cleanup regressions.
+Independent review also corrected notebook writers passed indirectly to helpers
+and a closed reader captured by function defaults. Syntax checks covered 378
+Org Python blocks; 41 blocks with pre-existing interactive syntax were skipped.
+The full downstream suite was not run; its existing lint/type/format findings
+remain. No BP1 production deployment or data changes are part of this delivery.
 
 Next work is targeted deployment-filesystem durability/recovery evidence and
-consumer session adaptation. Optional managed-path adoption still needs a real
+adoption of the reviewed consumer adaptations. Optional managed-path adoption still needs a real
 workflow, containment checks, and completion semantics. Extra abstractions,
 backend migrations, and automatic destructive repair remain deferred.
 

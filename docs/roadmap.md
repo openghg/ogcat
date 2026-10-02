@@ -76,9 +76,11 @@ its readable link before claiming recovery. Evaluate a backend change only
 against those observed failures and deployment evidence.
 
 Existing Verification Games helpers open overlapping writable sessions and
-fail under the enforced lock. A separate compatibility branch is in progress;
-no BP1 deployment is claimed. Adapt consumers to short writer sessions and
-rerun workflow checks before adoption.
+fail under the enforced lock. [Compatibility PR 72](https://github.com/openghg/verification-games/pull/72)
+adapts its helpers and active notebooks to readers and short writer sessions;
+87 focused workflow tests passed against the updated ogcat checkout. Upgrade
+both projects together and validate the deployment filesystem before adoption.
+No BP1 deployment is claimed.
 
 ### 2. Make Finished-Output Registration A Short Operation
 

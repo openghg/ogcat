@@ -419,9 +419,10 @@ short writable session to register outputs. See
 [resource lifetime](../concepts/transactions-and-logging.md).
 
 Existing Verification Games helpers that open overlapping writable catalog
-instances need changes for this enforced lifetime. A separate compatibility
-branch is in progress; this documentation is not evidence of compatibility or
-deployment on BP1.
+instances need changes for this enforced lifetime.
+[Compatibility PR 72](https://github.com/openghg/verification-games/pull/72)
+provides tested helper and notebook adaptations; upgrade the two projects
+together. The local workflow tests do not establish deployment behavior on BP1.
 
 ### Register an already-written artifact
 
