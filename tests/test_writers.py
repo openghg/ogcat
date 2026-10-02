@@ -27,6 +27,8 @@ from ogcat import (
 )
 from ogcat.hooks import OperationContext
 from ogcat.models import MetadataDict
+from ogcat.storage import TargetKind
+from ogcat.writers import MoveDirectoryArtifactWriter
 
 
 def test_memory_writer_writes_file_and_persists_metadata(tmp_path: Path) -> None:
@@ -437,3 +439,126 @@ def test_plan_artifact_storage_can_allocate_zarr_directory_name(tmp_path: Path) 
     assert Path(plan.locator.value).name == "my_store.zarr"
     assert Path(plan.locator.value).parent.name == "EUROPE"
     assert not Path(plan.locator.value).exists()
+
+
+@pytest.mark.parametrize("writer_kind", ["function", "copy", "move"])
+def test_writers_reject_dangling_symlink_targets(tmp_path: Path, writer_kind: str) -> None:
+    """Writers preserve existing dangling symlinks and never create their referent."""
+    source = tmp_path / "source.txt"
+    source.write_text("payload", encoding="utf-8")
+    missing = tmp_path / "missing.txt"
+    target = tmp_path / "target.txt"
+    target.symlink_to(missing)
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+
+    def write_file(source: OperationSource, path: Path) -> None:
+        """Write a payload only when the writer accepts the target."""
+        path.write_text("payload", encoding="utf-8")
+
+    writer = {
+        "function": source_writer(write_file, target_kind="file"),
+        "copy": CopyArtifactWriter(),
+        "move": MoveArtifactWriter(),
+    }[writer_kind]
+    with pytest.raises(FileExistsError, match="already exists"):
+        catalog.add_artifact(
+            record_type="file",
+            locator=ArtifactLocator.from_path(target),
+            source=path_source(source, kind="local_file"),
+            artifact_writer=writer,
+        )
+
+    assert target.is_symlink()
+    assert not missing.exists()
+    assert source.read_text(encoding="utf-8") == "payload"
+    assert catalog.repository.all() == []
+
+
+@pytest.mark.parametrize("target_kind", ["file", "directory"])
+@pytest.mark.parametrize("conflict", ["file", "symlink"])
+def test_move_rollback_preserves_data_when_source_reappears(
+    tmp_path: Path, target_kind: TargetKind, conflict: str
+) -> None:
+    """Failed moves preserve both paths and expose the required recovery in a note."""
+    source = tmp_path / "source"
+    target = tmp_path / "catalog" / "files" / "moved"
+    missing = tmp_path / "missing"
+    if target_kind == "directory":
+        source.mkdir()
+        (source / "payload.txt").write_text("original", encoding="utf-8")
+    else:
+        source.write_text("original", encoding="utf-8")
+
+    class FailingHook:
+        def before_record_write(self, context: OperationContext) -> None:
+            """Reoccupy the source path before triggering rollback."""
+            if conflict == "symlink":
+                source.symlink_to(missing)
+            else:
+                source.write_text("new occupant", encoding="utf-8")
+            raise RuntimeError("stop after move")
+
+    catalog = Catalog.create(
+        tmp_path / "catalog",
+        CatalogSpec(catalog_name="artifacts"),
+        plugins=PluginRegistry([FailingHook()]),
+    )
+    plan = plan_storage(
+        ArtifactLocator.from_path(target, relative_path="files/moved"),
+        target_kind=target_kind,
+        write_mode="move",
+        ogcat_owned=True,
+    )
+    writer = MoveDirectoryArtifactWriter() if target_kind == "directory" else MoveArtifactWriter()
+    with pytest.raises(RuntimeError, match="stop after move") as caught:
+        catalog.add_artifact(
+            record_type="moved",
+            storage_plan=plan,
+            source=path_source(source, kind="local_file"),
+            artifact_writer=writer,
+        )
+
+    payload = target / "payload.txt" if target_kind == "directory" else target
+    assert payload.read_text(encoding="utf-8") == "original"
+    if conflict == "symlink":
+        assert source.is_symlink()
+        assert source.readlink() == missing
+        assert not missing.exists()
+    else:
+        assert source.read_text(encoding="utf-8") == "new occupant"
+    notes = "\n".join(getattr(caught.value, "__notes__", ()))
+    assert "rollback failed" in notes
+    assert "FileExistsError" in notes
+    assert str(target) in notes
+    assert str(source) in notes
+    assert "recover" in notes
+    assert catalog.repository.all() == []
+
+
+@pytest.mark.parametrize("target_kind", ["file", "directory"])
+@pytest.mark.parametrize("conflict", [False, True])
+def test_rollback_moved_target_restores_only_to_absent_source(
+    tmp_path: Path, target_kind: TargetKind, conflict: bool
+) -> None:
+    """The shared rollback restores absent sources and preserves occupied paths."""
+    source = tmp_path / "source"
+    target = tmp_path / "target"
+    if target_kind == "directory":
+        target.mkdir()
+        (target / "payload.txt").write_text("original", encoding="utf-8")
+    else:
+        target.write_text("original", encoding="utf-8")
+
+    if conflict:
+        source.write_text("new occupant", encoding="utf-8")
+        with pytest.raises(FileExistsError, match="recover the original data"):
+            writers_module._rollback_moved_target(
+                source_path=source, target_path=target, target_kind=target_kind
+            )
+        assert source.read_text(encoding="utf-8") == "new occupant"
+        payload = target / "payload.txt" if target_kind == "directory" else target
+    else:
+        writers_module._rollback_moved_target(source_path=source, target_path=target, target_kind=target_kind)
+        assert not target.exists()
+        payload = source / "payload.txt" if target_kind == "directory" else source
+    assert payload.read_text(encoding="utf-8") == "original"

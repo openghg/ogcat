@@ -943,3 +943,19 @@ def test_register_remove_on_rollback_uses_keyword_description(tmp_path: Path) ->
     assert descriptions == ["remove test target"]
     actions[0]()
     assert not target.exists()
+
+
+def test_storage_helpers_reject_dangling_symlink_targets(tmp_path: Path) -> None:
+    """An existing symlink occupies a target even when its referent is missing."""
+    missing = tmp_path / "missing"
+    target = tmp_path / "target"
+    target.symlink_to(missing)
+    locator = ArtifactLocator.from_path(target)
+
+    assert LocalStorageAdapter().exists(locator)
+    with pytest.raises(FileExistsError, match="target already exists"):
+        ensure_target_absent(locator)
+    with pytest.raises(FileExistsError, match="target already exists"):
+        create_directory_target(locator)
+    assert target.is_symlink()
+    assert not missing.exists()

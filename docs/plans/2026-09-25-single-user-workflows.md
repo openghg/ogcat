@@ -165,15 +165,16 @@ Delivered core behavior and its rationale:
 | Complete JSON publication | In-place truncation can lose records or expose partial documents. | Same-directory temporary files, complete serialization, file fsync, atomic replacement, preserved permission bits. No directory fsync, cross-file ACID, or crash recovery. |
 | Safe create/open and fresh reads | A missing database must not silently become an empty catalog; a replaced inode must not leave readers stale. | Refuse existing spec/database on create and missing/corrupt database on open; legacy zero-byte databases remain accepted. Each read uses the current pathname with query caching disabled. |
 | Visible rollback failures and terminal states | Silent cleanup failures hide incomplete work; finished transactions cannot safely stage more changes. | Try all actions; attach failures to the original error or raise an exception group. Reject new staged work, rollback registrations, and commits after completion. |
+| Preserve occupied writer paths | Dangling destination symlinks were accepted, and move rollback could delete original data when its source path reappeared. | Reject dangling destination symlinks; preserve both paths on rollback conflict and report the recovery location. Eight regression cases failed before the fix, covering shared storage checks, function/copy/move writers, and file/directory rollback with a new file or dangling source symlink. Direct tests also cover restoration to an absent source. Path checks do not provide filesystem race protection. |
 | Purge dependencies and failed-purge lifecycle | Removing owned data can break retained references, and a forced partial purge must not leave an active record. | Protect active and deleted references, including symlinked directory paths; force cannot bypass dependencies. Incomplete attempts retain a tombstone; restore rejects incomplete purge or removed artifacts. |
 | CLI metadata editing | Ordinary updates should not require custom Python. | Merge, replace, remove, or edit derived metadata through validated existing methods; parse JSON objects containing `=` correctly. Primary and readable-link names remain stable. |
 | Local integrity checks and backup guidance | Users need a bounded inspection and recovery procedure. | `Catalog.check()` and CLI inspect registered local paths and view links, without reading contents, remote targets, or orphan files. See [checking and backing up](../how-to/check-and-back-up.md). |
 
-Validation on 2026-10-02: the integrated ogcat suite passed **628 tests** in
-33.65 seconds, with four tests skipped for missing optional Zarr/NetCDF backends.
+Validation on 2026-10-02: the final integrated ogcat suite passed **640 tests** in
+35.43 seconds, with four tests skipped for missing optional Zarr/NetCDF backends.
 Full Ruff checks and formatting passed; configured Pyright reported no errors.
 Persistence and purge changes passed independent review after blocker fixes;
-CLI and transaction reviews had no remaining blockers. The offline Sphinx HTML
+CLI, transaction, and writer recovery reviews had no remaining blockers. The offline Sphinx HTML
 build passed with warnings treated as errors. Sixteen local Python cells from
 the Verification Games recipe ran in order, including create/close/reopen and
 final cleanup; its mounted BP1 cell was skipped and optional NetCDF opening

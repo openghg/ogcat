@@ -446,7 +446,7 @@ def _target_path(locator: ArtifactLocator) -> Path:
 
 def _prepare_empty_target(target_path: Path, target_kind: TargetKind) -> None:
     """Prepare a target that this writer can safely remove on rollback."""
-    if target_path.exists():
+    if target_path.exists() or target_path.is_symlink():
         raise FileExistsError(f"target {target_path} already exists")
     if target_kind == "file":
         target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -466,19 +466,31 @@ def _remove_target(target_path: Path, target_kind: TargetKind) -> None:
 
 
 def _rollback_moved_file(*, source_path: Path, target_path: Path) -> None:
-    """Restore a moved file when possible, otherwise remove the moved target."""
+    """Restore a moved file, preserving it if the source path is occupied."""
     _rollback_moved_target(source_path=source_path, target_path=target_path, target_kind="file")
 
 
 def _rollback_moved_target(*, source_path: Path, target_path: Path, target_kind: TargetKind) -> None:
-    """Restore a moved target when possible, otherwise remove the moved target."""
+    """Restore a moved target without replacing a newly occupied source path.
+
+    Args:
+        source_path: Original source path to restore.
+        target_path: Path holding the moved data.
+        target_kind: File or directory kind of the moved target.
+
+    Raises:
+        FileExistsError: If the source path is occupied. The moved data remains
+            at the target for manual recovery.
+    """
     if not target_path.exists():
         return
-    if not source_path.exists():
-        source_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(target_path), str(source_path))
-        return
-    _remove_target(target_path, target_kind)
+    if source_path.exists() or source_path.is_symlink():
+        raise FileExistsError(
+            f"cannot restore moved {target_kind} to occupied source {source_path}; "
+            f"recover the original data from {target_path}"
+        )
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(target_path), str(source_path))
 
 
 __all__ = [

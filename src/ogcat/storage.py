@@ -110,8 +110,9 @@ class LocalStorageAdapter:
     """Storage adapter for local path locators."""
 
     def exists(self, locator: ArtifactLocator) -> bool:
-        """Return whether a local path-backed locator exists."""
-        return require_local_path(locator).exists()
+        """Return whether a local path is occupied, including dangling symlinks."""
+        path = require_local_path(locator)
+        return path.exists() or path.is_symlink()
 
     def open(self, locator: ArtifactLocator, mode: str = "rb") -> IO[bytes]:
         """Open a local path-backed locator."""

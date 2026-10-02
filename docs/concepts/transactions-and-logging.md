@@ -113,6 +113,14 @@ Without an original error, failed cleanup raises an ``ExceptionGroup``. A
 committed, rolled-back, or failed unit of work rejects new staged work,
 rollback registrations, and commits; create a new transaction for further work.
 
+Built-in local writers reject an occupied destination, including a dangling
+symlink, before writing. If a moved artifact cannot be restored because its
+original source path has become occupied, rollback preserves both the new
+occupant and the moved artifact. The cleanup failure identifies both paths and
+the location of the original data for manual recovery; it appears in exception
+notes when an operation error triggered rollback. These checks do not prevent
+filesystem changes between checking a path and writing or restoring it.
+
 ``Catalog.delete()`` and ``Catalog.restore()`` update record lifecycle state
 through the same unit-of-work rollback model used by metadata updates, so an
 uncommitted caller-owned transaction restores the previous record state.
