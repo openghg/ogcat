@@ -101,6 +101,7 @@ def test_plugin_iterable_convenience_invokes_hooks_on_open(tmp_path: Path) -> No
             calls.append(context.operation_type)
 
     created = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="artifacts"))
+    created.close()
     catalog = Catalog.open(created.root, plugins=(Hook() for _ in range(1)))
 
     catalog.add_reference(ArtifactLocator(kind="uri", value="https://example.org/data.nc"))
@@ -125,6 +126,7 @@ def test_open_rejects_invalid_plugin_inputs_immediately(tmp_path: Path) -> None:
     """Invalid plugins inputs should fail while opening the catalog."""
 
     created = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+    created.close()
 
     with pytest.raises(TypeError, match="plugins must be a PluginRegistry or iterable of hook objects"):
         Catalog.open(created.root, plugins="not plugins")  # type: ignore[arg-type]

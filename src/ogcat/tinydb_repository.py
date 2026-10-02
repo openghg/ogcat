@@ -1,53 +1,95 @@
 """TinyDB storage for catalog records with explicit resource cleanup.
 
-Repositories hold a database file handle until ``close`` is called. Closing is
+Writable repositories hold a writer lock until ``close`` is called. Closing is
 idempotent and rejects subsequent reads and writes, including cached searches.
 It does not commit or roll back catalog units of work.
 """
 
 from __future__ import annotations
 
+import json
+import os
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, BinaryIO, cast
 
 from tinydb import Query, TinyDB
-from tinydb.storages import JSONStorage
+from tinydb.storages import Storage
 
 from ogcat.models import CatalogRecord, JsonValue
+from ogcat.persistence import write_json
 from ogcat.search import SearchOp, SearchQuery, SearchTerm, matches_record
 
 
 class TinyDbCatalogRepository:
     """TinyDB-backed catalog repository."""
 
-    def __init__(self, db_path: Path, *, read_only: bool = False) -> None:
+    def __init__(
+        self, db_path: Path, *, read_only: bool = False, create: bool = True, exclusive: bool = False
+    ) -> None:
         """Open a TinyDB database, optionally without write access.
+
+        Writable repositories hold a POSIX advisory lock until ``close``.
+        Read-only repositories acquire no lock and read fresh snapshots for
+        each query, including replacements published by an active writer.
 
         Args:
             db_path: Database file path.
             read_only: Open an existing database without creating files or
                 allowing record mutations.
+            create: Allow writable repositories to initialize a missing database.
+            exclusive: Reject an existing database after acquiring the writer lock.
         """
-        self._db_path = db_path
+        self._db_path = db_path.expanduser().resolve()
         self._read_only = read_only
         self._closed = False
-        if read_only:
-            self._db = TinyDB(db_path, storage=JSONStorage, access_mode="r")
-        else:
-            self._db_path.parent.mkdir(parents=True, exist_ok=True)
-            self._db = TinyDB(db_path)
+        self._lock_handle: BinaryIO | None = None
+        created_database = False
+        try:
+            if not read_only:
+                if os.name != "posix":
+                    raise RuntimeError("Writable catalogs require POSIX advisory file locks.")
+                import fcntl
+
+                self._db_path.parent.mkdir(parents=True, exist_ok=True)
+                self._lock_handle = self._db_path.with_name(self._db_path.name + ".lock").open("a+b")
+                try:
+                    fcntl.flock(self._lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError as exc:
+                    raise RuntimeError(
+                        f"Catalog database already has a writer: {self._db_path}. "
+                        "Close the existing writable catalog or use read_only=True for inspection."
+                    ) from exc
+                if exclusive and self._db_path.exists():
+                    raise FileExistsError(self._db_path)
+                if create and not self._db_path.exists():
+                    write_json(self._db_path, {}, exclusive=True)
+                    created_database = True
+            self._db = TinyDB(self._db_path, storage=_AtomicJSONStorage, read_only=read_only)
+            self._db.table(self._db.default_table_name, cache_size=0)
+        except BaseException:
+            if created_database:
+                with suppress(OSError):
+                    self._db_path.unlink(missing_ok=True)
+            if self._lock_handle is not None:
+                self._lock_handle.close()
+            raise
 
     def close(self) -> None:
-        """Release the database file handle; repeated calls have no effect.
+        """Release the writer lock; repeated calls have no effect.
 
         Reads and mutations after closing raise ``RuntimeError``. This method
         does not commit or roll back catalog units of work.
         """
         if not self._closed:
-            self._db.close()
-            self._closed = True
+            try:
+                self._db.close()
+            finally:
+                if self._lock_handle is not None:
+                    self._lock_handle.close()
+                self._closed = True
 
     def insert(self, record: CatalogRecord) -> CatalogRecord:
         """Insert a new record and return it with its TinyDB doc_id."""
@@ -225,3 +267,48 @@ def _tinydb_field(field: str) -> Any:
     for part in field.split("."):
         current = current[part]
     return current
+
+
+class _AtomicJSONStorage(Storage):
+    """Read each snapshot from its pathname and atomically publish replacements."""
+
+    def __init__(self, path: Path, *, read_only: bool = False) -> None:
+        """Validate existing storage without retaining a stale file descriptor."""
+        self._path = path
+        self._read_only = read_only
+        self.read()
+
+    def read(self) -> dict[str, dict[str, Any]] | None:
+        """Read complete JSON; accept legacy zero-byte databases as empty."""
+        payload = self._path.read_text(encoding="utf-8")
+        if not payload:
+            return None
+        data = json.loads(payload)
+        if not isinstance(data, dict):
+            raise ValueError(f"Catalog database must contain a JSON object: {self._path}")
+        self._validate_tables(data)
+        return data
+
+    def write(self, data: dict[str, dict[str, Any]]) -> None:
+        """Reject missing/read-only storage and replace it with complete JSON."""
+        if self._read_only:
+            raise PermissionError(f"Catalog database is read-only: {self._path}")
+        if not self._path.exists():
+            raise FileNotFoundError(self._path)
+        self._validate_tables(data)
+        write_json(self._path, data)
+
+    def _validate_tables(self, data: dict[str, dict[str, Any]]) -> None:
+        """Reject malformed documents and IDs that TinyDB would normalize or merge."""
+        for table in data.values():
+            if not isinstance(table, dict):
+                raise ValueError(f"Catalog database tables must be JSON objects: {self._path}")
+            for document_id, document in table.items():
+                try:
+                    canonical_id = isinstance(document_id, str) and str(int(document_id)) == document_id
+                except ValueError:
+                    canonical_id = False
+                if not canonical_id:
+                    raise ValueError(f"Catalog document IDs must be canonical integer strings: {self._path}")
+                if not isinstance(document, dict):
+                    raise ValueError(f"Catalog documents must be JSON objects: {self._path}")

@@ -33,6 +33,7 @@ searching records.
    tutorials/intermediate
    tutorials/advanced-real-world
    tutorials/artifact-workflows
+   how-to/check-and-back-up
 
 .. toctree::
    :maxdepth: 1

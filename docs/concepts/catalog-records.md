@@ -233,3 +233,26 @@ assert restored.status == "active"
 catalog.delete(record.id)
 catalog.purge(record.id)  # permanent; best-effort managed artifact cleanup
 ```
+
+Before removing any managed artifact, purge checks the local locators of every
+other retained record, including tombstones. It rejects removal when another
+record uses the same path, a readable symlink alias, or a descendant of a managed
+directory being removed. Directory and collection roots also protect artifacts
+within their scope conservatively; purge does not enumerate members or interpret
+collection patterns. The error identifies the blocking record ids, and rejection
+leaves all artifacts intact. Remove the referencing records first when their
+locators are no longer needed. `force=True` permits purging an active owner but
+does not bypass this protection.
+
+Purging a managed symlink removes the link entry, preserving its target. A
+reference to the target alone therefore does not block unlinking; references
+that need the link still do. External and user-owned artifacts remain skipped.
+
+An incomplete purge retains removal evidence on its record. `restore` rejects
+every incomplete purge, because failed directory cleanup may already have
+removed members. It also rejects legacy records with an artifact marked `purged`
+or a positive `purge_removed_count`. Changing visibility cannot recreate removed
+bytes; finish the purge or recover the data from a backup. Ordinary
+tombstone restoration keeps its existing visibility behavior. Cleanup retries
+preserve earlier removal evidence. An incomplete forced purge also retains a
+deleted record, keeping its damaged artifacts out of normal search results.

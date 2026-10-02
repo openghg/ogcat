@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Literal
 
 from ogcat.models import MetadataFieldDescription
+from ogcat.persistence import write_json
 
 DEFAULT_DIRECTORY_TEMPLATE = "{year_added}/{original_stem}"
 DEFAULT_FILENAME_TEMPLATE = "{title_slug|original_stem}{original_suffix}"
@@ -227,7 +228,7 @@ class CatalogSpec:
 
     def write(self, path: Path) -> None:
         """Write the spec JSON to disk."""
-        path.write_text(json.dumps(self.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        write_json(path, self.to_dict())
 
     @classmethod
     def read(cls, path: Path) -> CatalogSpec:

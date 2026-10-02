@@ -60,6 +60,7 @@ Each catalog root is self-describing:
 
 - `catalog.json`: catalog specification, default schema, and optional named record schemas
 - `db.json`: TinyDB-backed record store
+- `db.json.lock`: stable advisory writer-lock sidecar; do not remove it to bypass a live writer
 - `data/files/`: human-readable template replicas and template-primary artifacts
 - `data/objects/`: UUID primary objects for default managed ingest
 
@@ -188,10 +189,12 @@ not support `member_paths()`.
 For a finished output already on disk, compute outside a catalog transaction, then call
 `add_file(..., operation="move", derived_metadata={...})` to move it into managed storage while
 preserving source-specific metadata. Use `add_reference()` if the output must stay where it is.
-Only one process should write a TinyDB catalog. Workers can open
-`Catalog.open(root, read_only=True)` for queries; reopen that view after another process writes.
-This matters on BP1's GPFS as well as local filesystems: ogcat does not coordinate concurrent
-TinyDB writers.
+Writable catalogs hold an exclusive POSIX advisory lock for the database until `close()`;
+a competing writable open fails immediately. Workers can open
+`Catalog.open(root, read_only=True)` without that lock. Each repository query reads the current
+database pathname with query caching disabled; previously returned results are snapshots.
+Keep writable sessions short, and test lock and replacement semantics on the deployment
+filesystem before relying on them on GPFS or NFS.
 
 Use a context manager to release the database handle after a short query or registration session:
 
@@ -271,8 +274,11 @@ hides it from normal search; ``restore`` makes it active again; ``purge``
 permanently removes a tombstoned record after removing managed catalog-local
 artifacts. Purge is best-effort across artifacts: if cleanup is incomplete,
 the tombstone is retained with purge metadata instead of reporting success.
-``--include-deleted`` and ``--only-deleted`` are mutually exclusive search
-options.
+Purge refuses to remove paths needed by any other retained record, including tombstones
+and references through symlinked directories. `--force` permits an active record to be purged;
+it does not bypass dependency protection. An incomplete purge retains a tombstone, including
+when forced; restore rejects incomplete purges or records with removed artifacts.
+``--include-deleted`` and ``--only-deleted`` are mutually exclusive search options.
 
 ```bash
 uv run ogcat delete 1 --catalog ./example-catalog --reason superseded
@@ -301,6 +307,17 @@ dataset spread across local files; `ogcat members ID --catalog ROOT` lists its
 current matching paths. `search --one` fails on ambiguous or missing records;
 `--locators` prints raw local or remote locator values. See the
 [CLI reference](docs/cli.md) for options and remote collection limits.
+
+Edit user metadata, inspect registered local paths, and prepare a backup:
+
+```bash
+uv run ogcat update-metadata 1 --catalog ./example-catalog --meta 'title="Revised title"'
+uv run ogcat check --catalog ./example-catalog --json
+```
+
+Metadata edits validate through the Python API and preserve storage names. `check` reports
+observed local path and view-link issues; it does not validate data contents, remote targets,
+or orphan files. See [checking and backing up](docs/how-to/check-and-back-up.md).
 
 Inspect catalog info and declared metadata fields:
 
@@ -372,8 +389,9 @@ uv run python -m http.server 8000
 Storage is centred on path-backed managed ingest. Files added with
 `add_file()` are copied or moved into the catalog's `data/objects/` tree by default, and the
 resulting primary path is recorded in the catalog database alongside metadata and naming
-information. Template-derived paths are linked replicas that can be regenerated after metadata or
-template changes. Existing paths, URIs, and explicit URI/urlpath locators can be recorded with
+information. Metadata edits keep existing primary and template-link paths stable; they do not
+rename artifacts. Generated views can be planned separately from current metadata. Existing paths, URIs, and
+explicit URI/urlpath locators can be recorded with
 `add_reference()` without copying or moving data.
 
 Records now also include a minimal locator block:
@@ -397,8 +415,9 @@ adding domain-specific framework code.
 - derived metadata extraction is intentionally small and currently focused on optional netCDF summaries
 - reader and manager bindings are not implemented yet
 - richer readers, managers, and import workflows are future work
-- TinyDB does not provide a coordinated multi-process writer; use one writer, and register
-  finished outputs after long-running computation rather than holding an open transaction
+- writable sessions require POSIX advisory locks; one writer is enforced until the catalog closes
+- JSON replacement does not provide cross-file ACID transactions or crash recovery; filesystem
+  durability and locking on GPFS/NFS need deployment tests
 
 ## Roadmap
 

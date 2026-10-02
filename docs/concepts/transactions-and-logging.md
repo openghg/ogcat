@@ -25,18 +25,26 @@ with Catalog.open("./my-catalog") as catalog:
         # Without commit(), the transaction rolls back on exit.
 ```
 
-The CLI closes its catalog at command exit. Neither the catalog context nor
-the transaction acquires a writer lock. Keep one registrar per catalog, open
-a fresh writable catalog for each registration session, and reopen read-only
-views after that session. Resolve inputs before long computations and register
+The CLI closes its catalog at command exit. A writable catalog acquires a
+nonblocking exclusive POSIX advisory lock on a stable database sidecar (normally
+``db.json.lock``) and holds it until close. A competing writer fails immediately,
+including another writable instance in the same process. Do not remove the
+sidecar to bypass a writer. Keep one registrar per catalog and open a writable
+catalog only for a short registration session.
+
+Read-only catalogs take no writer lock, create no directories or audit events,
+and reject mutation before hooks or artifact writes. Repository queries reopen
+the database pathname with TinyDB query caching disabled, so later queries see
+published replacements. Returned records and record sets remain snapshots.
+Resolve inputs before long computations and register
 finished outputs afterward; see the
 [Verification Games recipe](../tutorials/verification-games-recipes.md).
 
 ## Operation lifecycle
 
 Every ``add_file()`` or ``add_artifact()`` call runs inside a *unit of work*.
-The unit of work tracks rollback actions so that a failed operation leaves the
-catalog in a consistent state.
+The unit of work tracks compensating actions to undo a failed operation where
+possible. Cleanup can fail; it is not a durable database transaction.
 
 The typical lifecycle is:
 
@@ -49,6 +57,22 @@ The typical lifecycle is:
 If a step before commit raises an exception, registered rollback actions run
 in reverse order to undo partial writes. ``after_commit`` hook failures are
 reported as warnings and cannot roll back a committed operation.
+
+## JSON publication and durability limits
+
+The specification and record database are serialized completely before writing.
+Updates use a temporary file in the destination directory, preserve existing
+permission bits, flush and ``fsync`` the file, then replace the destination
+atomically. Creation publishes exclusively and refuses an existing destination.
+Opening refuses a missing or malformed database; legacy zero-byte databases
+are still accepted as empty.
+
+This prevents readers from observing a partial JSON replacement under supported
+filesystem semantics. There is no directory ``fsync``, cross-file ACID commit,
+or automatic recovery after process or machine failure. Artifacts, records,
+specifications, and audit logs do not form one atomic snapshot. Test locking and
+replacement behavior on the target GPFS/NFS deployment. For bounded inspection
+and recovery from backups, see [checking and backing up](../how-to/check-and-back-up.md).
 
 ## Audit events
 
@@ -82,8 +106,12 @@ redacted when values are included in audit details.
 
 ## Rollback
 
-Rollback is best-effort.  Each rollback action is tried in turn; if one
-fails, the remaining actions still run and the original error is preserved.
+Rollback is best-effort. Each registered action runs in reverse order; a
+failure does not prevent later cleanup. If an original operation error exists,
+cleanup failures are added as exception notes and that error is preserved.
+Without an original error, failed cleanup raises an ``ExceptionGroup``. A
+committed, rolled-back, or failed unit of work rejects new staged work,
+rollback registrations, and commits; create a new transaction for further work.
 
 ``Catalog.delete()`` and ``Catalog.restore()`` update record lifecycle state
 through the same unit-of-work rollback model used by metadata updates, so an
@@ -93,7 +121,11 @@ catalog-local path-backed artifacts through storage adapters, audits skipped
 external or user-owned locators, and hard-deletes the repository record last
 only when cleanup succeeds. Partial purge failures cannot restore artifacts
 that were already removed, so ogcat commits an updated tombstone describing the
-incomplete attempt before raising the error.
+incomplete attempt before raising the error, even when ``force=True`` started
+from an active record. Restore rejects incomplete purge attempts and records
+with removed artifacts. Purge checks other retained records, including deleted
+records and references through symlinked directories, before removing anything;
+``force=True`` does not bypass this dependency check.
 
 You can register rollback actions from within a hook:
 

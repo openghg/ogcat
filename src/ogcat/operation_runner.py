@@ -757,6 +757,15 @@ class RecordLifecycleOperationRunner:
         record = self.request.record
         if record.status != "deleted":
             raise ValueError(f"Record is not deleted: {record.id}")
+        removed_count = record.lifecycle_metadata.get("purge_removed_count", 0)
+        if (
+            record.lifecycle_metadata.get("purge_status") == "incomplete"
+            or any(artifact.state == "purged" for artifact in record.artifacts)
+            or (isinstance(removed_count, int) and removed_count > 0)
+        ):
+            raise ValueError(
+                f"Cannot restore record after purge removed artifacts or an incomplete purge: {record.id}"
+            )
         updated = replace(
             record,
             status="active",
@@ -788,6 +797,7 @@ class RecordLifecycleOperationRunner:
             raise ValueError(f"Record must be deleted before purge: {record.id}")
         if record.id is None:
             raise ValueError("Cannot purge a record without an id.")
+        self._check_purge_references()
         results: list[_PurgeArtifactResult] = []
         for artifact in record.artifacts:
             try:
@@ -831,34 +841,67 @@ class RecordLifecycleOperationRunner:
         )
         return _PurgeOutcome()
 
+    def _purge_skip_reason(self, artifact: ArtifactDescriptor) -> str | None:
+        """Return why an artifact is ineligible for managed removal, if any."""
+        if self.request.record.storage_mode not in {"copy", "move", "write"}:
+            return f"record storage mode is {self.request.record.storage_mode or 'unspecified'}"
+        if artifact.locator is None:
+            return "missing locator"
+        target_path = artifact.locator.as_path()
+        if target_path is None:
+            return f"unsupported locator kind: {artifact.locator.kind}"
+        if not _is_managed_path(target_path, managed_roots=self.request.managed_roots):
+            return "locator is outside managed catalog roots"
+        return None
+
+    def _check_purge_references(self) -> None:
+        """Reject removal of paths used by retained records, including tombstones."""
+        targets: list[tuple[Path, bool]] = []
+        for artifact in self.request.record.artifacts:
+            if self._purge_skip_reason(artifact) is not None:
+                continue
+            assert artifact.locator is not None
+            path = artifact.locator.as_path()
+            assert path is not None
+            target = path.parent.resolve() / path.name if path.is_symlink() else path.resolve()
+            targets.append((target, _target_kind_for_existing_path(path) == "directory"))
+        if not targets:
+            return
+        blocking_ids: set[str] = set()
+        for retained in self.request.transaction.repository.all():
+            if retained.id == self.request.record.id:
+                continue
+            locators = [retained.locator, *(artifact.locator for artifact in retained.artifacts)]
+            for locator in locators:
+                path = None if locator is None else locator.as_path()
+                if path is None:
+                    continue
+                dependencies = _local_path_dependencies(path)
+                resolved = path.resolve()
+                for target, is_directory in targets:
+                    if any(
+                        dependency == target or (is_directory and target in dependency.parents)
+                        for dependency in dependencies
+                    ) or (path.is_dir() and resolved in target.parents):
+                        blocking_ids.add(str(retained.id))
+        if blocking_ids:
+            raise ValueError(
+                "Cannot purge artifacts referenced by retained records: " + ", ".join(sorted(blocking_ids))
+            )
+
     def _purge_artifact(
         self,
         context: OperationContext,
         artifact: ArtifactDescriptor,
     ) -> _PurgeArtifactResult:
         """Purge one managed artifact or audit why it was skipped."""
-        if self.request.record.storage_mode not in {"copy", "move", "write"}:
-            return self._emit_artifact_skip(
-                context,
-                artifact,
-                reason=f"record storage mode is {self.request.record.storage_mode or 'unspecified'}",
-            )
+        skip_reason = self._purge_skip_reason(artifact)
+        if skip_reason is not None:
+            return self._emit_artifact_skip(context, artifact, reason=skip_reason)
         locator = artifact.locator
-        if locator is None:
-            return self._emit_artifact_skip(context, artifact, reason="missing locator")
+        assert locator is not None
         target_path = locator.as_path()
-        if target_path is None:
-            return self._emit_artifact_skip(
-                context,
-                artifact,
-                reason=f"unsupported locator kind: {locator.kind}",
-            )
-        if not _is_managed_path(target_path, managed_roots=self.request.managed_roots):
-            return self._emit_artifact_skip(
-                context,
-                artifact,
-                reason="locator is outside managed catalog roots",
-            )
+        assert target_path is not None
 
         target_kind = _target_kind_for_existing_path(target_path)
         try:
@@ -956,6 +999,17 @@ class RecordLifecycleOperationRunner:
     ) -> PurgeIncompleteError:
         """Persist an incomplete purge attempt and return the caller-facing error."""
         record = self.request.record
+        if record.status != "deleted":
+            record = replace(
+                record,
+                status="deleted",
+                lifecycle_metadata=_updated_lifecycle_metadata(
+                    record,
+                    operation_type="delete",
+                    operation_id=context.operation_id,
+                    reason=self.request.reason,
+                ),
+            )
         updated = replace(
             record,
             artifacts=_artifacts_with_purge_states(record.artifacts, results),
@@ -1198,7 +1252,11 @@ def _incomplete_purge_lifecycle_metadata(
     metadata["purge_operation_id"] = operation_id
     metadata["purge_attempted_at"] = _utc_timestamp()
     metadata["purge_status"] = "incomplete"
-    metadata["purge_removed_count"] = counts["removed_count"]
+    previous_removed_count = record.lifecycle_metadata.get("purge_removed_count", 0)
+    metadata["purge_removed_count"] = max(
+        previous_removed_count if isinstance(previous_removed_count, int) else 0,
+        counts["removed_count"],
+    )
     metadata["purge_skipped_count"] = counts["skipped_count"]
     metadata["purge_failure_count"] = counts["failed_count"]
     metadata["purge_repository_delete_failed"] = repository_error is not None
@@ -1292,7 +1350,12 @@ def _artifacts_with_purge_states(
         if result.action in {"removed", "failed"}
     }
     return [
-        replace(artifact, state=states_by_artifact_id.get(artifact.id, artifact.state))
+        replace(
+            artifact,
+            state="purged"
+            if artifact.state == "purged"
+            else states_by_artifact_id.get(artifact.id, artifact.state),
+        )
         for artifact in artifacts
     ]
 
@@ -1304,6 +1367,25 @@ def _artifact_state_for_purge_result(result: _PurgeArtifactResult) -> str:
     if result.action == "failed":
         return "purge_failed"
     return "available"
+
+
+def _local_path_dependencies(path: Path) -> set[Path]:
+    """Return the resolved location and readable symlink entries needed to reach it."""
+    dependencies = {path.parent.resolve() / path.name, path.resolve()}
+    pending = [path]
+    seen: set[Path] = set()
+    while pending:
+        candidate = pending.pop()
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        for component in (candidate, *candidate.parents):
+            if component.is_symlink():
+                entry = component.parent.resolve() / component.name
+                dependencies.add(entry)
+                destination = component.readlink()
+                pending.append(destination if destination.is_absolute() else component.parent / destination)
+    return dependencies
 
 
 def _is_managed_path(path: Path, *, managed_roots: tuple[Path, ...]) -> bool:

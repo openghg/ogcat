@@ -65,6 +65,19 @@ The catalog root is self-describing:
 ```
 
 `catalog.json` defines how the catalog behaves. `db.json` stores records.
+The repository holds a POSIX advisory lock on the stable `db.json.lock` sidecar
+for each writable session until close; competing writers fail immediately.
+Read-only sessions take no lock and reopen the database pathname for each read,
+with TinyDB query caching disabled. Returned records remain snapshots.
+
+Both JSON files use complete serialization and publication from a same-directory
+temporary file, with file flush/fsync and preserved existing permission bits.
+Updates use atomic replacement; creation refuses existing specification or
+configured database paths. Opening refuses missing or corrupt databases and
+accepts legacy zero-byte databases. No directory fsync, cross-file ACID commit,
+or automatic crash recovery is provided. Filesystem locking and replacement
+semantics on GPFS/NFS require deployment-specific evidence.
+
 `data/files/` holds human-readable template replicas and template-primary
 artifacts. `data/objects/` holds UUID primary objects for default managed
 ingest.
@@ -117,7 +130,17 @@ step fails. It is not a true database transaction and should not be described as
 Each unit of work exposes an `operation_id` that correlates staged record
 writes, storage activity, cleanup, and current catalog-local audit events.
 Stronger backends could map the same conceptual API to native transactions
-later.
+later. Rollback attempts every registered action and reports cleanup failures:
+as notes on the original exception, or an `ExceptionGroup` when no original
+error exists. Finished units of work reject new staging, rollback registrations,
+and commits.
+
+Purge checks dependencies from all other retained records, including tombstones
+and paths through symlinked directories. Force does not override that protection.
+Incomplete cleanup retains a tombstone; restore rejects incomplete purge or
+removed artifacts. Metadata updates retain existing artifact and link names.
+`Catalog.check()` inspects registered local paths and view links only; see
+[checking and backing up](how-to/check-and-back-up.md).
 
 ## Operation Coordination
 

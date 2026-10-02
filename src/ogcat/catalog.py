@@ -9,7 +9,6 @@ inside it and retain their own commit and rollback semantics.
 from __future__ import annotations
 
 import getpass
-import json
 import os
 import warnings
 from collections.abc import Iterable, Iterator, Mapping, Sequence
@@ -41,6 +40,7 @@ from ogcat.hooks import (
     coerce_hook_iterable,
     validate_hook_objects,
 )
+from ogcat.integrity import check_records
 from ogcat.models import ArtifactLocator, CatalogRecord, JsonValue, MetadataDict, normalize_metadata
 from ogcat.operation_helpers import (
     artifact_locator_from_context,
@@ -54,6 +54,7 @@ from ogcat.operation_runner import (
     RecordLifecycleOperationRequest,
     RecordLifecycleOperationRunner,
 )
+from ogcat.persistence import write_json
 from ogcat.plugins import PluginRegistry
 from ogcat.record_set import CatalogRecordSet
 from ogcat.reference_planning import plan_reference_locator
@@ -140,7 +141,9 @@ class Catalog:
             Open catalog instance bound to ``root``.
 
         Raises:
-            FileExistsError: If ``catalog.json`` already exists at ``root``.
+            FileExistsError: If the specification or configured database already exists.
+            RuntimeError: If another writer holds the database lock or POSIX
+                advisory locks are unavailable.
             ValueError: If the configured backend is unsupported, or both
                 ``plugins`` and ``hooks`` are supplied.
         """
@@ -148,21 +151,33 @@ class Catalog:
         if spec.db_backend != "tinydb":
             raise ValueError(f"Unsupported db_backend: {spec.db_backend}")
         root_path = Path(root).expanduser().resolve()
-        spec_payload = json.dumps(spec.to_dict(), indent=2, sort_keys=True) + "\n"
+        spec_path = root_path / "catalog.json"
+        if spec_path.exists():
+            raise FileExistsError(spec_path)
+        db_path = (root_path / spec.db_path).resolve()
+        if db_path.exists():
+            raise FileExistsError(db_path)
         root_path.mkdir(parents=True, exist_ok=True)
-        with (root_path / "catalog.json").open("x", encoding="utf-8") as spec_file:
-            spec_file.write(spec_payload)
-        (root_path / spec.files_root).mkdir(parents=True, exist_ok=True)
-        (root_path / spec.objects_root).mkdir(parents=True, exist_ok=True)
-        repository = _open_repository(root_path, spec)
-        return cls(
-            root=root_path,
-            spec=spec,
-            repository=repository,
-            hook_manager=hook_manager,
-            audit_sink=_coerce_audit_sink(root_path, audit_sink),
-            audit_user_id=_resolve_audit_user_id(audit_user_id),
-        )
+        repository = _open_repository(root_path, spec, exclusive=True)
+        try:
+            (root_path / spec.files_root).mkdir(parents=True, exist_ok=True)
+            (root_path / spec.objects_root).mkdir(parents=True, exist_ok=True)
+            catalog = cls(
+                root=root_path,
+                spec=spec,
+                repository=repository,
+                hook_manager=hook_manager,
+                audit_sink=_coerce_audit_sink(root_path, audit_sink),
+                audit_user_id=_resolve_audit_user_id(audit_user_id),
+            )
+            write_json(spec_path, spec.to_dict(), exclusive=True)
+            return catalog
+        except BaseException:
+            try:
+                db_path.unlink(missing_ok=True)
+            finally:
+                repository.close()
+            raise
 
     @classmethod
     def open(
@@ -192,23 +207,36 @@ class Catalog:
             Open catalog instance bound to ``root``.
 
         Raises:
-            FileNotFoundError: If ``catalog.json`` is missing.
-            ValueError: If the configured backend is unsupported, or both
-                ``plugins`` and ``hooks`` are supplied.
+            FileNotFoundError: If the specification or configured database is missing.
+            RuntimeError: If a writable open conflicts with another writer or
+                POSIX advisory locks are unavailable.
+            ValueError: If persisted JSON is invalid or corrupt, the configured
+                backend is unsupported, the database path changes during opening,
+                or both ``plugins`` and ``hooks`` are supplied.
         """
         hook_manager = _coerce_hook_manager(plugins=plugins, hooks=hooks)
         root_path = Path(root).expanduser().resolve()
         spec = CatalogSpec.read(root_path / "catalog.json")
-        repository = _open_repository(root_path, spec, read_only=read_only)
-        return cls(
-            root=root_path,
-            spec=spec,
-            repository=repository,
-            hook_manager=hook_manager,
-            audit_sink=_coerce_audit_sink(root_path, audit_sink),
-            audit_user_id=_resolve_audit_user_id(audit_user_id),
-            read_only=read_only,
-        )
+        db_path = (root_path / spec.db_path).resolve()
+        if not db_path.is_file():
+            raise FileNotFoundError(db_path)
+        repository = _open_repository(root_path, spec, read_only=read_only, create=False)
+        try:
+            refreshed_spec = CatalogSpec.read(root_path / "catalog.json")
+            if (root_path / refreshed_spec.db_path).resolve() != db_path:
+                raise ValueError("Catalog database path changed while opening the catalog.")
+            return cls(
+                root=root_path,
+                spec=refreshed_spec,
+                repository=repository,
+                hook_manager=hook_manager,
+                audit_sink=_coerce_audit_sink(root_path, audit_sink),
+                audit_user_id=_resolve_audit_user_id(audit_user_id),
+                read_only=read_only,
+            )
+        except BaseException:
+            repository.close()
+            raise
 
     def close(self) -> None:
         """Release repository resources without committing or rolling back.
@@ -1047,6 +1075,23 @@ class Catalog:
             default_display_fields=self.spec.get_schema().display_fields,
         )
 
+    def check(self, *, include_deleted: bool = False) -> list[MetadataDict]:
+        """Report observed issues with registered local artifact paths.
+
+        Args:
+            include_deleted: Include tombstoned records in the inspection.
+
+        Returns:
+            Issues containing record_id, artifact_id, code, path, and message.
+            No issues means only that registered local paths passed inspection;
+            artifact contents, remote locations, and orphan files are not checked.
+        """
+        self._require_open()
+        records = _filter_records_by_status(
+            self.repository.all(), include_deleted=include_deleted, only_deleted=False
+        )
+        return check_records(records)
+
     def describe(self, *, include_deleted: bool = False) -> dict[str, object]:
         """Return a serialisable summary of catalog configuration and contents."""
         self._require_open()
@@ -1236,6 +1281,11 @@ class Catalog:
 
         Returns:
             Restored catalog record.
+
+        Raises:
+            ValueError: If the record is not deleted, has an incomplete purge,
+                or carries evidence of removed artifacts. Restore changes visibility only;
+                it cannot recreate removed bytes.
         """
         self._require_writable()
         application = self._application()
@@ -1263,15 +1313,21 @@ class Catalog:
         roots; external or user-owned locators are skipped and audited. If
         cleanup is incomplete, the tombstoned record is retained with purge
         outcome metadata and the method raises ``PurgeIncompleteError``.
+        Before cleanup, purge rejects paths used by other retained records,
+        including tombstones and local directory/collection roots. Rejection
+        leaves all artifacts intact. Symlink aliases are checked without
+        inspecting file formats or enumerating collection members.
 
         Args:
             record_id: Existing record id.
             force: Allow purging an active record. By default, records must be
-                tombstoned with :meth:`delete` first.
+                tombstoned with :meth:`delete` first. This never bypasses
+                protection for paths referenced by other records.
 
         Raises:
             KeyError: If the record id does not exist.
-            ValueError: If the record is active and ``force`` is false.
+            ValueError: If the record is active and ``force`` is false, or
+                retained records depend on artifacts selected for removal.
             PurgeIncompleteError: If managed cleanup is incomplete and the
                 tombstone is retained.
         """
@@ -1816,11 +1872,15 @@ def _coerce_primary_location(value: object) -> PrimaryLocation:
     raise ValueError("primary_location must be 'uuid' or 'template'.")
 
 
-def _open_repository(root: Path, spec: CatalogSpec, *, read_only: bool = False) -> CatalogRepository:
+def _open_repository(
+    root: Path, spec: CatalogSpec, *, read_only: bool = False, create: bool = True, exclusive: bool = False
+) -> TinyDbCatalogRepository:
     """Create the configured repository for a catalog spec."""
     if spec.db_backend != "tinydb":
         raise ValueError(f"Unsupported db_backend: {spec.db_backend}")
-    return TinyDbCatalogRepository(root / spec.db_path, read_only=read_only)
+    return TinyDbCatalogRepository(
+        root / spec.db_path, read_only=read_only, create=create, exclusive=exclusive
+    )
 
 
 def _coerce_audit_sink(root: Path, audit_sink: AuditSink | None) -> AuditSink:

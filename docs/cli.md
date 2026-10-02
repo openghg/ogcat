@@ -4,6 +4,22 @@
 
 ## Commands
 
+### ``ogcat check``
+
+Inspect registered local artifact paths and recorded view symlinks without writes.
+
+```
+ogcat check --catalog <root> [--include-deleted] [--json]
+```
+
+The JSON output is a list of issues with `record_id`, `artifact_id`, `code`,
+`path`, and `message`. Codes are `missing_path`, `broken_symlink`,
+`incorrect_symlink`, and `unreadable_path`. Exit status is 1 for findings and 0
+for an empty list. Deleted records are excluded unless requested; purged artifacts
+are skipped. A clean result only means no registered local path issues were
+observed: contents, remote locators, and orphan files are not inspected.
+See [checking and backups](how-to/check-and-back-up.md) for scope and recovery.
+
 ### ``ogcat init``
 
 Create a new catalog.
@@ -141,6 +157,28 @@ ogcat show <id> --catalog <root>
 ```
 
 ``show`` resolves records by id and can inspect tombstoned records.
+
+### ``ogcat update-metadata``
+
+Edit one record's user metadata; ``--derived`` edits derived metadata instead.
+The default operation is a shallow merge: supplied top-level keys overwrite
+existing values, including whole nested dictionaries. Values use the same
+JSON-aware parsing as ``add``: numbers, booleans, arrays, and objects retain
+their types; other values become strings.
+
+```bash
+ogcat update-metadata <id> --catalog <root> --meta title="Revised title" --meta reviewed=true
+ogcat update-metadata <id> --catalog <root> --remove obsolete --meta version=2
+ogcat update-metadata <id> --catalog <root> --replace --meta '{"title": "Replacement"}'
+ogcat update-metadata <id> --catalog <root> --derived --meta rows=120 --json
+```
+
+Repeat ``--meta`` and ``--remove`` as needed. ``--remove`` removes top-level
+keys; absent keys are ignored. Setting and removing the same key is rejected.
+``--replace`` replaces the whole dictionary and cannot be combined with
+``--remove``. ``--replace`` without ``--meta`` clears that namespace.
+User metadata must still satisfy its record schema; invalid changes leave the
+record unchanged. ``--json`` prints the full updated record.
 
 ### ``ogcat path``
 

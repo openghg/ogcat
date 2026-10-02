@@ -1,8 +1,8 @@
 # Roadmap
 
 Planning snapshot from a review of local Verification Games and BP1 catalogs on
-2026-09-25, updated as the first implementation lands. This page separates existing
-behavior from proposed work. The [implementation record](plans/2026-09-25-single-user-workflows.md)
+2026-09-25, updated for the core completion delivery on 2026-10-02. This page
+separates existing behavior from proposed work. The [implementation record](plans/2026-09-25-single-user-workflows.md)
 tracks decisions and delivered changes. The [archived long-term plan](plans/archive/ogcat_long_term_plan.md)
 and [virtual artifact filesystem ADR](adr/0002-virtual-artifact-filesystem-domain-model.md)
 preserve earlier ideas; their issue lists are not the implementation order.
@@ -38,37 +38,47 @@ target exists. Applications must validate completed output before registration.
 
 The CLI exposes managed `add`, reference and collection registration, strict
 single-result search, member enumeration, locator output, readable template
-links, and delete/restore/purge. `Catalog.open(read_only=True)` supports
-read-only inspection; reopen a reader after an external write. Use
+links, metadata merge/replace/removal, bounded local-path checks, and
+delete/restore/purge. `Catalog.open(read_only=True)` supports read-only
+inspection; later repository queries read published database replacements,
+while earlier results remain snapshots. Use
 `with Catalog.open(...) as catalog:` or `catalog.close()` to release its
 database handle. The CLI closes catalogs at command exit. A managed
 `add_file()` may carry caller-supplied derived metadata.
 
+## Delivered Core Safeguards
+
+The core now enforces one writable session through a stable database-sidecar
+POSIX advisory lock held until close. Competing writers fail immediately;
+read-only sessions take no lock. Complete JSON is serialized before publication
+from a same-directory temporary file with file fsync and preserved mode.
+Readers reopen the pathname without query caching. Opening refuses missing or
+corrupt databases, and creation refuses existing specifications or databases.
+
+Rollback failures are visible, terminal transactions reject further work, and
+purge protects paths needed by other retained records, including tombstones and
+symlinked directory references. Force does not bypass this guard; incomplete
+purges retain a tombstone that cannot be restored. The CLI exposes validated
+metadata edits with stable storage names. `Catalog.check()` and `ogcat check`
+report registered local path/view-link issues; the
+[backup guide](how-to/check-and-back-up.md) explains their bounds and recovery.
+
 ## Next Work, In Order
 
-### 1. Enforce And Recover The Single-Writer Contract
+### 1. Test Deployment Durability And Recovery Boundaries
 
-Treat one process at a time as the catalog mutation contract. HPC workers write
-outputs and completion manifests; one registrar validates and registers them.
-The current result-output scripts can each open the same TinyDB catalog, so
-sequential timestamps are not evidence of serialization. For now, a single
-registrar process must serialize writes and open a fresh writable catalog for
-each registration session. This is an operating rule, not a lock guarantee.
-Before accepting concurrent writers, test target-filesystem lock semantics and
-cover every read-modify-write path and TinyDB refresh in a guarded writer session.
+Keep TinyDB for zero-setup single-user use. Test actual target-filesystem lock,
+replacement, and interrupted-write behavior on GPFS and any separate NFS
+installation. File fsync and atomic replacement are delivered; directory fsync,
+cross-file ACID commits, and crash recovery are not. Define reconciliation for
+an interrupted managed write, an object without a record, and a record without
+its readable link before claiming recovery. Evaluate a backend change only
+against those observed failures and deployment evidence.
 
-Keep TinyDB for zero-setup single-user use while evaluating storage robustness.
-Its JSON storage writes in place, and the current `UnitOfWork` holds in-memory
-compensating actions rather than a durable transaction. Define recovery for an
-interrupted write, a managed object without a record, and a record without its
-readable link. Protect `catalog.json` updates with replacement and recovery.
-Do not select SQLite from the assumption that local-disk guarantees carry over
-to NFS or GPFS; test the actual deployment filesystem first.
-
-Read-only opening now avoids write handles, directory creation, and audit
-emission and rejects catalog mutation before hooks or files are touched. Since
-TinyDB writes its JSON in place, a reader running during a write may still
-observe an incomplete document; coordinate readers or reopen after writes.
+Existing Verification Games helpers open overlapping writable sessions and
+fail under the enforced lock. A separate compatibility branch is in progress;
+no BP1 deployment is claimed. Adapt consumers to short writer sessions and
+rerun workflow checks before adoption.
 
 ### 2. Make Finished-Output Registration A Short Operation
 
@@ -96,8 +106,8 @@ The CLI now has `reference`, `collection`, `members`, `locator`, strict
 explicit URI/urlpath behavior distinct; a reference record does not guarantee
 its target exists.
 
-Promote the existing strict `Catalog.get_one()` lookup and expose its
-zero-or-multiple-match errors in a CLI lookup. Do not make a job silently choose
+Use the existing strict `Catalog.get_one()` and `search --one`; both report
+zero-or-multiple-match errors. Do not make a job silently choose
 `results.ids[0]` or a moving `latest` record. On BP1, an MHD/EUROPE/co2 search
 can return both UKV and UMG footprint collections; a notebook selects the first
 result. A reproducible run should resolve and record an exact record ID,
@@ -150,5 +160,5 @@ and interrupted-operation repair.
 The earlier [storage and ownership safeguards](architecture.md) remain part of
 the current baseline: rendered paths reject obvious escapes, purge only treats
 known managed write modes as owned, and creating a catalog rejects an existing
-`catalog.json`. A concurrent filesystem change after path planning still needs
-write-time protection.
+`catalog.json` or configured database. A concurrent filesystem change after
+path planning still needs write-time protection.

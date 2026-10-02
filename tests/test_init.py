@@ -11,7 +11,7 @@ def test_create_and_open_catalog(tmp_path: Path) -> None:
     spec = CatalogSpec(catalog_name="fluxes")
 
     created = Catalog.create(root, spec)
-    reopened = Catalog.open(root)
+    reopened = Catalog.open(root, read_only=True)
 
     assert created.root == reopened.root
     assert (root / "catalog.json").exists()
@@ -34,7 +34,7 @@ def test_create_preserves_existing_catalog(tmp_path: Path) -> None:
 
     assert (root / "catalog.json").read_bytes() == original_spec
     assert (root / "db.json").read_bytes() == original_db
-    assert Catalog.open(root).get(record.id) == record
+    assert Catalog.open(root, read_only=True).get(record.id) == record
 
 
 def test_create_reuses_directory_without_catalog(tmp_path: Path) -> None:
@@ -411,7 +411,7 @@ def test_catalog_spec_mutation_helpers_persist_updates(tmp_path: Path) -> None:
     )
     catalog.set_default_record_schema("paper")
     catalog.update_spec(catalog_name="library", default_operation="move")
-    reopened = Catalog.open(catalog.root)
+    reopened = Catalog.open(catalog.root, read_only=True)
 
     assert reopened.spec.default_record_schema == "paper"
     assert reopened.spec.catalog_name == "library"

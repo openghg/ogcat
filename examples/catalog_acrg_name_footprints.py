@@ -467,65 +467,70 @@ def build_catalog(
     catalog_name: str,
     append: bool,
 ) -> tuple[Catalog, int, list[Path]]:
-    """Build a catalog of footprint collections from a tree or saved listing."""
+    """Build footprint collections from a tree or listing; the caller closes the result."""
     if source_root is None and listing_path is None:
         raise ValueError("Provide at least one of --source-root or --listing.")
 
     catalog = _open_or_create_catalog(catalog_root, catalog_name=catalog_name, append=append)
 
-    discovered_paths: dict[str, Path] = {}
-    if source_root is not None:
-        for path in discover_paths_from_source_root(source_root):
-            discovered_paths[str(path)] = path
-    if listing_path is not None:
-        for path in discover_paths_from_listing(listing_path):
-            discovered_paths[str(path)] = path
+    try:
+        discovered_paths: dict[str, Path] = {}
+        if source_root is not None:
+            for path in discover_paths_from_source_root(source_root):
+                discovered_paths[str(path)] = path
+        if listing_path is not None:
+            for path in discover_paths_from_listing(listing_path):
+                discovered_paths[str(path)] = path
 
-    all_paths = list(discovered_paths.values())
-    collections, skipped = group_footprint_collections(all_paths)
-    added_count = 0
-    existing_by_key: dict[tuple[Path, str], list[CatalogRecord]] = {}
-    for record in catalog.search(
-        where={"record_type": FOOTPRINT_COLLECTION_RECORD_TYPE}, as_record_set=False
-    ):
-        key = _stored_collection_key(record)
-        if key is not None:
-            existing_by_key.setdefault(key, []).append(record)
-    for collection in collections:
-        key = (collection.collection_root.expanduser().resolve(), collection.collection_pattern)
-        if len(existing_by_key.get(key, [])) > 1:
-            raise ValueError(f"Multiple existing footprint collections match {key[0]} / {key[1]}.")
-    print(f"Discovered {len(all_paths)} candidate NetCDF files in {len(collections)} collection(s).")
-
-    progress = Progress(
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        TimeElapsedColumn(),
-        transient=False,
-    )
-    with progress:
-        task_id = progress.add_task("Cataloging footprint collections", total=len(collections))
-        for index, collection in enumerate(collections, start=1):
-            if index == 1 or index % 50 == 0 or index == len(collections):
-                print(
-                    f"Processing collection {index:,} of {len(collections):,}: {collection.collection_root}",
-                    flush=True,
-                )
+        all_paths = list(discovered_paths.values())
+        collections, skipped = group_footprint_collections(all_paths)
+        added_count = 0
+        existing_by_key: dict[tuple[Path, str], list[CatalogRecord]] = {}
+        for record in catalog.search(
+            where={"record_type": FOOTPRINT_COLLECTION_RECORD_TYPE}, as_record_set=False
+        ):
+            key = _stored_collection_key(record)
+            if key is not None:
+                existing_by_key.setdefault(key, []).append(record)
+        for collection in collections:
             key = (collection.collection_root.expanduser().resolve(), collection.collection_pattern)
-            matching = existing_by_key.get(key, [])
-            if matching:
-                metadata = collection.to_user_metadata()
-                record = matching[0]
-                if any(record.user_metadata.get(name) != value for name, value in metadata.items()):
-                    catalog.update_metadata(record.id, metadata, mode="shallow_merge")
-            else:
-                _add_footprint_collection(catalog, collection)
-                added_count += 1
+            if len(existing_by_key.get(key, [])) > 1:
+                raise ValueError(f"Multiple existing footprint collections match {key[0]} / {key[1]}.")
+        print(f"Discovered {len(all_paths)} candidate NetCDF files in {len(collections)} collection(s).")
 
-            progress.advance(task_id)
+        progress = Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TimeElapsedColumn(),
+            transient=False,
+        )
+        with progress:
+            task_id = progress.add_task("Cataloging footprint collections", total=len(collections))
+            for index, collection in enumerate(collections, start=1):
+                if index == 1 or index % 50 == 0 or index == len(collections):
+                    print(
+                        f"Processing collection {index:,} of {len(collections):,}: "
+                        f"{collection.collection_root}",
+                        flush=True,
+                    )
+                key = (collection.collection_root.expanduser().resolve(), collection.collection_pattern)
+                matching = existing_by_key.get(key, [])
+                if matching:
+                    metadata = collection.to_user_metadata()
+                    record = matching[0]
+                    if any(record.user_metadata.get(name) != value for name, value in metadata.items()):
+                        catalog.update_metadata(record.id, metadata, mode="shallow_merge")
+                else:
+                    _add_footprint_collection(catalog, collection)
+                    added_count += 1
 
-    return catalog, added_count, skipped
+                progress.advance(task_id)
+
+        return catalog, added_count, skipped
+    except BaseException:
+        catalog.close()
+        raise
 
 
 def _stored_collection_key(record: CatalogRecord) -> tuple[Path, str] | None:
@@ -545,10 +550,14 @@ def _open_or_create_catalog(catalog_root: Path, *, catalog_name: str, append: bo
     """Open or create a footprint catalog with the named collection schema."""
     if (catalog_root / "catalog.json").exists():
         catalog = Catalog.open(catalog_root)
-        if not append and catalog.describe()["record_count"] != 0:
-            raise ValueError("Catalog already exists and is not empty. Use --append to add more records.")
-        _ensure_footprint_collection_schema(catalog)
-        return catalog
+        try:
+            if not append and catalog.describe()["record_count"] != 0:
+                raise ValueError("Catalog already exists and is not empty. Use --append to add more records.")
+            _ensure_footprint_collection_schema(catalog)
+            return catalog
+        except BaseException:
+            catalog.close()
+            raise
 
     spec = CatalogSpec(
         catalog_name=catalog_name,

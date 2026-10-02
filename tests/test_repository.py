@@ -5,10 +5,9 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from pathlib import Path
-from typing import cast, get_args, get_type_hints
+from typing import get_args, get_type_hints
 
 import pytest
-from tinydb.storages import JSONStorage
 
 from ogcat.models import (
     ArtifactClaim,
@@ -30,7 +29,8 @@ def test_repository_close_releases_storage_and_rejects_cached_queries(tmp_path: 
         CatalogRecord(catalog="example", time_added="2026-09-25", user_metadata={"species": "co2"})
     )
     assert repository.search(where={"user_metadata.species": "co2"}) == [record]
-    handle = cast(JSONStorage, repository._db.storage)._handle
+    handle = repository._lock_handle
+    assert handle is not None
 
     repository.close()
     repository.close()

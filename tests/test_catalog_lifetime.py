@@ -6,7 +6,6 @@ from typing import cast
 from unittest.mock import Mock
 
 import pytest
-from tinydb.storages import JSONStorage
 
 from ogcat import Catalog, CatalogSpec
 from ogcat.repository import CatalogRepository
@@ -25,7 +24,8 @@ def test_catalog_context_releases_handle_and_preserves_records(
 
     opened = Catalog.open(root, read_only=read_only)
     repository = cast(TinyDbCatalogRepository, opened.repository)
-    descriptor = cast(JSONStorage, repository._db.storage)._handle.fileno()
+    handle = repository._lock_handle
+    descriptor = None if handle is None else handle.fileno()
     try:
         with opened as active:
             assert active is opened
@@ -40,8 +40,11 @@ def test_catalog_context_releases_handle_and_preserves_records(
     else:
         assert not fail
 
-    with pytest.raises(OSError):
-        os.fstat(descriptor)
+    if descriptor is not None:
+        with pytest.raises(OSError):
+            os.fstat(descriptor)
+    with Catalog.open(root):
+        pass
     opened.close()
     with pytest.raises(RuntimeError, match="closed"):
         opened.search(where={"user_metadata.species": "co2"})

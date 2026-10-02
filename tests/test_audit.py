@@ -133,15 +133,16 @@ def test_audit_events_filter_by_user_operation_and_record(tmp_path: Path) -> Non
         record_type="external_reference",
         locator=ArtifactLocator(kind="uri", value="s3://bucket/alice.zarr"),
     )
-    bob_catalog = Catalog.open(root, audit_user_id="bob")
-    bob_record = bob_catalog.add_artifact(
-        record_type="external_reference",
-        locator=ArtifactLocator(kind="uri", value="s3://bucket/bob.zarr"),
-    )
     alice_operation = next(
         event.operation_id
         for event in alice_catalog.audit_events(record_id=alice_record.id)
         if event.event_type == "commit"
+    )
+    alice_catalog.close()
+    bob_catalog = Catalog.open(root, audit_user_id="bob")
+    bob_record = bob_catalog.add_artifact(
+        record_type="external_reference",
+        locator=ArtifactLocator(kind="uri", value="s3://bucket/bob.zarr"),
     )
     bob_operation = next(
         event.operation_id

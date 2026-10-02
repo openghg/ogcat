@@ -247,46 +247,50 @@ def build_catalog(
     append: bool = False,
     enrich: bool = True,
 ) -> tuple[Catalog, int]:
-    """Build an in-place external-reference catalog."""
+    """Build an in-place external-reference catalog; the caller closes the result."""
     sources = _discover_sources(source_root=source_root, listing_path=listing_path)
     resolved_source_root = _resolve_source_root(source_root=source_root, sources=sources)
     catalog = _open_or_create_catalog(catalog_root, catalog_name=catalog_name, append=append)
 
-    added_count = 0
-    pending: list[dict[str, object]] = []
-    progress = _progress()
-    with progress:
-        task_id = progress.add_task("Cataloging flux files", total=len(sources))
-        for source in sources:
-            metadata = parse_flux_metadata(
-                source.path,
-                source_root=resolved_source_root,
-                discovery_mode=source.discovery_mode,
-            )
-            derived_metadata = derive_metadata(source.path, enrich=enrich)
-            pending.append(
-                {
-                    "record_type": "external_reference",
-                    "locator": ArtifactLocator.path(source.path),
-                    "metadata": metadata,
-                    "storage_mode": "external",
-                    "original_path": source.path,
-                    "original_filename": source.path.name,
-                    "suffixes": source.path.suffixes,
-                    "derived_metadata": derived_metadata,
-                }
-            )
-            if len(pending) >= BATCH_SIZE:
+    try:
+        added_count = 0
+        pending: list[dict[str, object]] = []
+        progress = _progress()
+        with progress:
+            task_id = progress.add_task("Cataloging flux files", total=len(sources))
+            for source in sources:
+                metadata = parse_flux_metadata(
+                    source.path,
+                    source_root=resolved_source_root,
+                    discovery_mode=source.discovery_mode,
+                )
+                derived_metadata = derive_metadata(source.path, enrich=enrich)
+                pending.append(
+                    {
+                        "record_type": "external_reference",
+                        "locator": ArtifactLocator.path(source.path),
+                        "metadata": metadata,
+                        "storage_mode": "external",
+                        "original_path": source.path,
+                        "original_filename": source.path.name,
+                        "suffixes": source.path.suffixes,
+                        "derived_metadata": derived_metadata,
+                    }
+                )
+                if len(pending) >= BATCH_SIZE:
+                    catalog.add_artifacts(pending)
+                    added_count += len(pending)
+                    pending.clear()
+                progress.advance(task_id)
+
+            if pending:
                 catalog.add_artifacts(pending)
                 added_count += len(pending)
-                pending.clear()
-            progress.advance(task_id)
 
-        if pending:
-            catalog.add_artifacts(pending)
-            added_count += len(pending)
-
-    return catalog, added_count
+        return catalog, added_count
+    except BaseException:
+        catalog.close()
+        raise
 
 
 def build_symlink_view(
@@ -298,61 +302,65 @@ def build_symlink_view(
     append: bool = False,
     dry_run: bool = False,
 ) -> tuple[Catalog, int]:
-    """Build a symlinked organised view and catalog it as a second catalog."""
-    source_catalog = Catalog.open(source_catalog_root)
+    """Build a symlinked view catalog; the caller closes the returned catalog."""
+    with Catalog.open(source_catalog_root, read_only=True) as source_catalog:
+        records = source_catalog.search()
     view_catalog = _open_or_create_catalog(view_catalog_root, catalog_name=catalog_name, append=append)
-    records = source_catalog.search()
-    added_count = 0
-    pending: list[dict[str, object]] = []
-    progress = _progress()
-    with progress:
-        task_id = progress.add_task("Creating symlink view", total=len(records))
-        for record in records:
-            source_path = record.path()
-            if source_path is None:
+    try:
+        added_count = 0
+        pending: list[dict[str, object]] = []
+        progress = _progress()
+        with progress:
+            task_id = progress.add_task("Creating symlink view", total=len(records))
+            for record in records:
+                source_path = record.path()
+                if source_path is None:
+                    progress.advance(task_id)
+                    continue
+                target, rel_path, resolved_filename = render_storage_location(
+                    files_root=view_root,
+                    directory_template=DEFAULT_DIRECTORY_TEMPLATE,
+                    filename_template=DEFAULT_FILENAME_TEMPLATE,
+                    context=_view_context(record.user_metadata, source_path),
+                )
+                link_status = _ensure_symlink(source_path, target, dry_run=dry_run)
+                pending.append(
+                    {
+                        "record_type": "symlink_view",
+                        "locator": ArtifactLocator.path(target, relative_path=rel_path),
+                        "metadata": dict(record.user_metadata),
+                        "storage_mode": "symlink",
+                        "original_path": source_path,
+                        "original_filename": source_path.name,
+                        "suffixes": source_path.suffixes,
+                        "derived_metadata": {
+                            "symlink": {
+                                "target": str(source_path),
+                                "link_status": link_status,
+                                "dry_run": dry_run,
+                            }
+                        },
+                        "naming_metadata": {
+                            "directory_template": DEFAULT_DIRECTORY_TEMPLATE,
+                            "filename_template": DEFAULT_FILENAME_TEMPLATE,
+                            "resolved_filename": resolved_filename,
+                        },
+                    }
+                )
+                if len(pending) >= BATCH_SIZE:
+                    view_catalog.add_artifacts(pending)
+                    added_count += len(pending)
+                    pending.clear()
                 progress.advance(task_id)
-                continue
-            target, rel_path, resolved_filename = render_storage_location(
-                files_root=view_root,
-                directory_template=DEFAULT_DIRECTORY_TEMPLATE,
-                filename_template=DEFAULT_FILENAME_TEMPLATE,
-                context=_view_context(record.user_metadata, source_path),
-            )
-            link_status = _ensure_symlink(source_path, target, dry_run=dry_run)
-            pending.append(
-                {
-                    "record_type": "symlink_view",
-                    "locator": ArtifactLocator.path(target, relative_path=rel_path),
-                    "metadata": dict(record.user_metadata),
-                    "storage_mode": "symlink",
-                    "original_path": source_path,
-                    "original_filename": source_path.name,
-                    "suffixes": source_path.suffixes,
-                    "derived_metadata": {
-                        "symlink": {
-                            "target": str(source_path),
-                            "link_status": link_status,
-                            "dry_run": dry_run,
-                        }
-                    },
-                    "naming_metadata": {
-                        "directory_template": DEFAULT_DIRECTORY_TEMPLATE,
-                        "filename_template": DEFAULT_FILENAME_TEMPLATE,
-                        "resolved_filename": resolved_filename,
-                    },
-                }
-            )
-            if len(pending) >= BATCH_SIZE:
+
+            if pending:
                 view_catalog.add_artifacts(pending)
                 added_count += len(pending)
-                pending.clear()
-            progress.advance(task_id)
 
-        if pending:
-            view_catalog.add_artifacts(pending)
-            added_count += len(pending)
-
-    return view_catalog, added_count
+        return view_catalog, added_count
+    except BaseException:
+        view_catalog.close()
+        raise
 
 
 def derive_metadata(path: Path, *, enrich: bool) -> MetadataDict:
@@ -507,9 +515,13 @@ def _resolve_source_root(*, source_root: Path | None, sources: list[SourcePath])
 def _open_or_create_catalog(catalog_root: Path, *, catalog_name: str, append: bool) -> Catalog:
     if (catalog_root / "catalog.json").exists():
         catalog = Catalog.open(catalog_root)
-        if not append and catalog.describe()["record_count"] != 0:
-            raise ValueError("Catalog already exists and is not empty. Use --append to add records.")
-        return catalog
+        try:
+            if not append and catalog.describe()["record_count"] != 0:
+                raise ValueError("Catalog already exists and is not empty. Use --append to add records.")
+            return catalog
+        except BaseException:
+            catalog.close()
+            raise
     spec = _catalog_spec(catalog_name)
     return Catalog.create(catalog_root, spec)
 

@@ -73,7 +73,7 @@ def _open_catalog_or_fail(catalog: Path | None, *, read_only: bool = False) -> C
         return get_current_context().with_resource(Catalog.open(catalog_path, read_only=read_only))
     except FileNotFoundError:
         _fail(f"Catalog not found or incomplete at {catalog_path}.")
-    except ValueError as exc:
+    except (ValueError, RuntimeError) as exc:
         _fail(str(exc))
 
 
@@ -102,7 +102,7 @@ def _parse_meta_item(item: str) -> dict[str, Any]:
     stripped = item.strip()
     if not stripped:
         raise typer.BadParameter("Metadata item cannot be empty.")
-    if "=" in stripped:
+    if "=" in stripped and not stripped.startswith("{"):
         key, raw_value = stripped.split("=", 1)
         try:
             value = json.loads(raw_value)
@@ -791,6 +791,59 @@ def show(
     console.print(table)
 
 
+@app.command("update-metadata")
+def update_metadata_command(
+    record_id: Annotated[str, typer.Argument(help="Record id.")],
+    catalog: Annotated[Path | None, typer.Option("--catalog", help="Catalog root.")] = None,
+    meta: Annotated[
+        list[str] | None, typer.Option("--meta", help="Metadata KEY=VALUE or JSON object. Repeatable.")
+    ] = None,
+    replace: Annotated[
+        bool, typer.Option("--replace", help="Replace the whole metadata dictionary instead of merging.")
+    ] = False,
+    remove: Annotated[
+        list[str] | None, typer.Option("--remove", help="Remove a top-level metadata key. Repeatable.")
+    ] = None,
+    derived: Annotated[
+        bool, typer.Option("--derived", help="Edit derived metadata instead of user metadata.")
+    ] = False,
+    json_mode: Annotated[bool, typer.Option("--json", help="Print the updated record as JSON.")] = False,
+) -> None:
+    """Merge, replace, or remove metadata on an existing record."""
+    if meta is None and remove is None and not replace:
+        raise typer.BadParameter("Provide --meta, --remove, or --replace.")
+    if replace and remove:
+        raise typer.BadParameter("Use either --replace or --remove, not both.")
+    metadata = _parse_meta_items([] if meta is None else meta)
+    if any(not key.strip() for key in metadata):
+        raise typer.BadParameter("Metadata key cannot be empty.")
+    if remove and any(not key.strip() for key in remove):
+        raise typer.BadParameter("Metadata removal key cannot be empty.")
+    if remove and set(remove).intersection(metadata):
+        raise typer.BadParameter("Cannot set and remove the same metadata key.")
+
+    active_catalog = _open_catalog_or_fail(catalog)
+    try:
+        if remove:
+            current = active_catalog.get(record_id)
+            if current is None:
+                raise KeyError(f"Record not found: {record_id}")
+            metadata = {
+                **(current.derived_metadata if derived else current.user_metadata),
+                **metadata,
+            }
+            for key in remove:
+                metadata.pop(key, None)
+        update = active_catalog.update_derived_metadata if derived else active_catalog.update_metadata
+        record = update(record_id, metadata, mode="replace" if replace or remove else "shallow_merge")
+    except (KeyError, TypeError, ValueError) as exc:
+        _fail(_format_exception_message(exc))
+    if json_mode:
+        _print_json(record.to_dict())
+        return
+    console.print(f"Updated {record.id}: {'derived' if derived else 'user'} metadata")
+
+
 @app.command("delete")
 def delete_record(
     record_id: Annotated[str, typer.Argument(help="Record id.")],
@@ -918,6 +971,31 @@ def members(
         _fail(str(exc))
     for member in paths:
         typer.echo(str(member))
+
+
+@app.command()
+def check(
+    catalog: Annotated[Path | None, typer.Option("--catalog", help="Catalog root.")] = None,
+    include_deleted: Annotated[
+        bool, typer.Option("--include-deleted", help="Inspect tombstoned records too.")
+    ] = False,
+    json_mode: Annotated[bool, typer.Option("--json", help="Print the issue list as JSON.")] = False,
+) -> None:
+    """Inspect registered local paths and recorded view links without repairs."""
+    active_catalog = _open_catalog_or_fail(catalog, read_only=True)
+    issues = active_catalog.check(include_deleted=include_deleted)
+    if json_mode:
+        _print_json(issues)
+    elif issues:
+        for issue in issues:
+            typer.echo(
+                f"{issue['record_id']} / {issue['artifact_id']}: {issue['code']} "
+                f"at {issue['path']}: {issue['message']}"
+            )
+    else:
+        typer.echo("No registered local path issues observed. Contents and remote locators were not checked.")
+    if issues:
+        raise typer.Exit(code=1)
 
 
 @app.command()

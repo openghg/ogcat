@@ -98,6 +98,7 @@ external_dir.mkdir()
 scratch_dir.mkdir()
 
 catalog = Catalog.create(root / "catalog", spec)
+catalog.close()  # Release the writer lock before opening another writable session.
 catalog = Catalog.open(root / "catalog")
 print(catalog.describe()["record_schemas"])
 ```
@@ -404,14 +405,23 @@ A common notebook pattern is to do heavy work outside ogcat, then register the
 small set of final outputs serially. Use one writer process for a TinyDB
 catalog. Jobs on BP1's GPFS can read with
 `Catalog.open(catalog.root, read_only=True)` and hand finished output paths to
-the writer. Use short catalog contexts as in the footprint selection above,
-then open a fresh read-only catalog after the writer changes it. A registrar
-can likewise use `with Catalog.open(root) as catalog:` around registration of
-finished outputs. The snippets below reuse the notebook's `catalog` variable;
-call `catalog.close()` when that session is finished. Do not hold a catalog
-transaction during a long computation. A catalog context closes its database
-handle without locking the catalog or undoing completed operations; see
+the writer. Use short read-only contexts as in the footprint selection above;
+later queries read the current database, while earlier returned results remain snapshots.
+A registrar uses `with Catalog.open(root) as catalog:` around registration of
+finished outputs. Writable sessions hold the database writer lock until close,
+and a second writable open fails immediately. Close the notebook's writable
+`catalog` before computation or opening a separate registrar.
+
+The snippets below reuse the temporary tutorial's `catalog` variable for
+serial demonstrations; close it when that session finishes. For real long
+computations, obtain input paths in a read-only session, compute, then open a
+short writable session to register outputs. See
 [resource lifetime](../concepts/transactions-and-logging.md).
+
+Existing Verification Games helpers that open overlapping writable catalog
+instances need changes for this enforced lifetime. A separate compatibility
+branch is in progress; this documentation is not evidence of compatibility or
+deployment on BP1.
 
 ### Register an already-written artifact
 
@@ -609,5 +619,6 @@ For general field-discovery and search-containment rules, see
 When you are done with the temporary example catalog:
 
 ```python
+catalog.close()
 work.cleanup()
 ```

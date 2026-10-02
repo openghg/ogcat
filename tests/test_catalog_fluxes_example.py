@@ -174,6 +174,7 @@ def test_derive_metadata_records_enrichment_errors(
 def test_build_catalog_from_listing_creates_external_reference_records(
     catalog_fluxes: ModuleType, tmp_path: Path
 ) -> None:
+    """Listing imports persist records and rejected rebuilds release the writer."""
     listing = tmp_path / "fluxes_ls.txt"
     listing.write_text(
         "\n".join(
@@ -210,6 +211,13 @@ def test_build_catalog_from_listing_creates_external_reference_records(
     assert isinstance(classification, dict)
     assert classification["format"] == "netcdf"
     assert classification["artifact_kind"] == "file"
+    catalog.close()
+    with pytest.raises(ValueError, match="Catalog already exists and is not empty"):
+        catalog_fluxes.build_catalog(
+            catalog_root=tmp_path / "catalog", source_root=None, listing_path=listing
+        )
+    with Catalog.open(tmp_path / "catalog") as reopened:
+        assert len(reopened.search()) == 1
 
 
 def test_build_catalog_from_vendored_personal_flux_listing(
@@ -261,7 +269,32 @@ def test_build_catalog_from_mounted_scan_adds_filesystem_metadata(
     assert record.derived_metadata["filesystem"]["size_bytes"] == len("not actually netcdf")
 
 
-def test_build_symlink_view_creates_second_catalog(catalog_fluxes: ModuleType, tmp_path: Path) -> None:
+def test_failed_catalog_build_releases_writer(
+    catalog_fluxes: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A metadata failure closes the builder's catalog before the caller retries."""
+    source_root = tmp_path / "fluxes"
+    source_root.mkdir()
+    (source_root / "EUROPE-co2-edgarv8-agric-2012.nc").touch()
+
+    def fail_metadata(*args: object, **kwargs: object) -> None:
+        """Simulate a failure after opening the catalog."""
+        raise ValueError("metadata failed")
+
+    monkeypatch.setattr(catalog_fluxes, "parse_flux_metadata", fail_metadata)
+    with pytest.raises(ValueError, match="metadata failed"):
+        catalog_fluxes.build_catalog(
+            catalog_root=tmp_path / "catalog", source_root=source_root, listing_path=None, enrich=False
+        )
+
+    with Catalog.open(tmp_path / "catalog") as reopened:
+        assert reopened.search() == []
+
+
+def test_build_symlink_view_creates_second_catalog(
+    catalog_fluxes: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed view build releases its writer before a successful retry."""
     _skip_if_symlinks_are_unavailable(tmp_path)
     source_root = tmp_path / "fluxes"
     source_dir = source_root / "EUROPE" / "CO2" / "edgarv8" / "agric"
@@ -275,12 +308,24 @@ def test_build_symlink_view_creates_second_catalog(catalog_fluxes: ModuleType, t
         enrich=False,
     )
 
-    view_catalog, added_count = catalog_fluxes.build_symlink_view(
-        source_catalog_root=source_catalog.root,
-        view_root=tmp_path / "view",
-        view_catalog_root=tmp_path / "view-catalog",
-    )
-    record = Catalog.open(view_catalog.root).search()[0]
+    view_kwargs = {
+        "source_catalog_root": source_catalog.root,
+        "view_root": tmp_path / "view",
+        "view_catalog_root": tmp_path / "view-catalog",
+    }
+
+    def fail_symlink(*args: object, **kwargs: object) -> None:
+        """Simulate failure after creating the view catalog."""
+        raise OSError("symlink failed")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(catalog_fluxes, "_ensure_symlink", fail_symlink)
+        with pytest.raises(OSError, match="symlink failed"):
+            catalog_fluxes.build_symlink_view(**view_kwargs)
+
+    view_catalog, added_count = catalog_fluxes.build_symlink_view(**view_kwargs)
+    with Catalog.open(view_catalog.root, read_only=True) as reopened:
+        record = reopened.search()[0]
     link_path = record.path()
 
     assert added_count == 1

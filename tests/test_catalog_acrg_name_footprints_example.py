@@ -104,7 +104,8 @@ def test_build_catalog_from_mounted_footprint_tree_uses_path_collection_locator(
         catalog_name="mounted-footprint-test",
         append=False,
     )
-    record = Catalog.open(catalog.root).get_one(where={"artifact_kind": "collection"})
+    with Catalog.open(catalog.root, read_only=True) as reopened:
+        record = reopened.get_one(where={"artifact_kind": "collection"})
 
     assert added_count == 1
     assert skipped == []
@@ -190,6 +191,9 @@ def test_append_refreshes_existing_mounted_series_without_duplicate(
     }
     catalog, added, _ = build(**kwargs, append=False)
     first = catalog.get_one(where={"record_type": "footprint_collection"})
+    catalog.close()
+    with pytest.raises(ValueError, match="Catalog already exists and is not empty"):
+        build(**kwargs, append=False)
     (source_dir / "BCOB-10magl_NAME_UMG_EASTASIA_inert_202302.nc").touch()
 
     catalog, added_again, skipped = build(**kwargs, append=True)
@@ -222,6 +226,7 @@ def test_append_refreshes_listing_backed_uri_series_without_duplicate(
     catalog, added, _ = build(**kwargs, append=False)
     first = catalog.get_one(where={"record_type": "footprint_collection"})
     assert first.locator.kind == "uri"
+    catalog.close()
     listing.write_text(f"{missing_root}:\n{name}_202301.nc\n{name}_202302.nc\n", encoding="utf-8")
 
     catalog, added_again, _ = build(**kwargs, append=True)
@@ -255,6 +260,10 @@ def test_append_rejects_preexisting_ambiguous_collection_identity(
         catalog_acrg_name_footprints.discover_paths_from_source_root(source_root)
     )
     catalog_acrg_name_footprints._add_footprint_collection(catalog, collections[0])
+    catalog.close()
 
     with pytest.raises(ValueError, match="Multiple existing footprint collections"):
         build(**kwargs, append=True)
+
+    with Catalog.open(kwargs["catalog_root"]) as reopened:
+        assert len(reopened.search(where={"record_type": "footprint_collection"})) == 2

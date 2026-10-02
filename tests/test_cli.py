@@ -85,7 +85,7 @@ def test_init_preserves_existing_catalog(tmp_path: Path) -> None:
     assert "Catalog already exists" in strip_ansi(repeated.output)
     assert "Created catalog" not in strip_ansi(repeated.output)
     assert (root / "catalog.json").read_bytes() == original_spec
-    assert Catalog.open(root).spec.catalog_name == "first"
+    assert Catalog.open(root, read_only=True).spec.catalog_name == "first"
 
 
 def test_cli_releases_catalogs_on_success_and_failure(
@@ -132,12 +132,33 @@ def test_search_json_output(tmp_path: Path) -> None:
     assert payload[0]["user_metadata"]["species"] == "CO2"
 
 
+def test_cli_writer_contention_reports_guidance_without_mutation(tmp_path: Path) -> None:
+    """CLI writes report the competing writer and leave catalog contents unchanged."""
+    with Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files")) as catalog:
+        original = catalog.add_reference(uri="s3://bucket/original.nc")
+        database_path = catalog.root / catalog.spec.db_path
+        before = database_path.read_bytes()
+        result = runner.invoke(
+            app,
+            ["reference", "--uri", "s3://bucket/new.nc", "--catalog", str(catalog.root)],
+        )
+        assert result.exit_code == 1
+        output = strip_ansi(result.output)
+        assert "already has a writer" in output
+        assert "Close" in output
+        assert "read_only=True" in output
+        assert "Traceback" not in output
+        assert database_path.read_bytes() == before
+        assert catalog.search() == [original]
+
+
 def test_reference_cli_registers_local_and_remote_locators(tmp_path: Path) -> None:
     """CLI references keep path, URI, and fsspec URL path kinds distinct."""
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="refs"))
     source = tmp_path / "existing.nc"
     source.write_text("existing", encoding="utf-8")
 
+    catalog.close()
     local = runner.invoke(
         app,
         ["reference", str(source), "--catalog", str(catalog.root), "--meta", "site=MHD", "--json"],
@@ -179,6 +200,7 @@ def test_collection_cli_registers_existing_directory_and_lists_members(tmp_path:
     second.write_text("second", encoding="utf-8")
     (source / "readme.txt").write_text("ignore", encoding="utf-8")
 
+    catalog.close()
     added = runner.invoke(
         app,
         [
@@ -241,10 +263,11 @@ def test_add_and_show_surface_readable_template_path(tmp_path: Path) -> None:
     source = tmp_path / "example.nc"
     source.write_text("data", encoding="utf-8")
 
+    catalog.close()
     added = runner.invoke(app, ["add", str(source), "--catalog", str(catalog.root)])
 
     assert added.exit_code == 0
-    record = Catalog.open(catalog.root).search()[0]
+    record = Catalog.open(catalog.root, read_only=True).search()[0]
     readable = Path(str(record.naming_metadata["template_replica_path"]))
     assert readable.is_symlink()
     assert f"Readable path: {readable}" in strip_ansi(added.output)
@@ -292,6 +315,7 @@ def test_inspection_commands_open_catalog_read_only(tmp_path: Path, monkeypatch)
         assert result.exit_code == 0, result.output
         assert opened_read_only[-1] is True
 
+    catalog.close()
     added = runner.invoke(app, ["reference", "--uri", "s3://bucket/new.nc", "--catalog", str(catalog.root)])
     assert added.exit_code == 0
     assert opened_read_only[-1] is False
@@ -303,6 +327,7 @@ def test_delete_restore_and_deleted_search_flags(tmp_path: Path) -> None:
     record = catalog.search()[0]
     record_id = _record_id(record)
 
+    catalog.close()
     delete_result = runner.invoke(
         app,
         ["delete", record_id, "--catalog", str(catalog.root), "--reason", "duplicate", "--json"],
@@ -361,6 +386,7 @@ def test_purge_cli_requires_confirmation_and_removes_deleted_record(tmp_path: Pa
     record_id = _record_id(record)
     path = record.path()
     assert path is not None
+    catalog.close()
     delete_result = runner.invoke(app, ["delete", record_id, "--catalog", str(catalog.root)])
 
     rejected = runner.invoke(app, ["purge", record_id, "--catalog", str(catalog.root)])
@@ -398,6 +424,7 @@ def test_purge_cli_reports_incomplete_purge_without_success_json(
             raise PermissionError("locked managed artifact")
         original_remove_target(locator, target_kind=target_kind)
 
+    catalog.close()
     delete_result = runner.invoke(app, ["delete", record_id, "--catalog", str(catalog.root)])
     monkeypatch.setattr(operation_runner, "remove_target", fail_remove_target)
 
@@ -969,6 +996,7 @@ def test_spec_cli_adds_schema_sets_default_and_updates_simple_fields(tmp_path: P
         }
     )
 
+    catalog.close()
     add_result = runner.invoke(
         app,
         ["spec", "add-schema", "paper", "--catalog", str(catalog.root), "--schema-json", schema_json],
@@ -989,7 +1017,7 @@ def test_spec_cli_adds_schema_sets_default_and_updates_simple_fields(tmp_path: P
         ],
     )
 
-    reopened = Catalog.open(catalog.root)
+    reopened = Catalog.open(catalog.root, read_only=True)
     assert add_result.exit_code == 0
     assert default_result.exit_code == 0
     assert set_result.exit_code == 0
@@ -1031,6 +1059,7 @@ def test_spec_cli_add_schema_accepts_file_path_with_outer_whitespace(tmp_path: P
     schema_path = tmp_path / "schema.json"
     schema_path.write_text('{"metadata_fields": []}', encoding="utf-8")
 
+    catalog.close()
     result = runner.invoke(
         app,
         [
@@ -1045,12 +1074,13 @@ def test_spec_cli_add_schema_accepts_file_path_with_outer_whitespace(tmp_path: P
     )
 
     assert result.exit_code == 0
-    assert "paper" in Catalog.open(catalog.root).list_record_schemas()
+    assert "paper" in Catalog.open(catalog.root, read_only=True).list_record_schemas()
 
 
 def test_spec_cli_rejects_unknown_field_resolution_order_value(tmp_path: Path) -> None:
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
 
+    catalog.close()
     result = runner.invoke(
         app,
         ["spec", "set", 'field_resolution_order=["user_metadata","unknown"]', "--catalog", str(catalog.root)],
@@ -1063,6 +1093,7 @@ def test_spec_cli_rejects_unknown_field_resolution_order_value(tmp_path: Path) -
 def test_spec_cli_rejects_files_root_update(tmp_path: Path) -> None:
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
 
+    catalog.close()
     result = runner.invoke(
         app,
         ["spec", "set", "files_root=renamed-files", "--catalog", str(catalog.root)],
@@ -1075,6 +1106,7 @@ def test_spec_cli_rejects_files_root_update(tmp_path: Path) -> None:
 def test_spec_cli_rejects_objects_root_update(tmp_path: Path) -> None:
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
 
+    catalog.close()
     result = runner.invoke(
         app,
         ["spec", "set", "objects_root=renamed-objects", "--catalog", str(catalog.root)],
@@ -1089,6 +1121,7 @@ def test_add_accepts_multiple_metadata_items_after_single_meta_flag(tmp_path: Pa
     source = tmp_path / "source.nc"
     source.write_text("dummy", encoding="utf-8")
 
+    catalog.close()
     result = runner.invoke(
         app,
         [
@@ -1104,16 +1137,18 @@ def test_add_accepts_multiple_metadata_items_after_single_meta_flag(tmp_path: Pa
     )
 
     assert result.exit_code == 0
-    record = Catalog.open(catalog.root).get("1")
+    record = Catalog.open(catalog.root, read_only=True).get("1")
     assert record is not None
     assert record.user_metadata == {"species": "CO2", "product": "CTE-HR", "version": "v4.2"}
 
 
 def test_add_accepts_json_object_metadata(tmp_path: Path) -> None:
+    """JSON metadata objects preserve equals signs inside string values."""
     catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="fluxes"))
     source = tmp_path / "source.nc"
     source.write_text("dummy", encoding="utf-8")
 
+    catalog.close()
     result = runner.invoke(
         app,
         [
@@ -1122,14 +1157,18 @@ def test_add_accepts_json_object_metadata(tmp_path: Path) -> None:
             "--catalog",
             str(catalog.root),
             "--meta",
-            '{"species": "CO2", "month": 1}',
+            '{"species": "CO2", "month": 1, "url": "https://example.test/?a=b"}',
         ],
     )
 
     assert result.exit_code == 0
-    record = Catalog.open(catalog.root).get("1")
+    record = Catalog.open(catalog.root, read_only=True).get("1")
     assert record is not None
-    assert record.user_metadata == {"species": "CO2", "month": 1}
+    assert record.user_metadata == {
+        "species": "CO2",
+        "month": 1,
+        "url": "https://example.test/?a=b",
+    }
 
 
 def test_logs_json_filters_by_user(tmp_path: Path) -> None:
@@ -1177,6 +1216,7 @@ def test_add_failure_error_includes_operation_id(tmp_path: Path) -> None:
     source = tmp_path / "source.nc"
     source.write_text("dummy", encoding="utf-8")
 
+    catalog.close()
     result = runner.invoke(app, ["add", str(source), "--catalog", str(catalog.root)])
 
     assert result.exit_code == 1
@@ -1192,6 +1232,102 @@ def test_show_missing_record_returns_helpful_error(tmp_path: Path) -> None:
 
     assert result.exit_code == 1
     assert "Error: Record not found: missing" in strip_ansi(result.stderr)
+
+
+@pytest.mark.parametrize("derived", [False, True])
+def test_update_metadata_cli_merge_replace_remove_and_json(tmp_path: Path, derived: bool) -> None:
+    """Metadata edits retain JSON value types and persist in the selected namespace."""
+    with Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files")) as catalog:
+        record = catalog.add_reference(uri="s3://bucket/data", metadata={"title": "Original"})
+        root = catalog.root
+        record_id = _record_id(record)
+    args = ["update-metadata", record_id, "--catalog", str(root), "--json"]
+    if derived:
+        args.append("--derived")
+    namespace = "derived_metadata" if derived else "user_metadata"
+    result = runner.invoke(
+        app,
+        [*args, "--meta", '{"count": 2, "ready": true, "tags": ["a"], "nested": {"old": 1}}'],
+    )
+    assert result.exit_code == 0, result.output
+    merged = json.loads(result.stdout)[namespace]
+    assert merged["count"] == 2
+    assert merged["ready"] is True
+    assert merged["tags"] == ["a"]
+    assert merged.get("title") == (None if derived else "Original")
+
+    result = runner.invoke(app, [*args, "--remove", "count", "--meta", 'nested={"new": 2}'])
+    assert result.exit_code == 0, result.output
+    removed = json.loads(result.stdout)[namespace]
+    assert "count" not in removed
+    assert removed["nested"] == {"new": 2}
+
+    result = runner.invoke(app, [*args, "--replace", "--meta", "count=3"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)[namespace] == {"count": 3}
+    result = runner.invoke(app, [*args, "--replace"])
+    assert result.exit_code == 0, result.output
+    with Catalog.open(root, read_only=True) as reopened:
+        updated = reopened.get(record_id)
+        assert updated is not None
+        assert getattr(updated, namespace) == {}
+        assert updated.locator == record.locator
+        if derived:
+            assert updated.user_metadata == record.user_metadata
+        else:
+            assert updated.derived_metadata == record.derived_metadata
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        [],
+        ["--meta", "[]"],
+        ["--meta", "not-an-item"],
+        ["--meta", "=value"],
+        ["--replace", "--remove", "title"],
+        ["--meta", "title=Changed", "--remove", "title"],
+        ["--remove", " "],
+    ],
+)
+def test_update_metadata_cli_invalid_options_do_not_mutate(tmp_path: Path, options: list[str]) -> None:
+    """Malformed or conflicting edit options leave the stored record unchanged."""
+    with Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files")) as catalog:
+        record = catalog.add_reference(uri="s3://bucket/data", metadata={"title": "Original"})
+        root = catalog.root
+    result = runner.invoke(app, ["update-metadata", _record_id(record), "--catalog", str(root), *options])
+    assert result.exit_code == 2
+    with Catalog.open(root, read_only=True) as reopened:
+        assert reopened.get(record.id) == record
+
+
+def test_update_metadata_cli_schema_failure_and_missing_id(tmp_path: Path) -> None:
+    """Removing required metadata fails without changing the record; missing ids fail clearly."""
+    with Catalog.create(
+        tmp_path / "catalog",
+        CatalogSpec(
+            catalog_name="files",
+            default_schema=RecordSchema(
+                metadata_fields=[MetadataFieldDescription(name="title", description="Title.", required=True)]
+            ),
+        ),
+    ) as catalog:
+        source = tmp_path / "source.txt"
+        source.write_text("content", encoding="utf-8")
+        record = catalog.add_file(source, metadata={"title": "Original"})
+        root = catalog.root
+    result = runner.invoke(
+        app, ["update-metadata", _record_id(record), "--catalog", str(root), "--remove", "title"]
+    )
+    assert result.exit_code == 1
+    assert "Missing required metadata" in strip_ansi(result.stderr)
+    with Catalog.open(root, read_only=True) as reopened:
+        assert reopened.get(record.id) == record
+    result = runner.invoke(
+        app, ["update-metadata", "missing", "--catalog", str(root), "--meta", "title=Changed"]
+    )
+    assert result.exit_code == 1
+    assert "Record not found: missing" in strip_ansi(result.stderr)
 
 
 def test_missing_catalog_configuration_returns_helpful_error() -> None:

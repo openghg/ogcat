@@ -267,12 +267,12 @@ def test_existing_catalog_record_round_trips_through_tinydb(tmp_path: Path) -> N
         metadata={"title": "Example", "extra": "preserved"},
     )
 
-    reopened = Catalog.open(tmp_path / "catalog")
-    reloaded = reopened.get(record.id or "")
+    with Catalog.open(tmp_path / "catalog", read_only=True) as reopened:
+        reloaded = reopened.get(record.id or "")
 
-    assert reloaded == record
-    assert reloaded is not None
-    assert validate_record(reloaded, spec=reopened.spec).ok
+        assert reloaded == record
+        assert reloaded is not None
+        assert validate_record(reloaded, spec=reopened.spec).ok
 
 
 def test_record_schema_unknown_metadata_flag_round_trips() -> None:

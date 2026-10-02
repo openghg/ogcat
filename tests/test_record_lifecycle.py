@@ -291,6 +291,277 @@ def test_purge_retains_tombstone_when_repository_delete_fails(
     purge_events = catalog.audit_events(record_id=record_id, event_type="purge")
     assert purge_events[-1].exception_type == "RuntimeError"
 
+    with pytest.raises(ValueError, match="Cannot restore record after purge removed artifacts"):
+        catalog.restore(record_id)
+    assert catalog.get(record_id) == retained
+
+
+@pytest.mark.parametrize("deleted_reference", [False, True])
+@pytest.mark.parametrize("force", [False, True])
+def test_purge_rejects_retained_references_before_any_removal(
+    tmp_path: Path,
+    deleted_reference: bool,
+    force: bool,
+) -> None:
+    """Active and deleted references protect managed bytes even with force."""
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+    owner = catalog.add_file(_source_file(tmp_path))
+    owner_id = _record_id(owner)
+    secondary = _add_managed_secondary_artifact(catalog, owner_id, "secondary.txt")
+    # The last artifact is protected, so preflight must precede primary removal.
+    reference = catalog.add_reference(secondary)
+    reference_id = _record_id(reference)
+    if deleted_reference:
+        catalog.delete(reference_id)
+    if not force:
+        catalog.delete(owner_id)
+    before = catalog.get(owner_id)
+
+    with pytest.raises(ValueError, match=reference_id):
+        catalog.purge(owner_id, force=force)
+
+    assert catalog.get(owner_id) == before
+    primary = owner.path()
+    assert primary is not None and primary.exists()
+    assert secondary.exists()
+    assert catalog.audit_events(record_id=owner_id, event_type="purge_artifact") == []
+
+
+@pytest.mark.parametrize("alias", ["direct", "normalized", "symlink", "chain"])
+def test_purge_rejects_shared_primary_path(tmp_path: Path, alias: str) -> None:
+    """Equivalent local paths and readable symlink aliases protect primary data."""
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+    owner = catalog.add_file(_source_file(tmp_path))
+    path = owner.path()
+    assert path is not None
+    if alias == "normalized":
+        path = path.parent / ".." / path.parent.name / path.name
+    elif alias in {"symlink", "chain"}:
+        link = tmp_path / "alias.nc"
+        link.symlink_to(path)
+        path = link
+        if alias == "chain":
+            second_link = tmp_path / "second-alias.nc"
+            second_link.symlink_to(path)
+            path = second_link
+    reference = (
+        catalog.add_reference(path)
+        if alias == "direct"
+        else catalog.add_artifact(record_type="external_file", locator=ArtifactLocator.path(path))
+    )
+    catalog.delete(_record_id(owner))
+
+    with pytest.raises(ValueError, match=_record_id(reference)):
+        catalog.purge(_record_id(owner))
+    assert path.exists()
+
+
+@pytest.mark.parametrize("reference_kind", ["descendant", "root", "symlink_descendant"])
+def test_purge_rejects_directory_dependencies(tmp_path: Path, reference_kind: str) -> None:
+    """Directory removals protect descendants and overlapping collection roots."""
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+    owner = catalog.add_file(_source_file(tmp_path))
+    owner_id = _record_id(owner)
+    directory = catalog.root / catalog.spec.objects_root / "managed-directory"
+    directory.mkdir()
+    member = directory / "member.nc"
+    member.write_text("data", encoding="utf-8")
+    owner.artifacts.append(
+        ArtifactDescriptor(id="directory", role="manifest", locator=ArtifactLocator.path(directory))
+    )
+    catalog.repository.update(owner)
+    if reference_kind == "root":
+        reference = catalog.add_collection(directory.parent)
+    else:
+        path = member
+        if reference_kind == "symlink_descendant":
+            path = tmp_path / "alias.nc"
+            path.symlink_to(member)
+        reference = catalog.add_artifact(record_type="external_file", locator=ArtifactLocator.path(path))
+    catalog.delete(owner_id)
+
+    with pytest.raises(ValueError, match=_record_id(reference)):
+        catalog.purge(owner_id)
+    assert member.exists()
+    primary = owner.path()
+    assert primary is not None and primary.exists()
+
+
+@pytest.mark.parametrize("reference_link", [False, True])
+def test_purge_symlink_distinguishes_link_from_target(tmp_path: Path, reference_link: bool) -> None:
+    """Unlinking an owned symlink protects its aliases but permits target references."""
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+    target = catalog.root / catalog.spec.files_root / "user-owned.nc"
+    target.write_text("data", encoding="utf-8")
+    link = catalog.root / catalog.spec.objects_root / "managed-link.nc"
+    link.symlink_to(target)
+    owner = catalog.add_artifact(record_type="managed_file", locator=ArtifactLocator.path(link))
+    owner.storage_mode = "write"
+    catalog.repository.update(owner)
+    path = target
+    if reference_link:
+        path = tmp_path / "alias.nc"
+        path.symlink_to(link)
+    reference = catalog.add_artifact(record_type="external_file", locator=ArtifactLocator.path(path))
+    catalog.delete(_record_id(owner))
+
+    if reference_link:
+        with pytest.raises(ValueError, match=_record_id(reference)):
+            catalog.purge(_record_id(owner))
+        assert link.is_symlink()
+    else:
+        catalog.purge(_record_id(owner))
+        assert not link.is_symlink()
+    assert target.read_text(encoding="utf-8") == "data"
+
+
+@pytest.mark.parametrize("evidence", ["artifact_state", "removed_count"])
+def test_restore_rejects_removed_purge_artifacts(tmp_path: Path, evidence: str) -> None:
+    """Either persisted removal evidence independently prevents unsafe restore."""
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+    record = catalog.add_file(_source_file(tmp_path))
+    record = catalog.delete(_record_id(record))
+    if evidence == "artifact_state":
+        record.artifacts[0].state = "purged"
+    else:
+        record.lifecycle_metadata["purge_removed_count"] = 1
+    catalog.repository.update(record)
+
+    with pytest.raises(ValueError, match="Cannot restore record after purge removed artifacts"):
+        catalog.restore(_record_id(record))
+    assert catalog.get(_record_id(record)) == record
+
+
+def test_purge_rejects_alias_through_managed_directory_symlink(tmp_path: Path) -> None:
+    """A symlink target's directory components must remain available to aliases."""
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+    actual = catalog.root / catalog.spec.files_root / "actual"
+    actual.mkdir()
+    member = actual / "member.nc"
+    member.write_text("data", encoding="utf-8")
+    managed_link = catalog.root / catalog.spec.objects_root / "managed-linkdir"
+    managed_link.symlink_to(actual, target_is_directory=True)
+    owner = catalog.add_artifact(record_type="managed_file", locator=ArtifactLocator.path(managed_link))
+    owner.storage_mode = "write"
+    catalog.repository.update(owner)
+    alias = tmp_path / "alias.nc"
+    alias.symlink_to(managed_link / member.name)
+    reference = catalog.add_artifact(record_type="external_file", locator=ArtifactLocator.path(alias))
+    catalog.delete(_record_id(owner))
+
+    with pytest.raises(ValueError, match=_record_id(reference)):
+        catalog.purge(_record_id(owner))
+    assert managed_link.is_symlink()
+    assert alias.read_text(encoding="utf-8") == "data"
+
+
+def test_incomplete_forced_purge_retains_hidden_tombstone(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Forced cleanup failures hide the damaged owner and retain deletion metadata."""
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+    owner = catalog.add_file(_source_file(tmp_path))
+    owner_id = _record_id(owner)
+
+    def fail_delete(record_id: str) -> None:
+        """Fail after managed bytes have been removed."""
+        raise RuntimeError(f"repository unavailable for {record_id}")
+
+    monkeypatch.setattr(catalog.repository, "delete", fail_delete)
+
+    with pytest.raises(PurgeIncompleteError):
+        catalog.purge(owner_id, force=True)
+    retained = catalog.get(owner_id)
+    assert retained is not None and retained.status == "deleted"
+    assert "deleted_at" in retained.lifecycle_metadata
+    assert (
+        retained.lifecycle_metadata["delete_operation_id"]
+        == retained.lifecycle_metadata["purge_operation_id"]
+    )
+    assert catalog.search().ids == []
+    with pytest.raises(ValueError, match="Cannot restore record after purge removed artifacts"):
+        catalog.restore(owner_id)
+
+
+def test_purge_retry_preserves_removal_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed cleanup retry cannot erase earlier removals and permit restore."""
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+    owner = catalog.add_file(_source_file(tmp_path))
+    owner_id = _record_id(owner)
+    catalog.delete(owner_id)
+
+    def fail_delete(record_id: str) -> None:
+        """Retain the record after successful artifact removal."""
+        raise RuntimeError(f"repository unavailable for {record_id}")
+
+    monkeypatch.setattr(catalog.repository, "delete", fail_delete)
+    with pytest.raises(PurgeIncompleteError):
+        catalog.purge(owner_id)
+    first = catalog.get(owner_id)
+    assert first is not None
+
+    def fail_remove(
+        locator: ArtifactLocator,
+        *,
+        target_kind: operation_runner.TargetKind = "file",
+    ) -> None:
+        """Fail every retry removal, including already absent paths."""
+        raise PermissionError(f"cannot remove {locator.value} as {target_kind}")
+
+    monkeypatch.setattr(operation_runner, "remove_target", fail_remove)
+    with pytest.raises(PurgeIncompleteError):
+        catalog.purge(owner_id)
+    retried = catalog.get(owner_id)
+    assert retried is not None
+    assert (
+        retried.lifecycle_metadata["purge_removed_count"] == first.lifecycle_metadata["purge_removed_count"]
+    )
+    assert all(artifact.state == "purged" for artifact in retried.artifacts)
+    with pytest.raises(ValueError, match="Cannot restore record after purge removed artifacts"):
+        catalog.restore(owner_id)
+
+
+def test_restore_rejects_partial_directory_removal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Failed directory cleanup can lose members without reporting removal success."""
+    catalog = Catalog.create(tmp_path / "catalog", CatalogSpec(catalog_name="files"))
+    directory = catalog.root / catalog.spec.objects_root / "managed-directory"
+    directory.mkdir()
+    member = directory / "member.nc"
+    member.write_text("data", encoding="utf-8")
+    owner = catalog.add_artifact(record_type="managed_directory", locator=ArtifactLocator.path(directory))
+    owner.storage_mode = "write"
+    catalog.repository.update(owner)
+    owner_id = _record_id(owner)
+    catalog.delete(owner_id)
+
+    def partial_remove(
+        locator: ArtifactLocator,
+        *,
+        target_kind: operation_runner.TargetKind = "file",
+    ) -> None:
+        """Remove a directory member before failing the overall cleanup."""
+        assert locator.as_path() == directory and target_kind == "directory"
+        member.unlink()
+        raise PermissionError("remaining directory entries are locked")
+
+    monkeypatch.setattr(operation_runner, "remove_target", partial_remove)
+    with pytest.raises(PurgeIncompleteError):
+        catalog.purge(owner_id)
+    retained = catalog.get(owner_id)
+    assert retained is not None
+    assert retained.artifacts[0].state == "purge_failed"
+    assert retained.lifecycle_metadata["purge_removed_count"] == 0
+    assert not member.exists()
+    with pytest.raises(ValueError, match="Cannot restore record"):
+        catalog.restore(owner_id)
+
 
 def test_purge_skips_external_path_artifacts(tmp_path: Path) -> None:
     """Purge should skip user-owned paths outside managed catalog roots."""
