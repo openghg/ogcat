@@ -12,7 +12,7 @@ following methods.  You only need to implement the methods you care about.
 |--------|-------------|
 | ``before_validate_metadata(context)`` | Before schema validation. Mutate ``context.user_metadata`` here. |
 | ``after_validate_metadata(context, report)`` | After schema validation. Inspect the validation report. |
-| ``resolve_artifact_locator(context)`` | After the locator is proposed. Replace or extend ``context.planned_locators``. |
+| ``resolve_artifact_locator(context)`` | After the storage plan proposes a locator. Change ``context.planned_locators`` to redirect it; the first locator is canonical. |
 | ``extract_metadata(context)`` | During derived metadata collection. Return a dict to merge into ``context.derived_metadata``. |
 | ``before_record_write(context)`` | Just before writing the record. Last chance to mutate metadata. |
 | ``after_record_write(context)`` | Just after the record is written. Register side-effects here. |
@@ -20,6 +20,15 @@ following methods.  You only need to implement the methods you care about.
 | ``after_commit(context)`` | After committing the transaction (errors here become warnings). |
 | ``on_error(context, error)`` | When the operation fails. |
 | ``on_rollback(context, error)`` | After rollback has run. |
+
+For add operations, storage planning runs once after metadata validation.
+Set metadata used by a naming template in ``before_validate_metadata``.
+Changing metadata during ``resolve_artifact_locator`` does not render a new
+destination; redirect ``context.planned_locators`` explicitly instead.
+``context.storage_plan`` is still ``None`` in that hook. After it returns,
+ogcat adjusts the proposed plan to the canonical locator and exposes the final
+plan to the writer and later hooks. Final validation still rejects invalid
+metadata or target changes made after writing.
 
 ## Registering hooks
 

@@ -193,6 +193,19 @@ Only one process should write a TinyDB catalog. Workers can open
 This matters on BP1's GPFS as well as local filesystems: ogcat does not coordinate concurrent
 TinyDB writers.
 
+Use a context manager to release the database handle after a short query or registration session:
+
+```python
+with Catalog.open(root, read_only=True) as reader:
+    record = reader.get_one(where={"title": "Q1 Report"})
+    input_path = reader.path(record.id)
+# Use input_path for computation after the catalog has closed.
+```
+
+You can also call `catalog.close()` explicitly. Closing releases resources; completed adds remain
+committed. Nest explicit transactions inside the catalog context so rollback finishes before
+closing. See [resource lifetime and transactions](docs/concepts/transactions-and-logging.md).
+
 By default, `add_file()` stores the primary artifact under a UUID path and creates a template-based
 symlink replica for human-readable browsing. Pass `primary_location="template"` when the template
 path should be the primary storage location.

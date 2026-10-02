@@ -128,7 +128,8 @@ writers, and invokes the add coordinator. This keeps the public API methods focu
 contract rather than the add lifecycle details.
 
 `AddOperationRunner` implements the add lifecycle for
-`add_file()` and `add_artifact()`: validation, hook dispatch, locator resolution, storage planning,
+`add_file()` and `add_artifact()`: validation, one proposed storage plan, locator hook dispatch,
+adjustment of the plan to the resolved locator,
 artifact writing or reference skipping, derived metadata collection, record staging, required
 secondary artifact operations, commit, audit, and rollback.
 `RecordLifecycleOperationRunner` coordinates delete, restore, and purge. These are ordinary
@@ -144,6 +145,10 @@ contract explicit without sharing add-only request fields with record-lifecycle 
 locator, file-like or directory-like target kind, write mode, ownership, and placement metadata.
 Small materialisation helpers derive or validate that plan from a locator and optional writer;
 there is no separate intent/target/plan object hierarchy.
+The locator hook sees the proposed locator with `context.storage_plan` still
+unset. The runner then assigns the adjusted plan before writing; it does not
+repeat naming or collision selection after the hook. Managed plans retain
+storage-root-relative naming metadata when their locator is redirected.
 
 Secondary artifacts, such as the optional default human-readable template symlink for UUID primary
 storage, are modeled as ordered secondary operations. Any selected secondary operations run after

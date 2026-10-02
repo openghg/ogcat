@@ -54,25 +54,29 @@ from pathlib import Path
 from ogcat import Catalog, CatalogSpec
 
 spec = CatalogSpec(catalog_name="demo")
-catalog = Catalog.create("./my-catalog", spec)
+with Catalog.create("./my-catalog", spec) as catalog:
+    record = catalog.add_file(
+        Path("report.pdf"),
+        metadata={"title": "Q1 Report", "author": "Alice", "year": 2024},
+    )
+    print(record.id)
+    print(catalog.path(record.id))
 
-record = catalog.add_file(
-    Path("report.pdf"),
-    metadata={"title": "Q1 Report", "author": "Alice", "year": 2024},
-)
-print(record.id)
-print(catalog.path(record.id))
-
-matches = catalog.search(where={"author": "Alice"})
+    matches = catalog.search(where={"author": "Alice"})
 
 # Open a separate read-only view for queries in another process.
-reader = Catalog.open("./my-catalog", read_only=True)
-print(reader.get_one(where={"title": "Q1 Report", "author": "Alice"}).id)
+with Catalog.open("./my-catalog", read_only=True) as reader:
+    print(reader.get_one(where={"title": "Q1 Report", "author": "Alice"}).id)
 ```
 
 ``get_one()`` raises an error if no record or more than one record matches.
 Use enough metadata to identify the intended artifact. A read-only catalog
 rejects writes; reopen it to see writes made by another process.
+The context manager closes the database handle on exit, including when an
+exception occurs. Already returned records and search results remain usable.
+For a long-lived notebook variable, call ``catalog.close()`` when finished.
+Closing does not roll back completed operations; see
+[transactions and resource lifetime](concepts/transactions-and-logging.md).
 
 Only one process should write a TinyDB catalog. Run long computations outside
 catalog transactions, then register their finished outputs through one writer.

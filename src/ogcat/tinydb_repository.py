@@ -1,4 +1,9 @@
-"""TinyDB-backed repository implementation."""
+"""TinyDB storage for catalog records with explicit resource cleanup.
+
+Repositories hold a database file handle until ``close`` is called. Closing is
+idempotent and rejects subsequent reads and writes, including cached searches.
+It does not commit or roll back catalog units of work.
+"""
 
 from __future__ import annotations
 
@@ -27,11 +32,22 @@ class TinyDbCatalogRepository:
         """
         self._db_path = db_path
         self._read_only = read_only
+        self._closed = False
         if read_only:
             self._db = TinyDB(db_path, storage=JSONStorage, access_mode="r")
         else:
             self._db_path.parent.mkdir(parents=True, exist_ok=True)
             self._db = TinyDB(db_path)
+
+    def close(self) -> None:
+        """Release the database file handle; repeated calls have no effect.
+
+        Reads and mutations after closing raise ``RuntimeError``. This method
+        does not commit or roll back catalog units of work.
+        """
+        if not self._closed:
+            self._db.close()
+            self._closed = True
 
     def insert(self, record: CatalogRecord) -> CatalogRecord:
         """Insert a new record and return it with its TinyDB doc_id."""
@@ -56,6 +72,7 @@ class TinyDbCatalogRepository:
 
     def get(self, record_id: str) -> CatalogRecord | None:
         """Get a record by id."""
+        self._require_open()
         if record_id.isdigit():
             result = self._db.get(doc_id=int(record_id))
         else:
@@ -103,6 +120,7 @@ class TinyDbCatalogRepository:
         resolution_order: Sequence[str] | None = None,
     ) -> list[CatalogRecord]:
         """Search records."""
+        self._require_open()
         active_query = (query or SearchQuery.all()).and_(
             SearchQuery.from_filters(
                 where=where,
@@ -132,10 +150,17 @@ class TinyDbCatalogRepository:
 
     def all(self) -> list[CatalogRecord]:
         """Return all records."""
+        self._require_open()
         return [self._record_from_document(item) for item in self._db.all()]
+
+    def _require_open(self) -> None:
+        """Reject access after the database handle has been released."""
+        if self._closed:
+            raise RuntimeError(f"Catalog database is closed: {self._db_path}")
 
     def _require_writable(self) -> None:
         """Reject mutations on a database opened for reading."""
+        self._require_open()
         if self._read_only:
             raise PermissionError(f"Catalog database is read-only: {self._db_path}")
 
