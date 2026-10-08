@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from fnmatch import fnmatchcase
 from typing import Any
@@ -82,6 +83,43 @@ class SearchOp(StrEnum):
     EXISTS = "exists"
     MISSING = "missing"
     REGEX = "regex"
+    DATE_BETWEEN = "date_between"
+
+
+def _parse_date(value: Any, format: str, *, label: str) -> datetime:
+    """Parse an explicitly formatted date without discarding its time or timezone."""
+    if not isinstance(value, str):
+        raise TypeError(f"{label} must be a date string, got {type(value).__name__}.")
+    try:
+        return datetime.strptime(value, format)
+    except ValueError as error:
+        raise ValueError(f"{label} {value!r} does not match date format {format!r}: {error}") from error
+
+
+@dataclass(frozen=True, slots=True)
+class _DateRange:
+    """Parsed inclusive bounds and the explicit format for stored dates."""
+
+    start: datetime
+    end: datetime
+    format: str
+
+    @classmethod
+    def build(cls, start: str, end: str, format: str) -> _DateRange:
+        """Validate date bounds before any records are evaluated."""
+        if not isinstance(format, str):
+            raise TypeError("Date format must be a string.")
+        if not format:
+            raise ValueError("Date format cannot be empty.")
+        lower = _parse_date(start, format, label="Date range start")
+        upper = _parse_date(end, format, label="Date range end")
+        try:
+            reversed_range = lower > upper
+        except TypeError as error:
+            raise ValueError("Date range bounds have incompatible timezone awareness.") from error
+        if reversed_range:
+            raise ValueError("Date range start must be before or equal to end.")
+        return cls(lower, upper, format)
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +156,39 @@ class _SearchQueryTermBuilder:
         def build(field: str, value: Any = None) -> SearchQuery:
             base_query = owner.all() if query is None else query
             return base_query.and_(owner((SearchTerm.build(field=field, op=self._op, value=value),)))
+
+        return build
+
+
+class _SearchQueryDateBuilder:
+    """Build or append an inclusive date range query."""
+
+    def __get__(self, query: SearchQuery | None, owner: type[SearchQuery]) -> Any:
+        """Return a date range constructor using the caller's current query."""
+
+        def build(field: str, start: str, end: str, *, format: str = "%Y-%m-%d") -> SearchQuery:
+            """Match dates using one explicit format for metadata and both bounds.
+
+            Args:
+                field: Date metadata field to resolve.
+                start: Inclusive lower bound as a date string.
+                end: Inclusive upper bound as a date string.
+                format: Nonempty ``datetime.strptime`` format used for stored
+                    values and both bounds, including time or timezone when present.
+
+            Returns:
+                A query requiring this date range and any preceding terms.
+
+            Raises:
+                TypeError: A bound or format is not a string.
+                ValueError: The format is empty, a bound does not match the
+                    format, bounds have incompatible timezone awareness, or
+                    the start is after the end.
+            """
+            value = _DateRange.build(start, end, format)
+            term = SearchTerm.build(field=field, op=SearchOp.DATE_BETWEEN, value=value)
+            base_query = owner.all() if query is None else query
+            return base_query.and_(owner((term,)))
 
         return build
 
@@ -169,6 +240,7 @@ class SearchQuery:
     regex = _SearchQueryTermBuilder(SearchOp.REGEX)
     exists = _SearchQueryTermBuilder(SearchOp.EXISTS)
     missing = _SearchQueryTermBuilder(SearchOp.MISSING)
+    date_between = _SearchQueryDateBuilder()
 
     @classmethod
     def where(cls, filters: Mapping[str, Any] | None = None, **kwargs: Any) -> SearchQuery:
@@ -411,21 +483,32 @@ def _match(actual: Any, pattern: str, ignore_case: bool) -> bool:
     return pattern_text in text
 
 
-def _matches_criterion(
-    record: CatalogRecord,
+def _matches_resolved(
+    resolved: FieldLookup,
     term: SearchTerm,
     *,
     ignore_case: bool,
-    resolution_order: Sequence[str] | None,
 ) -> bool:
-    """Return whether a record matches one criterion."""
-    resolved = resolve_field(record, term.field.stored, resolution_order=resolution_order)
+    """Return whether a resolved value matches one criterion."""
     if term.op == SearchOp.EXISTS:
         return resolved.found
     if term.op == SearchOp.MISSING:
         return not resolved.found
     if not resolved.found:
         return False
+    if term.op == SearchOp.DATE_BETWEEN:
+        if resolved.value is None:
+            return False
+        bounds = term.value
+        if not isinstance(bounds, _DateRange):
+            raise TypeError("Date range terms must be constructed with SearchQuery.date_between().")
+        actual = _parse_date(resolved.value, bounds.format, label=f"Date field {term.field.raw!r}")
+        try:
+            return bounds.start <= actual <= bounds.end
+        except TypeError as error:
+            raise ValueError(
+                f"Date field {term.field.raw!r} and range bounds have incompatible timezone awareness."
+            ) from error
     if term.op == SearchOp.EQ:
         return _eq(resolved.value, term.value, ignore_case)
     if term.op == SearchOp.CONTAINS:
@@ -461,13 +544,58 @@ def matches_record(
         missing=missing,
     )
     active_query = (query or SearchQuery.all()).and_(filter_query)
-    for term in active_query.terms:
-        if not _matches_criterion(
-            record,
+    for term in sorted(active_query.terms, key=lambda item: item.op == SearchOp.DATE_BETWEEN):
+        if not _matches_resolved(
+            resolve_field(record, term.field.stored, resolution_order=resolution_order),
             term,
             ignore_case=ignore_case,
-            resolution_order=resolution_order,
         ):
             return False
 
+    return True
+
+
+def matches_metadata(
+    metadata: Mapping[str, Any],
+    *,
+    query: SearchQuery | None = None,
+    where: Mapping[str, object] | None = None,
+    contains: Mapping[str, Any] | None = None,
+    regex: Mapping[str, str] | None = None,
+    match: Mapping[str, str] | None = None,
+    exists: Sequence[str] | None = None,
+    missing: Sequence[str] | None = None,
+    ignore_case: bool = False,
+) -> bool:
+    """Match plain metadata using the same operators as catalog record search.
+
+    Args:
+        metadata: Metadata mapping with plain or nested keys.
+        query: Optional query combined with the filter arguments using AND.
+        where: Field equality filters.
+        contains: Field containment filters.
+        regex: Regular expression filters.
+        match: Glob or substring filters.
+        exists: Fields that must be present, including null values.
+        missing: Fields that must be absent.
+        ignore_case: Whether string comparisons ignore case.
+
+    Returns:
+        Whether every requested term matches. Field paths refer directly to
+        this mapping; record namespace aliases are not applied.
+    """
+    filters = SearchQuery.from_filters(
+        where=where, contains=contains, regex=regex, match=match, exists=exists, missing=missing
+    )
+    active_query = (query or SearchQuery.all()).and_(filters)
+    for term in sorted(active_query.terms, key=lambda item: item.op == SearchOp.DATE_BETWEEN):
+        current: Any = metadata
+        found = True
+        for part in term.field.raw.split("."):
+            if not isinstance(current, Mapping) or part not in current:
+                found = False
+                break
+            current = current[part]
+        if not _matches_resolved(FieldLookup(found=found, value=current), term, ignore_case=ignore_case):
+            return False
     return True

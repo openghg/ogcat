@@ -310,10 +310,73 @@ records = catalog.search(
 )
 ```
 
-ogcat does not interpret the member pattern beyond validating that it is a safe
-relative pattern. Downstream code is responsible for resolving the root and
-opening members, for example with xarray when ``reader_hint`` is
-``"xarray.open_mfdataset"``.
+For local collections, ``catalog.member_paths(record.id)`` applies the stored
+relative glob to the current directory and returns sorted paths. URI and
+URL-path collections cannot currently be expanded. Patterns must remain within
+the collection root, including when matching symlinks.
+
+### Inspect and filter live members
+
+``Catalog.members(...)`` returns an ordinary list of ``CollectionEntry`` objects.
+Each entry has a ``locator``, plain ``metadata``, and a ``path()`` helper. Pass a
+callable that takes a ``Path`` and returns a JSON-compatible metadata mapping or
+``None`` to extract facts at read time:
+
+```python
+from pathlib import Path
+
+from ogcat import SearchQuery
+
+
+def monthly_metadata(path: Path) -> dict[str, object]:
+    """Read a YYYYMM coordinate from this example's filename convention."""
+    month = path.stem.rsplit("_", 1)[-1]
+    return {"month": f"{month[:4]}-{month[4:]}"}
+
+
+entries = catalog.members(
+    footprints.id,
+    extractor=monthly_metadata,
+    query=SearchQuery.date_between("month", "2023-01", "2023-12", format="%Y-%m"),
+)
+paths = [entry.path() for entry in entries]
+```
+
+Enumeration reflects the filesystem when the call runs. Extracted metadata and
+members are not persisted as catalog records, and reads run no ingest or
+metadata-mutation hooks. Extractors are trusted caller code: keep them read-only;
+their exceptions propagate. Without an extractor, entries have empty metadata.
+Parent metadata is not inherited. Supply parent context explicitly through a
+closure or ``functools.partial`` when the filename alone is insufficient.
+
+Use ``Catalog.search(query=...)`` to filter persisted record metadata and
+``Catalog.members(query=...)`` to filter live extracted member metadata. The
+same ``SearchQuery`` operators apply to both; see
+[Search and record sets](../api/search.rst) for date-range semantics.
+
+### Explicit nested collections
+
+A returned directory is initially a leaf, including a directory-backed Zarr
+dataset. Declare traversal by passing a relative ``pattern`` to its ``members``
+method, or by constructing a ``CollectionEntry`` with ``member_pattern``:
+
+```python
+from ogcat import ArtifactLocator, CollectionEntry
+
+group = CollectionEntry(
+    locator=ArtifactLocator.from_path(Path("/data/example/monthly-series")),
+    metadata={"product": "example"},
+    member_pattern="*.nc",
+)
+entries = group.members(extractor=monthly_metadata)
+# For an entry returned from a parent collection:
+# entries = directory_entry.members(pattern="*.nc", extractor=monthly_metadata)
+```
+
+Traversal does not recurse automatically, and each returned child starts as a
+leaf. Each level needs an explicit pattern and extractor. Downstream code opens
+the selected paths, for example with xarray when ``reader_hint`` is
+``"xarray.open_mfdataset"``; ogcat does not interpret that hint.
 
 ## Catalog layout
 

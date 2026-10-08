@@ -159,7 +159,7 @@ class CatalogApplication:
         """Run the general add-artifact operation."""
         operation_source = source or OperationSource(
             kind="external",
-            path=locator.as_path(),
+            path=locator.as_path() if artifact_writer is None else None,
             descriptor=locator.value,
         )
 

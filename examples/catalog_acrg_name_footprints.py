@@ -55,8 +55,8 @@ from pathlib import Path
 
 from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn, TimeElapsedColumn
 
-from ogcat import Catalog, CatalogSpec, MetadataFieldDescription, RecordSchema
-from ogcat.models import CatalogRecord
+from ogcat import Catalog, CatalogSpec, MetadataFieldDescription, RecordSchema, SearchQuery
+from ogcat.models import CatalogRecord, MetadataDict
 
 FOOTPRINT_COLLECTION_RECORD_TYPE = "footprint_collection"
 
@@ -340,6 +340,43 @@ def group_footprint_collections(paths: list[Path]) -> tuple[list[FootprintCollec
     return collections, skipped
 
 
+def footprint_member_metadata(path: Path) -> MetadataDict:
+    """Extract live NAME metadata from a member filename without opening it.
+
+    Args:
+        path: Local monthly footprint path. Supported NAME filenames provide
+            site, inlet, model, met_model, domain and species metadata. Legacy
+            filenames with only a YYYYMM suffix still provide year and month.
+
+    Returns:
+        Member metadata with an integer year and a ``YYYY-MM`` month coordinate.
+
+    Raises:
+        ValueError: If the filename has no valid YYYYMM suffix.
+    """
+    match = FOOTPRINT_MEMBER_DATE_RE.search(path.name)
+    if match is None:
+        raise ValueError(f"Footprint member has no YYYYMM filename suffix: {path}")
+    year, month = int(match.group("year")), int(match.group("month"))
+    try:
+        date(year, month, 1)
+    except ValueError as exc:
+        raise ValueError(f"Footprint member has an invalid YYYYMM suffix: {path}") from exc
+
+    metadata: MetadataDict = {"year": year, "month": f"{year:04d}-{month:02d}"}
+    parsed = parse_footprint_path(path)
+    if parsed is not None:
+        metadata.update(
+            site=parsed.site,
+            inlet=parsed.inlet,
+            model=parsed.model,
+            met_model=parsed.met_model,
+            domain=parsed.domain,
+            species=parsed.species,
+        )
+    return metadata
+
+
 def _collection_pattern_for_member(path: Path) -> str:
     """Return the member glob for files in the same footprint series."""
     pattern, replacements = FOOTPRINT_MEMBER_DATE_RE.subn("_*.nc", path.name)
@@ -391,20 +428,18 @@ def select_monthly_footprint_paths(
         raise ValueError("start_month must be no later than end_month.")
 
     by_month: dict[int, Path] = {}
-    for path in catalog.member_paths(record_id):
-        match = FOOTPRINT_MEMBER_DATE_RE.search(path.name)
-        if match is None:
-            raise ValueError(f"Footprint member has no YYYYMM filename suffix: {path}")
-        year, month = int(match.group("year")), int(match.group("month"))
-        try:
-            date(year, month, 1)
-        except ValueError as exc:
-            raise ValueError(f"Footprint member has an invalid YYYYMM suffix: {path}") from exc
-        number = year * 12 + month - 1
-        if first <= number <= last:
-            if number in by_month:
-                raise ValueError(f"Multiple footprint files found for {year:04d}-{month:02d}.")
-            by_month[number] = path
+    for member in catalog.members(
+        record_id,
+        extractor=footprint_member_metadata,
+        query=SearchQuery.date_between("month", start_month, end_month, format="%Y-%m"),
+    ):
+        month = str(member.metadata["month"])
+        number = month_number(month)
+        if number in by_month:
+            raise ValueError(f"Multiple footprint files found for {month}.")
+        path = member.path()
+        assert path is not None  # Catalog.members only enumerates local collections.
+        by_month[number] = path
 
     missing = [
         f"{number // 12:04d}-{number % 12 + 1:02d}"

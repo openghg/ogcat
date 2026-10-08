@@ -16,3 +16,14 @@ the tombstone with purge outcome metadata.
 .. autoclass:: ogcat.Catalog
    :members:
    :member-order: bysource
+
+Live collection entries
+-----------------------
+
+``Catalog.members()`` returns an ordinary list of live entries, independent of
+persisted child records. See :doc:`../concepts/locators-and-storage` for extraction
+and explicit nested traversal examples.
+
+.. autoclass:: ogcat.CollectionEntry
+   :members:
+   :member-order: bysource
