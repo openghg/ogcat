@@ -247,7 +247,7 @@ with Catalog.open("/group/chem/acrg/fp_name_catalog", read_only=True) as footpri
             "species": "co2",
             "model": "NAME",
             "met_model": "UKV",
-            "inlet": "10magl",
+            "inlet": "10m",
         }
     )
     paths_2021 = select_monthly_footprint_paths(
@@ -259,7 +259,8 @@ with Catalog.open("/group/chem/acrg/fp_name_catalog", read_only=True) as footpri
 # ds = xr.open_mfdataset(paths_2021)
 ```
 
-`met_model` matters here: UKV and UMG can both match the other MHD fields.
+The stored inlet is `"10m"`, although the directory and filenames use
+`10magl`. `met_model` matters here: UKV and UMG can both match the other MHD fields.
 The helper lists local members from the chosen collection and fails on
 missing or duplicate months before xarray opens any files. It is an example
 helper, not a `Catalog` method; other filename conventions need their own

@@ -1,6 +1,6 @@
 # Single-user workflow implementation record
 
-Status: core delivery on main, updated 2026-10-02; started 2026-09-25. The
+Status: core delivery on main, updated 2026-10-08; started 2026-09-25. The
 [roadmap](../roadmap.md) gives the shorter priority order. This page records
 the reasons for changes and the compatibility checks; it is not an additional
 public API specification.
@@ -195,6 +195,13 @@ Next work is targeted deployment-filesystem durability/recovery evidence and
 adoption of the reviewed consumer adaptations. Optional managed-path adoption still needs a real
 workflow, containment checks, and completion semantics. Extra abstractions,
 backend migrations, and automatic destructive repair remain deferred.
+
+## Footprint recipe correction — 2026-10-08
+
+Corrected the existing BP1 recipe's inlet filter to `10m`. The importer stores
+that metadata value while retaining `10magl` in filenames, so the previous
+filter returned no matching series. No query API changed. The full local suite
+passed (640 tests, four optional-backend skips).
 
 ## Deliberately deferred
 
