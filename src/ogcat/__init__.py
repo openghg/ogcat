@@ -22,6 +22,7 @@ from ogcat.capabilities import (
 )
 from ogcat.catalog import Catalog
 from ogcat.classification import classify_artifact, collection_classification_metadata
+from ogcat.collection_entries import CollectionEntry, MetadataExtractorHook
 from ogcat.exceptions import PurgeIncompleteError
 from ogcat.hooks import ArtifactWriter, HookManager, HookWarning, OperationContext, OperationSource
 from ogcat.models import (
@@ -104,6 +105,8 @@ __all__ = [
     "CatalogRecord",
     "CatalogRecordSet",
     "CatalogSpec",
+    "CollectionEntry",
+    "MetadataExtractorHook",
     "classify_artifact",
     "claim_key",
     "collection_classification_metadata",

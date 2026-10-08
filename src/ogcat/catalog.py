@@ -31,6 +31,7 @@ from ogcat.classification import (
     _normalize_collection_pattern,
     collection_classification_metadata,
 )
+from ogcat.collection_entries import CollectionEntry, MetadataExtractor, _local_member_paths
 from ogcat.hooks import (
     ArtifactWriter,
     HookLifecycleEvent,
@@ -64,7 +65,7 @@ from ogcat.replicas import (
     plan_replica_view,
 )
 from ogcat.repository import CatalogRepository
-from ogcat.search import SearchQuery
+from ogcat.search import SearchOp, SearchQuery, matches_record
 from ogcat.spec import CatalogSpec, RecordSchema
 from ogcat.storage import (
     StoragePlan,
@@ -509,7 +510,9 @@ class Catalog:
             derived_metadata: Optional derived metadata to persist.
             naming_metadata: Optional naming metadata to persist.
             time_added: Optional timestamp override.
-            source: Optional operation source for hooks and writers.
+            source: Optional operation source for hooks and writers. Without a
+                writer, defaults to the referenced locator. With a writer,
+                no local input path is inferred from the output destination.
             artifact_writer: Optional writer that materialises data before the
                 record is written.
             transaction: Optional caller-owned unit of work.
@@ -998,8 +1001,13 @@ class Catalog:
             include_deleted=include_deleted,
             only_deleted=only_deleted,
         )
+        # Parse dates only after ordinary filters and lifecycle visibility have
+        # selected candidates; hidden records must not fail a visible search.
+        terms = query.terms if query is not None else ()
+        date_query = SearchQuery(tuple(term for term in terms if term.op == SearchOp.DATE_BETWEEN))
+        candidate_query = SearchQuery(tuple(term for term in terms if term.op != SearchOp.DATE_BETWEEN))
         results = self.repository.search(
-            query=query,
+            query=candidate_query if date_query.terms else query,
             where=where,
             contains=contains,
             regex=regex,
@@ -1014,6 +1022,20 @@ class Catalog:
             include_deleted=include_deleted,
             only_deleted=only_deleted,
         )
+        if date_query.terms:
+            results = [
+                record
+                for record in results
+                if matches_record(
+                    record,
+                    query=date_query,
+                    where=None,
+                    contains=None,
+                    regex=None,
+                    ignore_case=ignore_case,
+                    resolution_order=self.spec.field_resolution_order,
+                )
+            ]
         if as_record_set:
             return self.record_set(results)
         return results
@@ -1190,6 +1212,12 @@ class Catalog:
             NotImplementedError: If the collection has a non-local locator.
             FileNotFoundError: If the local collection root is unavailable.
         """
+        entry = self._collection_entry(record_id)
+        assert entry.member_pattern is not None
+        return _local_member_paths(entry.locator, entry.member_pattern)
+
+    def _collection_entry(self, record_id: object) -> CollectionEntry:
+        """Build a read-side root from an active, explicitly classified collection."""
         record = self.get(record_id)
         if record is None:
             raise KeyError(f"Record {record_id!s} does not exist.")
@@ -1201,22 +1229,70 @@ class Catalog:
         ):
             raise ValueError(f"Record {record_id!s} is not an active collection.")
         if record.locator.kind != "path":
-            raise NotImplementedError("member_paths supports local path collections only.")
+            raise NotImplementedError("Collection members support local path collections only.")
         root = record.path()
         if root is None or not root.is_dir():
             raise FileNotFoundError(f"Collection root is not an existing directory: {root}")
         raw_pattern = classification.get("collection_pattern")
         if not isinstance(raw_pattern, str):
             raise ValueError("Collection record has no valid collection_pattern.")
-        pattern = _normalize_collection_pattern(raw_pattern)
-        resolved_root = root.resolve()
-        members: list[Path] = []
-        for candidate in root.glob(pattern):
-            if not candidate.resolve().is_relative_to(resolved_root):
-                raise ValueError(f"Collection member escapes its root: {candidate}")
-            if candidate.exists():
-                members.append(candidate)
-        return sorted(members)
+        return CollectionEntry(record.locator, {}, member_pattern=_normalize_collection_pattern(raw_pattern))
+
+    def members(
+        self,
+        record_id: object,
+        *,
+        extractor: MetadataExtractor | None = None,
+        query: SearchQuery | None = None,
+        where: Mapping[str, object] | None = None,
+        contains: Mapping[str, object] | None = None,
+        regex: Mapping[str, str] | None = None,
+        match: Mapping[str, str] | None = None,
+        exists: Sequence[str] | None = None,
+        missing: Sequence[str] | None = None,
+        ignore_case: bool = False,
+    ) -> list[CollectionEntry]:
+        """Extract and filter live members without persisting child records.
+
+        Args:
+            record_id: Identifier of an active local collection record.
+            extractor: Plain path-to-metadata callable. Parent metadata is not
+                inherited; supply declared context through a closure or partial.
+            query: Optional query over extracted metadata.
+            where: Equality filters.
+            contains: Substring or list-membership filters.
+            regex: Regular-expression filters.
+            match: Glob or substring filters.
+            exists: Metadata fields that must be present.
+            missing: Metadata fields that must be absent.
+            ignore_case: Whether string comparisons ignore case.
+
+        Returns:
+            Matching live entries in path order. Each entry is initially a leaf;
+            supply an explicit pattern to its ``members`` method for nesting.
+
+        Raises:
+            KeyError: If the record does not exist.
+            ValueError: If the record is not an active collection or traversal
+                escapes its local root.
+            NotImplementedError: If the collection has a non-local locator.
+            FileNotFoundError: If the collection root is unavailable.
+            TypeError: If extracted metadata is not JSON-compatible.
+
+        This operation runs no ingest hooks and writes no catalog state.
+        Extractor exceptions propagate to the caller.
+        """
+        return self._collection_entry(record_id).members(
+            extractor=extractor,
+            query=query,
+            where=where,
+            contains=contains,
+            regex=regex,
+            match=match,
+            exists=exists,
+            missing=missing,
+            ignore_case=ignore_case,
+        )
 
     def delete(
         self,

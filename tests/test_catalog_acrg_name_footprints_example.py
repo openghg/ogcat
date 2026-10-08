@@ -7,7 +7,7 @@ from types import ModuleType
 
 import pytest
 
-from ogcat import Catalog, CatalogSpec
+from ogcat import Catalog, CatalogSpec, SearchQuery
 
 EXAMPLE_PATH = Path(__file__).resolve().parents[1] / "examples" / "catalog_acrg_name_footprints.py"
 DATA_DIR = Path(__file__).resolve().parents[1] / "examples" / "data"
@@ -55,10 +55,17 @@ def test_build_catalog_from_vendored_footprint_listing_creates_collections(
     catalog_acrg_name_footprints: ModuleType, tmp_path: Path
 ) -> None:
     """The vendored footprint listing validates collection catalog creation."""
+    listing = tmp_path / "listing.txt"
+    listing.write_text(
+        FOOTPRINT_LISTING.read_text(encoding="utf-8").replace(
+            "/group/chem/acrg/LPDM/fp_NAME", str(tmp_path / "unmounted" / "fp_NAME")
+        ),
+        encoding="utf-8",
+    )
     catalog, added_count, skipped = catalog_acrg_name_footprints.build_catalog(
         catalog_root=tmp_path / "catalog",
         source_root=None,
-        listing_path=FOOTPRINT_LISTING,
+        listing_path=listing,
         catalog_name="footprint-test",
         append=False,
     )
@@ -172,6 +179,60 @@ def test_select_monthly_footprints_rejects_missing_duplicate_and_bad_dates(
     (source_dir / "MHD_UKV_202313.nc").touch()
     with pytest.raises(ValueError, match="invalid YYYYMM suffix"):
         select(catalog, record.id, start_month="2023-03", end_month="2023-03")
+
+
+def test_live_footprint_member_metadata_selects_current_name_months(
+    catalog_acrg_name_footprints: ModuleType, tmp_path: Path
+) -> None:
+    """Live selection shares NAME parsing and notices new months after import."""
+    source_root = tmp_path / "fp_NAME"
+    source_dir = source_root / "EUROPE" / "MHD-10magl" / "co2"
+    source_dir.mkdir(parents=True)
+    prefix = "MHD-10magl_NAME_UKV_EUROPE_co2"
+    for month in ("202212", "202301", "202302"):
+        (source_dir / f"{prefix}_{month}.nc").touch()
+    catalog, _, _ = catalog_acrg_name_footprints.build_catalog(
+        catalog_root=tmp_path / "catalog",
+        source_root=source_root,
+        listing_path=None,
+        catalog_name="live-footprints",
+        append=False,
+    )
+    record = catalog.get_one(where={"site": "MHD", "met_model": "UKV"})
+    march = source_dir / f"{prefix}_202303.nc"
+    march.touch()
+    extractor = catalog_acrg_name_footprints.footprint_member_metadata
+
+    entries = catalog.members(
+        record.id,
+        extractor=extractor,
+        query=SearchQuery.date_between("month", "2023-01", "2023-03", format="%Y-%m"),
+    )
+
+    assert [entry.path() for entry in entries] == [
+        source_dir / f"{prefix}_2023{month:02d}.nc" for month in range(1, 4)
+    ]
+    assert entries[-1].metadata == {
+        "site": "MHD",
+        "inlet": "10m",
+        "model": "NAME",
+        "met_model": "UKV",
+        "domain": "EUROPE",
+        "species": "co2",
+        "year": 2023,
+        "month": "2023-03",
+    }
+    assert record.user_metadata["month_end"] == "2023-02"
+    assert catalog_acrg_name_footprints.select_monthly_footprint_paths(
+        catalog, record.id, start_month="2023-01", end_month="2023-03"
+    ) == [entry.path() for entry in entries]
+    assert extractor(source_dir / "MHD_UKV_202301.nc") == {"year": 2023, "month": "2023-01"}
+    (source_dir / f"{prefix}_unexpected.nc").touch()
+    with pytest.raises(ValueError, match="no YYYYMM filename suffix"):
+        catalog_acrg_name_footprints.select_monthly_footprint_paths(
+            catalog, record.id, start_month="2023-01", end_month="2023-03"
+        )
+    catalog.close()
 
 
 def test_append_refreshes_existing_mounted_series_without_duplicate(

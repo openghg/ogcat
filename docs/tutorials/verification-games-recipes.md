@@ -212,25 +212,53 @@ footprint_collection = catalog.add_collection(
 
 print(footprint_collection.locator.kind, footprint_collection.derived_metadata["classification"])
 
-member_paths = catalog.member_paths(footprint_collection.id)
-january_paths = [path for path in member_paths if path.name.endswith("_202301.nc")]
+from examples.catalog_acrg_name_footprints import footprint_member_metadata
+from ogcat import SearchQuery
+
+members = catalog.members(
+    footprint_collection.id,
+    extractor=footprint_member_metadata,
+    query=SearchQuery.date_between("month", "2023-01", "2023-01", format="%Y-%m"),
+)
+january_paths = [entry.path() for entry in members]
 assert len(january_paths) == 1
 ```
 
-`Catalog.search(...)` selects collection records; it does not select files
-inside a collection. For a local collection, `member_paths()` applies the
-stored relative glob to the current directory and returns sorted matching
-paths. Filter those paths by their filename convention before calling
-`xarray.open_mfdataset`, or select by time coordinates after opening the
-dataset. The example files are text placeholders, so do not open them with
-xarray. There is no built-in member date index, and remote collections cannot
-be expanded with `member_paths()`.
+Run this snippet from the repository root so the example module import resolves.
+`footprint_member_metadata()` uses the example's shared NAME path parser and
+adds a `YYYY-MM` month coordinate from the filename, without opening data.
+The same callable can be registered with `MetadataExtractorHook(footprint_member_metadata)`
+for ingest: the adapter extracts from the local source before copy or move, so
+the original NAME filename is still available. See
+[Hooks and plugins](../api/hooks.rst) for the adapter contract.
+`Catalog.members()` returns a list of live `CollectionEntry` objects with a
+locator, plain metadata, and `path()`. The entries are not persisted. Reads run
+no ingest hooks; caller-supplied extractors should be read-only, and their errors
+propagate. Parent collection metadata is not inherited.
+
+`Catalog.search(...)` selects collection records using persisted metadata;
+`members(...)` applies the stored relative glob to the current local directory,
+extracts metadata, then filters it. The same `SearchQuery` operators work in both
+places. Date bounds and values use the same explicit format; ranges are
+inclusive, missing or null dates do not match, and malformed dates raise errors.
+For path-only browsing, `member_paths()` remains available. Neither method
+expands remote collections. The example files are text placeholders, so do not
+open them with xarray.
+
+Directories, including Zarr stores, remain leaf entries unless an explicit
+member pattern declares traversal. To inspect a nested directory, call
+`entry.members(pattern="*.nc", extractor=...)`. For standalone entries, declare
+`member_pattern` when constructing `CollectionEntry`. See
+[Locators and storage](../concepts/locators-and-storage.md) for examples.
 
 ### Select one footprint series and year on BP1
 
 The [ACRG footprint example](../../examples/catalog_acrg_name_footprints.py)
 provides `select_monthly_footprint_paths()` for NAME files whose names end in
-`_YYYYMM.nc`. It checks that each requested month has exactly one file. On a
+`_YYYYMM.nc`. It uses live member extraction and checks that each requested month
+has exactly one file. A direct `catalog.members(..., extractor=footprint_member_metadata,
+query=SearchQuery.date_between(...))` call selects the matching entries but does
+not check complete or duplicate monthly coverage. On a
 machine with the BP1 catalog and footprint tree mounted, select the series
 before opening data. Run this cell from the ogcat repository root so the
 `examples` import resolves:
