@@ -1,7 +1,6 @@
 # Live collection inspection
 
-Status: implemented and locally reviewed; BP1 integration pending environment
-setup approval, 2026-10-08.
+Status: implemented, reviewed, and validated locally and on BP1, 2026-10-08.
 
 ## Need and scope
 
@@ -49,12 +48,11 @@ or mutation-hook dispatch, live membership changes, explicit nested traversal,
 directory leaves, path containment, and the same date query on stored records
 and discovered metadata. Existing NAME selection regressions remain required.
 
-Run the candidate in an isolated BP1 checkout under the requested working
-directory against the existing footprint catalog in read-only mode. Keep
-private paths/results in the private tutorial and test report, outside GitHub.
-Record exact validation outcomes here before delivery.
+The candidate was tested in an isolated BP1 checkout against the existing
+footprint catalog in read-only mode. Site-specific paths/results remain in the
+private tutorial and test report, outside GitHub.
 
-Local validation: 679 tests passed with four optional-backend skips in 37.98
+Local validation: 679 tests passed with four optional-backend skips in 38.81
 seconds. Full Ruff checks/formatting and configured Pyright passed. The offline
 Sphinx HTML build passed with warnings treated as errors. Independent review
 found and resolved two edge cases: dates are parsed after ordinary filters and
@@ -63,11 +61,20 @@ an unwritten destination as their input to extraction hooks. The actual NAME
 filename extractor was also exercised through managed move ingestion, preserving
 its original month metadata after UUID renaming.
 
-The isolated BP1 run requires a new project virtual environment. Repository
-instructions require confirmation before creating it; the request is pending.
-The prepared read-only integration check compares the direct member query with
-the NAME coverage-checking helper, distinguishes meteorological series, and
-checks that production catalog bytes and record count remain unchanged.
+BP1 validation used Python 3.13.7 and an isolated environment installed from the
+lockfile with the development extra. The complete suite passed 677 tests in
+34.77 seconds, with six skips for absent optional NumPy, pandas, and xarray.
+An existing test had assumed that the vendored listing's paths were unmounted;
+BP1 correctly resolved those real directories as path locators. The fixture now
+rewrites its listing root beneath an absent temporary directory, while the
+separate mounted-tree test continues to cover path locators.
+
+The read-only NAME integration check selected exactly the requested twelve
+months, agreed with the coverage-checking helper, and distinguished two
+meteorological series sharing a directory. Record count and SHA-256 hashes of
+the production spec/database were unchanged. The private tutorial's discovery,
+member listing, and date-selection shell commands also passed on BP1. These
+checks inspect filenames and metadata; they do not validate NetCDF contents.
 
 This change does not add remote listing, a persisted member index, automatic
 recursion, atomic filesystem snapshots, generic completeness validation, or
