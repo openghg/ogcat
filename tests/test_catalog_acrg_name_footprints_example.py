@@ -55,10 +55,17 @@ def test_build_catalog_from_vendored_footprint_listing_creates_collections(
     catalog_acrg_name_footprints: ModuleType, tmp_path: Path
 ) -> None:
     """The vendored footprint listing validates collection catalog creation."""
+    listing = tmp_path / "listing.txt"
+    listing.write_text(
+        FOOTPRINT_LISTING.read_text(encoding="utf-8").replace(
+            "/group/chem/acrg/LPDM/fp_NAME", str(tmp_path / "unmounted" / "fp_NAME")
+        ),
+        encoding="utf-8",
+    )
     catalog, added_count, skipped = catalog_acrg_name_footprints.build_catalog(
         catalog_root=tmp_path / "catalog",
         source_root=None,
-        listing_path=FOOTPRINT_LISTING,
+        listing_path=listing,
         catalog_name="footprint-test",
         append=False,
     )
